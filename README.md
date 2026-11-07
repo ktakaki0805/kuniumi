@@ -1,0 +1,71 @@
+# kuniumi
+
+*kuniumi* (国生み, "the birth of the land") is a physically based planet
+generator for games. Instead of painting terrain with noise, it simulates the
+causes: plate tectonics build crust, isostasy turns crust into relief, a climate
+model brings wind and rain, erosion carves rivers and valleys, and hydrology and
+biomes follow from the result.
+
+> **Status: pre-alpha.** The workspace, data model and determinism tooling are
+> in place; the generation stages are implemented ticket by ticket. See
+> [docs/roadmap.md](docs/roadmap.md).
+
+## Principles
+
+- **Causes, not noise.** Plates → crust → climate ⇄ erosion → hydrology →
+  biomes, each stage a simplified model from the Earth sciences.
+- **Whole planets.** A spherical Voronoi grid of about 650,000 cells (about
+  30 km apart on an Earth-sized planet), refined regionally on demand.
+- **Reproducible.** The same seed and version produce bit-identical worlds on
+  every supported platform.
+- **Beyond Earth.** Radius, gravity, rotation, obliquity, orbit and ocean volume
+  are parameters; tidally locked and stagnant-lid planets are planned.
+- **Few dependencies.** Only well-known crates, pinned to exact versions
+  wherever they affect the numbers.
+
+## Building
+
+Requires Rust 1.85 or later.
+
+```sh
+cargo build --release
+cargo run --release -p kuniumi-cli -- help
+cargo run --release -p kuniumi-cli -- params
+```
+
+For development, the toolchains and tools are pinned in `mise.toml` for
+[mise](https://mise.jdx.dev):
+
+```sh
+mise install    # set up the pinned tools
+mise run ci     # formatting, lints, tests, MSRV build and licence checks
+```
+
+## Layout
+
+| Crate | Purpose |
+| --- | --- |
+| `kuniumi-math` | Deterministic math, random numbers, vectors, SI units |
+| `kuniumi-sphere` | The spherical cell grid |
+| `kuniumi-world` | Planet parameters, settings and the world data model |
+| `kuniumi-sim` | The generation pipeline (no I/O) |
+| `kuniumi-io` | File formats and images |
+| `kuniumi-cli` | The `kuniumi` command |
+
+Documentation: [design](docs/design-ja.md) (Japanese) ·
+[conventions](docs/conventions.md) · [decisions](docs/decisions.md) ·
+[roadmap](docs/roadmap.md) · [tickets](docs/tickets/README.md) ·
+[changelog](CHANGELOG.md)
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

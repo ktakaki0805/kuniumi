@@ -1,0 +1,21 @@
+[package]
+name = "kuniumi-cli"
+description = "Command-line interface for the kuniumi planet generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kuniumi"
+path = "src/main.rs"
+
+[dependencies]
+kuniumi-io.workspace = true
+kuniumi-math.workspace = true
+kuniumi-sim.workspace = true
+kuniumi-world.workspace = true
+
+[lints]
+workspace = true

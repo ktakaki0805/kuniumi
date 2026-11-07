@@ -1,0 +1,29 @@
+# cargo-deny configuration. Run with `mise run deny` (locally and in CI).
+# Dependency policy: docs/decisions.md D-10 and docs/conventions.md.
+# Every licence below is compatible with distributing kuniumi as
+# "MIT OR Apache-2.0". Add another only with a reason in docs/decisions.md.
+
+[graph]
+all-features = true
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Larger trees (wgpu, clap) commonly carry two versions of a small crate.
+multiple-versions = "warn"
+wildcards = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

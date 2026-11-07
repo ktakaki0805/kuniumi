@@ -1,0 +1,16 @@
+//! Planet parameters and the world data model.
+//!
+//! - [`PlanetParams`]: everything that describes a planet before generation,
+//!   in SI units, including the regimes reserved for non-Earth-like planets.
+//! - [`World`]: the generated result: the grid, the sea level and named
+//!   per-cell fields, in a fixed order so that output is deterministic.
+
+mod params;
+mod world;
+
+pub use params::{ParamError, PlanetParams, RotationRegime, TectonicRegime};
+pub use world::{Field, World};
+
+/// Version of the generator, recorded in every output file. The same seed
+/// with the same generator version always produces the same world.
+pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");

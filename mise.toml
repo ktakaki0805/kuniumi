@@ -1,0 +1,53 @@
+# Development environment (D-23). `mise install` sets up the pinned tools;
+# `mise run ci` runs every check a change must pass, the same tasks CI runs.
+
+min_version = "2026.11.0"
+
+[tools]
+# Development toolchain. Pinned so that new clippy lints and rustfmt changes
+# arrive only when the pin is raised on purpose, in its own commit.
+rust = { version = "1.97.0", components = ["rustfmt", "clippy"] }
+cargo-deny = "0.20.2"
+
+[tasks.format]
+description = "Format the code"
+run = "cargo fmt --all"
+
+[tasks.fmt]
+description = "Check formatting"
+run = "cargo fmt --all --check"
+
+[tasks.clippy]
+description = "Lint, warnings are errors"
+run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[tasks.test-debug]
+description = "Tests in debug mode"
+run = "cargo test --workspace --locked"
+
+[tasks.test-release]
+description = "Tests in release mode (golden values are checked here too)"
+run = "cargo test --workspace --locked --release"
+
+[tasks.test]
+description = "Tests in debug and release mode"
+run = [{ task = "test-debug" }, { task = "test-release" }]
+
+[tasks.msrv]
+description = "Build with the minimum supported Rust version (D-24)"
+tools = { rust = "1.85.0" }
+# A separate target directory, so switching compilers does not rebuild target/.
+env = { CARGO_TARGET_DIR = "target/msrv" }
+run = "cargo check --workspace --all-targets --locked"
+
+[tasks.deny]
+description = "Licences, banned crates and sources (D-10)"
+run = "cargo deny check"
+
+[tasks.check]
+description = "fmt, clippy and tests in debug and release"
+run = [{ task = "fmt" }, { task = "clippy" }, { task = "test" }]
+
+[tasks.ci]
+description = "The gate for every change: check, msrv, deny"
+run = [{ task = "check" }, { task = "msrv" }, { task = "deny" }]

@@ -1,0 +1,15 @@
+[package]
+name = "kuniumi-io"
+description = "File formats and image output for kuniumi"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kuniumi-math.workspace = true
+kuniumi-world.workspace = true
+
+[lints]
+workspace = true

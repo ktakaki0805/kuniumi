@@ -1,0 +1,35 @@
+# Changelog
+
+All notable changes to kuniumi are recorded here, following
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Nothing is released
+before 1.0, so everything sits under *Unreleased*.
+
+Besides Added, Changed, Fixed and Removed, each version has a **World-breaking**
+section: every change after which an existing seed produces a different world
+(`docs/conventions.md`, "World-breaking changes").
+
+## [Unreleased]
+
+### Added
+
+- Cargo workspace: `kuniumi-math`, `kuniumi-sphere`, `kuniumi-world`,
+  `kuniumi-sim`, `kuniumi-io`, `kuniumi-cli`.
+- Deterministic random numbers (xoshiro256\*\* with named streams), `Vec3`, SI
+  unit helpers.
+- `SphereGrid` data structure with full validation and an octahedron test grid.
+- `PlanetParams` with Earth defaults; tidally locked and stagnant-lid regimes
+  reserved for v2.
+- PNG writer and the `.kfield` field format with fingerprints.
+- CLI commands `version`, `params`, `generate` (stub) and `test-image`.
+- Determinism lints (`clippy.toml`) and cargo-deny configuration.
+- Development environment in `mise.toml`: pinned Rust toolchains (development
+  and MSRV 1.85.0), cargo-deny, and the tasks `format`, `check` and `ci`.
+- CI workflow running the same mise tasks, with a weekly cross-platform
+  determinism check.
+- Design document, conventions, decisions, roadmap and tickets.
+- Claude Code skills `implement-ticket` and `implement-all-tickets`, and the
+  subagents `ticket-reviewer` and `ticket-implementer`.
+
+### World-breaking
+
+- None yet.

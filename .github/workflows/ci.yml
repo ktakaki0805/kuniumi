@@ -1,0 +1,68 @@
+name: CI
+
+# The repository is private until 1.0, so Actions usage is billed against the
+# account's included amount (GitHub Free: USD 12/month; macOS minutes cost about
+# 10x Linux). Every push runs the cheap Linux checks; the cross-platform
+# determinism check runs weekly and on demand (D-25). Every job installs the
+# tools pinned in mise.toml and runs the same mise tasks as `mise run ci`
+# locally (D-23).
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1" # Mondays 03:17 UTC
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - run: mise run fmt
+      - run: mise run clippy
+
+  test-linux:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - run: mise run test
+
+  # The declared rust-version in Cargo.toml must keep building (D-24).
+  msrv:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - run: mise run msrv
+
+  deny:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - run: mise run deny
+
+  # Golden-value tests on other OS/CPU pairs. A difference here means the same
+  # seed would produce different worlds on different machines.
+  determinism:
+    if: github.event_name != 'push'
+    name: determinism (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v5
+      - run: mise run test-release

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Internal crates. External dependencies follow D-10 in docs/decisions.md:
+# well known, listed there, and pinned to an exact version when they affect
+# generated numbers.
+[workspace.dependencies]
+kuniumi-math = { path = "crates/kuniumi-math", version = "0.0.1" }
+kuniumi-sphere = { path = "crates/kuniumi-sphere", version = "0.0.1" }
+kuniumi-world = { path = "crates/kuniumi-world", version = "0.0.1" }
+kuniumi-sim = { path = "crates/kuniumi-sim", version = "0.0.1" }
+kuniumi-io = { path = "crates/kuniumi-io", version = "0.0.1" }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Determinism rules are enforced through clippy.toml (disallowed methods/types).
+disallowed_methods = "deny"
+disallowed_types = "deny"
+float_cmp = "warn"
