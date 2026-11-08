@@ -36,6 +36,13 @@ section: every change after which an existing seed produces a different world
 - `tools/det_reference.py` and `tools/det_error.py`, the first development
   scripts (mpmath reference values and error measurement of `det`); Python
   3.14.10 pinned in `mise.toml`, packages in `tools/requirements.txt` (M1-01).
+- `kuniumi_sphere::coords`: `from_lat_lon`, `lat_lon` (longitude in (−π, π],
+  0 at the poles), the local frame `east` and `north` (defined at the poles as
+  the limit along longitude 0), and `great_circle_rad`; and
+  `Vec3::rotate_about` (Rodrigues' formula, right-hand rule, length kept
+  within 1e-15 relative), all built on `det` and checked by output
+  fingerprints; the example `rotate_length` measures the rotation's length
+  change (M1-02).
 
 ### World-breaking
 

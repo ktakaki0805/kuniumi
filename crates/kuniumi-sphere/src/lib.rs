@@ -17,7 +17,12 @@
 //! 4. the dual Voronoi cells, their areas and the CSR neighbour lists.
 //!
 //! Until then, [`SphereGrid::octahedron`] provides a tiny valid grid for tests.
+//!
+//! [`coords`] converts between positions and latitude/longitude, gives the
+//! local east/north frame and great-circle distances. Rotations about an
+//! axis are [`kuniumi_math::Vec3::rotate_about`].
 
+pub mod coords;
 mod grid;
 
 pub use grid::{GridError, SphereGrid};
