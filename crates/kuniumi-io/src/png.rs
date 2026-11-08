@@ -1,14 +1,11 @@
-//! A minimal, dependency-free PNG encoder.
+//! PNG encoding of 8-bit RGB and 16-bit grey images, compressed.
 //!
-//! Image data is stored with uncompressed ("stored") deflate blocks, so files
-//! are larger than usual but the encoder is tiny and obviously correct. Any
-//! PNG reader can open the result.
+//! A thin layer over the `png` crate (D-10) with its default settings:
+//! `Balanced` deflate compression and adaptive row filters. The compressed
+//! bytes may change with the crate's version; nothing depends on them (the
+//! golden tests fingerprint the pixel buffers instead).
 
-/// 8-bit RGB pixel.
-pub type Rgb8 = [u8; 3];
-
-const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-const MAX_STORED_BLOCK: usize = 65_535;
+use crate::Rgb8;
 
 /// Encodes a 16-bit grayscale image. `pixels` is row-major, top row first.
 ///
@@ -17,15 +14,14 @@ const MAX_STORED_BLOCK: usize = 65_535;
 /// Panics if `pixels.len() != width * height` or a dimension is zero.
 pub fn encode_gray16(width: u32, height: u32, pixels: &[u16]) -> Vec<u8> {
     check_dims(width, height, pixels.len());
-    let row_bytes = width as usize * 2;
-    let mut raw = Vec::with_capacity((row_bytes + 1) * height as usize);
-    for row in pixels.chunks_exact(width as usize) {
-        raw.push(0); // filter type: None
-        for &v in row {
-            raw.extend_from_slice(&v.to_be_bytes());
-        }
-    }
-    encode(width, height, 16, 0, &raw)
+    let data: Vec<u8> = pixels.iter().flat_map(|v| v.to_be_bytes()).collect();
+    encode(
+        width,
+        height,
+        ::png::ColorType::Grayscale,
+        ::png::BitDepth::Sixteen,
+        &data,
+    )
 }
 
 /// Encodes an 8-bit RGB image. `pixels` is row-major, top row first.
@@ -35,15 +31,13 @@ pub fn encode_gray16(width: u32, height: u32, pixels: &[u16]) -> Vec<u8> {
 /// Panics if `pixels.len() != width * height` or a dimension is zero.
 pub fn encode_rgb8(width: u32, height: u32, pixels: &[Rgb8]) -> Vec<u8> {
     check_dims(width, height, pixels.len());
-    let row_bytes = width as usize * 3;
-    let mut raw = Vec::with_capacity((row_bytes + 1) * height as usize);
-    for row in pixels.chunks_exact(width as usize) {
-        raw.push(0);
-        for px in row {
-            raw.extend_from_slice(px);
-        }
-    }
-    encode(width, height, 8, 2, &raw)
+    encode(
+        width,
+        height,
+        ::png::ColorType::Rgb,
+        ::png::BitDepth::Eight,
+        pixels.as_flattened(),
+    )
 }
 
 fn check_dims(width: u32, height: u32, len: usize) {
@@ -55,141 +49,97 @@ fn check_dims(width: u32, height: u32, len: usize) {
     );
 }
 
-fn encode(width: u32, height: u32, bit_depth: u8, color_type: u8, raw: &[u8]) -> Vec<u8> {
-    let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&width.to_be_bytes());
-    ihdr.extend_from_slice(&height.to_be_bytes());
-    ihdr.extend_from_slice(&[bit_depth, color_type, 0, 0, 0]);
-
+/// Encodes raw image bytes (rows top first, no filter bytes) into memory.
+fn encode(
+    width: u32,
+    height: u32,
+    colour: ::png::ColorType,
+    depth: ::png::BitDepth,
+    data: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::new();
-    out.extend_from_slice(&SIGNATURE);
-    write_chunk(&mut out, b"IHDR", &ihdr);
-    write_chunk(&mut out, b"IDAT", &zlib_stored(raw));
-    write_chunk(&mut out, b"IEND", &[]);
+    let mut encoder = ::png::Encoder::new(&mut out, width, height);
+    encoder.set_color(colour);
+    encoder.set_depth(depth);
+    // The dimensions and the data length are checked, and writing into a
+    // `Vec` cannot fail, so neither call returns an error.
+    let mut writer = encoder
+        .write_header()
+        .expect("a valid PNG header writes to memory");
+    writer
+        .write_image_data(data)
+        .expect("checked image data writes to memory");
+    writer.finish().expect("a complete PNG writes to memory");
     out
-}
-
-fn write_chunk(out: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
-    let len = u32::try_from(data.len()).expect("PNG chunk larger than 4 GiB");
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(kind);
-    out.extend_from_slice(data);
-    let mut crc = Crc32::new();
-    crc.update(kind);
-    crc.update(data);
-    out.extend_from_slice(&crc.finish().to_be_bytes());
-}
-
-/// Wraps `data` in a zlib stream made of stored (uncompressed) deflate blocks.
-fn zlib_stored(data: &[u8]) -> Vec<u8> {
-    let blocks = data.len().div_ceil(MAX_STORED_BLOCK).max(1);
-    let mut out = Vec::with_capacity(data.len() + blocks * 5 + 6);
-    out.extend_from_slice(&[0x78, 0x01]); // deflate, 32K window, no preset dict
-    let mut chunks = data.chunks(MAX_STORED_BLOCK).peekable();
-    if chunks.peek().is_none() {
-        out.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
-    }
-    while let Some(chunk) = chunks.next() {
-        let is_final = chunks.peek().is_none();
-        let len = chunk.len() as u16;
-        out.push(u8::from(is_final));
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-    out.extend_from_slice(&adler32(data).to_be_bytes());
-    out
-}
-
-/// CRC-32 (IEEE 802.3), as used by PNG and zlib.
-struct Crc32 {
-    value: u32,
-}
-
-const CRC_TABLE: [u32; 256] = {
-    let mut table = [0u32; 256];
-    let mut n = 0;
-    while n < 256 {
-        let mut c = n as u32;
-        let mut k = 0;
-        while k < 8 {
-            c = if c & 1 != 0 {
-                0xEDB8_8320 ^ (c >> 1)
-            } else {
-                c >> 1
-            };
-            k += 1;
-        }
-        table[n] = c;
-        n += 1;
-    }
-    table
-};
-
-impl Crc32 {
-    fn new() -> Self {
-        Self { value: 0xFFFF_FFFF }
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.value =
-                CRC_TABLE[((self.value ^ u32::from(b)) & 0xFF) as usize] ^ (self.value >> 8);
-        }
-    }
-
-    fn finish(&self) -> u32 {
-        self.value ^ 0xFFFF_FFFF
-    }
-}
-
-fn adler32(data: &[u8]) -> u32 {
-    const MOD: u32 = 65_521;
-    let (mut a, mut b) = (1u32, 0u32);
-    for chunk in data.chunks(5552) {
-        for &byte in chunk {
-            a += u32::from(byte);
-            b += a;
-        }
-        a %= MOD;
-        b %= MOD;
-    }
-    (b << 16) | a
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn crc32(bytes: &[u8]) -> u32 {
-        let mut c = Crc32::new();
-        c.update(bytes);
-        c.finish()
+    /// Decodes `bytes` with the `png` crate: width, height, colour type, bit
+    /// depth and the raw image bytes.
+    fn decode(bytes: &[u8]) -> (u32, u32, ::png::ColorType, ::png::BitDepth, Vec<u8>) {
+        let decoder = ::png::Decoder::new(std::io::Cursor::new(bytes));
+        let mut reader = decoder.read_info().unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        buf.truncate(info.buffer_size());
+        (
+            info.width,
+            info.height,
+            info.color_type,
+            info.bit_depth,
+            buf,
+        )
     }
 
     #[test]
-    fn checksums_match_reference_values() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b"IEND"), 0xAE42_6082);
-        assert_eq!(adler32(b"Wikipedia"), 0x11E6_0398);
+    fn rgb8_round_trips() {
+        let (w, h) = (37u32, 23u32);
+        let pixels: Vec<Rgb8> = (0..w * h)
+            .map(|i| [(i * 7) as u8, (i * 13 + 5) as u8, (i / 3) as u8])
+            .collect();
+        let (dw, dh, colour, depth, data) = decode(&encode_rgb8(w, h, &pixels));
+        assert_eq!((dw, dh), (w, h));
+        assert_eq!(colour, ::png::ColorType::Rgb);
+        assert_eq!(depth, ::png::BitDepth::Eight);
+        assert_eq!(data, pixels.as_flattened());
     }
 
     #[test]
-    fn png_layout() {
-        let png = encode_gray16(2, 1, &[0, 65535]);
-        assert_eq!(&png[..8], &SIGNATURE);
-        assert_eq!(&png[12..16], b"IHDR");
-        assert_eq!(
-            &png[png.len() - 12..],
-            &[0, 0, 0, 0, b'I', b'E', b'N', b'D', 0xAE, 0x42, 0x60, 0x82]
-        );
+    fn gray16_round_trips() {
+        let (w, h) = (5u32, 3u32);
+        let pixels: Vec<u16> = (0..w * h).map(|i| (i * 4_681) as u16).collect();
+        assert_eq!(pixels[14], 65_534);
+        let (dw, dh, colour, depth, data) = decode(&encode_gray16(w, h, &pixels));
+        assert_eq!((dw, dh), (w, h));
+        assert_eq!(colour, ::png::ColorType::Grayscale);
+        assert_eq!(depth, ::png::BitDepth::Sixteen);
+        let expected: Vec<u8> = pixels.iter().flat_map(|v| v.to_be_bytes()).collect();
+        assert_eq!(data, expected);
     }
 
     #[test]
-    fn large_images_span_several_stored_blocks() {
-        let pixels = vec![[1, 2, 3]; 300 * 300];
-        let png = encode_rgb8(300, 300, &pixels);
-        // 300 rows * (1 + 900) bytes = 270_300 bytes of raw data.
-        assert!(png.len() > 270_300);
+    fn smooth_images_are_compressed() {
+        let (w, h) = (1024u32, 512u32);
+        let pixels: Vec<Rgb8> = (0..h)
+            .flat_map(|y| (0..w).map(move |x| [(x / 4) as u8, (y / 2) as u8, 128]))
+            .collect();
+        let raw = (w * h * 3) as usize;
+        let png = encode_rgb8(w, h, &pixels);
+        assert!(png.len() * 20 < raw, "{} bytes for {raw} raw", png.len());
+    }
+
+    #[test]
+    #[should_panic(expected = "width * height")]
+    fn rejects_a_wrong_pixel_count() {
+        let _ = encode_rgb8(4, 4, &[[0, 0, 0]; 15]);
+    }
+
+    #[test]
+    #[should_panic(expected = "non-zero")]
+    fn rejects_an_empty_image() {
+        let _ = encode_gray16(0, 4, &[]);
     }
 }

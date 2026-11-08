@@ -9,7 +9,12 @@ publish.workspace = true
 
 [dependencies]
 kuniumi-math.workspace = true
+kuniumi-sphere.workspace = true
 kuniumi-world.workspace = true
+# Compressed PNG output (D-10). Not on the generation path: the golden tests
+# fingerprint the pixel buffers, never the compressed bytes, so it is not
+# pinned to an exact version.
+png = "0.18.1"
 
 [lints]
 workspace = true

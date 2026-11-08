@@ -94,6 +94,24 @@ section: every change after which an existing seed produces a different world
   queries without a hint (`Locator::start`, `Locator::nearest`). A 2048 ×
   1024 map queried row by row on 650,000 cells takes about 0.09 s in
   release (M1-07).
+- `kuniumi_io::colormap`: `Colormap::{Viridis, Diverging { centre },
+  Elevation { sea_level }, Categorical}` and `Range::{Auto, Fixed}` (auto:
+  the finite minimum and maximum). Viridis from 52 control points of the CC0
+  table (within 0.62 of an 8-bit unit of the full table); diverging
+  ColorBrewer RdBu (11 classes, blue low, white at the centre, the same scale
+  on both sides); elevation with a hard break at sea level (blues below,
+  greens and browns above, each side scaled separately); categorical
+  ColorBrewer Paired (12 classes). Non-finite values are magenta
+  (`NO_DATA`). Linear interpolation in `f64`, rounded half away from zero
+  (M1-08).
+- `kuniumi_io::render`: `equirect` and `orthographic` (globe) maps of a
+  per-cell field, and `equirect_cells` and `orthographic_cells`, the cell
+  under each pixel; one `SphereGrid::nearest` query per pixel from the
+  previous pixel's cell. A 2048 × 1024 map of 650,000 cells renders in about
+  0.1 s in release. The example `render_maps` writes test maps of every
+  colour map (M1-08).
+- `tools/colormap_tables.py` (the colour tables from their sources and test
+  reference values) and `THIRD_PARTY.md` (M1-08).
 
 ### Changed
 
@@ -107,6 +125,10 @@ section: every change after which an existing seed produces a different world
   compensation. `SphereGrid::octahedron()` gives each cell the double nearest
   to 2π/3 (one unit in the last place above `4.0 * PI / 6.0`) and the hand
   values of the new arrays (M1-06).
+- `kuniumi_io::png` compresses through the `png` crate 0.18 (default
+  deflate level, adaptive filters) instead of the in-house stored-deflate
+  encoder: a 2048 × 1024 map takes 0.4–1.0 MB instead of 6.3 MB. The pixel
+  type `png::Rgb8` is now `kuniumi_io::Rgb8` (M1-08).
 
 ### World-breaking
 
