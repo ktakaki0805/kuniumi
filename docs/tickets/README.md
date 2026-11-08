@@ -62,6 +62,7 @@ planned once the code they build on exists.
 | [M1-08](M1-08-render-maps.md) | Colour maps and map rendering | M1-07 |
 | [M1-09](M1-09-cli-grid.md) | Grid stage, `kuniumi grid` and golden tests | M1-08 |
 | [M1-10](M1-10-exact-operations.md) | Exact operations in the determinism rules | — |
+| [M1-11](M1-11-jitter-cell-shape.md) | Default jitter and the spread of cell areas | M1-06 |
 
 ### M2 — One-shot plates and initial relief
 

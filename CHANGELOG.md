@@ -70,6 +70,33 @@ section: every change after which an existing seed produces a different world
   many points, non-unit points, duplicates, points that are not hull vertices,
   points closer than 1e-12 and points within a closed hemisphere
   (`DelaunayError`). 650,000 points take about 2.5 s in release (M1-05).
+- `SphereGrid::fibonacci(cells, seed)`, the global grid: the jittered
+  Fibonacci points (stream `grid/points`) and their Voronoi cells; and
+  `SphereGrid::from_points(points, seed)` for any point set: the dual of the
+  Delaunay triangulation, with circumcentres `normalize((b − a) × (c − a))` as
+  Voronoi vertices, neighbour rings from walking the triangle fan around each
+  centre (counter-clockwise, no angles), cell areas as sums of signed solid
+  angles (Van Oosterom and Strackee 1983) of the fan triangles split at the
+  midpoints of the Voronoi edges, and per neighbour pair the Voronoi edge
+  length and the centre distance in radians, bitwise symmetric
+  (`SphereGrid::edge_lengths_rad`, `SphereGrid::centre_distances_rad`).
+  `BuildError` (including `Degenerate` for a cell without positive area and
+  `Invalid` should a built grid fail `validate()`, which `from_points` always
+  runs) and `MAX_CELLS` (CSR offsets in `u32`). 650,000 cells take about
+  2.8 s in release; their areas sum to 4π within 1.5e-14 relative (M1-06).
+
+### Changed
+
+- `SphereGrid::from_parts` takes the edge lengths and centre distances as
+  two more arrays; `validate()` checks them (lengths, ranges, bitwise
+  symmetry, centre distances against the centres; `GridError::EdgeLength`,
+  `GridError::CentreDistance`), rejects non-finite areas and positions and
+  coordinates outside `orient3d`'s exact range, decides the counter-clockwise
+  order of the rings exactly with `orient3d`, and checks the area sum
+  against 4π within 1e-12 relative (was 1e-9), summed with Neumaier's
+  compensation. `SphereGrid::octahedron()` gives each cell the double nearest
+  to 2π/3 (one unit in the last place above `4.0 * PI / 6.0`) and the hand
+  values of the new arrays (M1-06).
 
 ### World-breaking
 

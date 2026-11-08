@@ -182,11 +182,15 @@ pub enum DelaunayError {
         /// The later point.
         second: u32,
     },
-    /// A point is not a vertex of the hull: it lies inside or on the hull of
-    /// the others. On the unit sphere this happens only when points nearly
-    /// coincide: near a vertex the hull lies about `d s / 2` below the sphere
-    /// at a distance `d` from it (`s` the edge length), so a point is lost
-    /// only if that is below its error of length. For the default grid
+    /// A point is not a vertex of the hull: it lies inside the hull of the
+    /// others, or exactly on its boundary where the tie-breaking
+    /// perturbation (Simulation of Simplicity) moves it inside. On the
+    /// boundary the perturbation can also keep it as a vertex, depending on
+    /// the indices; it is then a vertex with an empty Voronoi cell (ticket
+    /// M1-06, review R3-1). On the unit sphere this happens only when points
+    /// nearly coincide: near a vertex the hull lies about `d s / 2` below the
+    /// sphere at a distance `d` from it (`s` the edge length), so a point is
+    /// lost only if that is below its error of length. For the default grid
     /// (`s` ≈ 0.0044) that means within about 1e-13 for unit vectors exact
     /// to rounding, and about 2e-10 for the full tolerance. The smallest such
     /// index.
