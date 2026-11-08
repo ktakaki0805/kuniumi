@@ -2,8 +2,11 @@
 #
 # Transcendental functions from std call the platform's libm, whose results can
 # differ in the last bits between operating systems and CPUs. They are banned
-# everywhere; use the deterministic implementations in `kuniumi_math::det`.
-# Basic arithmetic, `sqrt` and `mul_add` are IEEE 754 correctly rounded and allowed.
+# everywhere; use the deterministic implementations in `kuniumi_math::det`. So
+# are the std methods whose precision std documents as unspecified. The
+# operations allowed directly, all with a uniquely defined result (arithmetic,
+# `sqrt`, `mul_add`, rounding, `%`, `abs`, comparisons, integer conversions,
+# ...), are listed in rule 2 of that section.
 disallowed-methods = [
     { path = "f64::sin", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
     { path = "f64::cos", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
@@ -29,6 +32,9 @@ disallowed-methods = [
     { path = "f64::log10", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
     { path = "f64::powf", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
     { path = "f64::powi", reason = "precision is unspecified and can change with optimisation; multiply explicitly" },
+    { path = "f64::to_degrees", reason = "precision is unspecified (std documentation); divide by kuniumi_math::units::RADIANS_PER_DEGREE explicitly" },
+    { path = "f64::to_radians", reason = "precision is unspecified (std documentation); use kuniumi_math::units::deg_to_rad" },
+    { path = "f64::abs_sub", reason = "precision is unspecified (std documentation); compare and subtract explicitly" },
     { path = "f64::cbrt", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
     { path = "f64::hypot", reason = "platform libm is not bit-reproducible; use kuniumi_math::det" },
     { path = "std::thread::available_parallelism", reason = "work partitioning must not depend on the machine; use fixed chunk sizes" },

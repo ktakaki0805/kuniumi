@@ -55,11 +55,40 @@ version produce bit-identical output on every supported platform.
    `kuniumi-viewer` and `kuniumi-gpu` may opt out, with a crate-level
    `#![allow(clippy::disallowed_types)]`, and nothing they compute feeds back
    into generation.
-2. Only IEEE 754 correctly rounded operations are used directly: `+ − × ÷`,
-   `sqrt`, `mul_add`. Transcendental functions (`sin`, `exp`, `ln`, `atan2`,
-   `pow`, …) come from `kuniumi_math::det`, which wraps the pure-Rust `libm`
-   crate pinned to an exact version. The std versions are banned by clippy
-   because they call the platform's libm.
+2. Library code uses directly only floating-point operations whose result is
+   uniquely defined, so that every correct implementation returns the same
+   bits:
+   - correctly rounded (IEEE 754): `+ − × ÷`, `sqrt`, `mul_add`, and
+     conversion of an integer to `f64` (`f64::from`, `as f64`: exact below
+     2⁵³, otherwise to nearest, ties to even);
+   - exact: unary `−`, `abs`, `copysign`, `signum`; comparisons and
+     `total_cmp`; `is_nan`, `is_finite` and the other classifications;
+     `to_bits`, `from_bits`; `floor`, `ceil`, `trunc`, `round`,
+     `round_ties_even`, `fract`; `%` (C's `fmod`, exact by C11 Annex F,
+     F.10.7.1); conversion of `f64` to an integer with `as` (truncation
+     towards zero; Rust saturates and maps NaN to 0);
+   - `min`, `max` and `clamp`, which are exact but may return +0 or −0 when
+     zeros of both signs meet (std documentation): use them only where the
+     sign of a zero result cannot reach the output, otherwise compare
+     explicitly;
+   - for printed output, formatting of `f64` as decimal text (core's exact
+     algorithm).
+
+   A NaN is the exception: neither IEEE 754 nor Rust defines the sign and
+   payload of a NaN that an operation returns, and `f64::NAN` itself may
+   change between Rust versions and targets. A NaN must therefore never
+   reach an operation that exposes its bits (`to_bits`, `total_cmp`,
+   `signum`, `copysign`, `is_sign_positive`, `is_sign_negative`) or an
+   output (rule 9).
+
+   Some of these are function calls on some targets (on x86_64, the rounding
+   operations, `%` and `mul_add`); `kuniumi-math/src/exact_tests.rs` checks
+   each at its hard cases on every platform. Transcendental functions
+   (`sin`, `exp`, `ln`, `atan2`, `pow`, …) come from `kuniumi_math::det`,
+   which wraps the pure-Rust `libm` crate pinned to an exact version. Their
+   std versions are banned by clippy because they call the platform's libm,
+   and so are the std methods whose precision std leaves unspecified
+   (`powi`, rule 3; `to_degrees`, `to_radians`, `abs_sub`).
 3. `powi` is banned (unspecified precision); multiply explicitly.
 4. `HashMap` and `HashSet` are banned: their iteration order is random per
    process. Use `Vec`, a sorted `Vec`, `BTreeMap` or `BTreeSet`.

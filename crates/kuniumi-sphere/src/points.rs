@@ -39,9 +39,10 @@
 //! function" (LLVM Language Reference); on x86_64 Linux it calls the `fmod`
 //! of Rust's `compiler_builtins`. The result of `fmod` is exact (C11 Annex
 //! F, F.10.7.1), so every conforming implementation returns the same bits.
-//! `%` is not among the operations that docs/conventions.md (Determinism,
-//! rule 2) lists as allowed directly; it is used here because the ticket
-//! prescribes it and its result is exact.
+//! docs/conventions.md (Determinism, rule 2) lists `%` among the exact
+//! operations allowed directly, and the test `golden_angle_reduction_is_exact`
+//! checks this reduction against integer arithmetic for every point of a
+//! 650,000-point spiral.
 //!
 //! The product `i · g` is rounded, by at most half an ULP (up to 2.3e-10 rad
 //! for i near 10⁶, a fixed and negligible shift), and `TAU` is not exactly

@@ -21,3 +21,8 @@ pub mod vec3;
 
 pub use rng::Rng;
 pub use vec3::Vec3;
+
+// Conformance tests of the floating-point operations that rule 2 of the
+// determinism conventions lets library code use directly (ticket M1-10).
+#[cfg(test)]
+mod exact_tests;

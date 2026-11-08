@@ -127,6 +127,12 @@ section: every change after which an existing seed produces a different world
   `stats.txt` (cell count, area sum and its error against 4π, smallest,
   mean and largest area and their ratio, mean spacing, ring-size histogram,
   neighbour entries against `6n − 12`, build time) (M1-09).
+- Conformance tests of the floating-point operations that rule 2 of the
+  determinism conventions allows directly (`kuniumi-math/src/exact_tests.rs`:
+  rounding, `%`, sign operations, comparisons, `min`/`max`/`clamp`, `sqrt`,
+  `mul_add`, integer conversions, decimal formatting, at their hard cases
+  with hand values), and a check that the reduction `(i · g) % 2π` in
+  `points` is exact for every point of a 650,000-point spiral (M1-10).
 
 ### Changed
 
@@ -156,6 +162,17 @@ section: every change after which an existing seed produces a different world
   `generate` takes `--cells` (default 650,000) and now prints the Grid
   stage's progress before the error that the tectonics stage is not
   implemented yet (M1-09).
+- Determinism rule 2 (`docs/conventions.md`) names every floating-point
+  operation library code may use directly: those with a uniquely defined
+  result (correctly rounded arithmetic, `sqrt`, `mul_add`, integer to
+  `f64`; exact sign operations, comparisons, classifications, bit
+  reinterpretation, rounding, `fract`, `%`, `f64` to integer; `min`, `max`
+  and `clamp` only where the sign of a zero result cannot reach the output;
+  decimal formatting for printed output), and that a NaN, whose sign and
+  payload are not defined, must not reach an operation that exposes its
+  bits or an output. `clippy.toml` also bans
+  `f64::to_degrees`, `f64::to_radians` and `f64::abs_sub`, whose precision
+  std leaves unspecified. No library code changes (M1-10).
 
 ### Removed
 

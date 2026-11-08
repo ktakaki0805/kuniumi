@@ -111,9 +111,8 @@
 //! Everything is `+ − × ÷`, `sqrt`, `abs`, [`det`] (directly and through
 //! [`coords`]), comparisons (`total_cmp` for the keys), integer arithmetic,
 //! and truncating casts from `f64` to integers for the bucket indices (exact,
-//! and defined by Rust for every input, NaN giving 0; ticket M1-10 lists
-//! such conversions among the exact operations to name in the determinism
-//! rules), so the results are the same on every platform.
+//! and defined by Rust for every input, NaN giving 0; docs/conventions.md,
+//! Determinism, rule 2), so the results are the same on every platform.
 
 use core::cmp::Ordering;
 use core::f64::consts::{FRAC_PI_2, PI, TAU};

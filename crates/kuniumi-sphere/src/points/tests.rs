@@ -11,6 +11,8 @@
 //!   with the default jitter, at least 0.25 × the mean spacing.
 //! - `latitude_bands_match_area`: counts in 18 bands of 10° for n = 10⁵.
 //! - `zero_jitter_*`: `jitter = 0` gives the plain spiral bit for bit.
+//! - `golden_angle_reduction_is_exact`: `(i · g) % 2π` against integer
+//!   arithmetic (ticket M1-10).
 //! - `jitter_is_clamped`, `offsets_*`: the size and distribution of the
 //!   offsets.
 //! - `draws_two_numbers_per_point`, `stream_name`, `same_seed_same_points`.
@@ -291,6 +293,57 @@ fn zero_jitter_heights_are_exact() {
             let z = 1.0 - (2.0 * i as f64 + 1.0) / f64::from(n);
             assert_eq!(p.z.to_bits(), z.to_bits(), "n = {n}, point {i}");
         }
+    }
+}
+
+/// `v · 2⁵¹` as an integer, for a finite `v` with a positive sign (+0, not
+/// −0) that is a multiple of 2⁻⁵¹ and below 2⁷⁰; panics otherwise. Bit
+/// arithmetic only: `v` is `m · 2^e` with the significand `m` (hidden bit
+/// included) and `e` read from its bits.
+fn times_2_pow_51(v: f64) -> u128 {
+    assert!(
+        v.is_finite() && v.is_sign_positive(),
+        "{v} is not finite with a positive sign (−0 is rejected too)"
+    );
+    let bits = v.to_bits();
+    let biased = i32::try_from(bits >> 52).unwrap();
+    let fraction = u128::from(bits & ((1 << 52) - 1));
+    let (m, e) = if biased == 0 {
+        (fraction, -1074)
+    } else {
+        (fraction | 1 << 52, biased - 1075)
+    };
+    let shift = e + 51;
+    if m == 0 {
+        0
+    } else if shift >= 0 {
+        assert!(shift < 128 - 53, "{v} is too large");
+        m << shift
+    } else {
+        let drop = shift.unsigned_abs();
+        assert!(m.trailing_zeros() >= drop, "{v} is not a multiple of 2⁻⁵¹");
+        m >> drop
+    }
+}
+
+/// The reduction `(i · g) % 2π` of `spiral_point` is exact (ticket M1-10):
+/// for every `i` of a 650,000-point spiral, the remainder equals the one
+/// computed in integer arithmetic. `x = i · g` (rounded once, as in the
+/// module) is 0 or at least `g > 2`, and 2π lies in [4, 8), so both are
+/// multiples of 2⁻⁵¹; with `X = x · 2⁵¹` and `T = 2π · 2⁵¹` as integers the
+/// exact remainder is `(X mod T) · 2⁻⁵¹`, which `%` must return.
+#[test]
+fn golden_angle_reduction_is_exact() {
+    let t = times_2_pow_51(TAU);
+    for i in 0..650_000_u32 {
+        let x = f64::from(i) * GOLDEN_ANGLE_RAD;
+        let r = x % TAU;
+        assert!((0.0..TAU).contains(&r), "i = {i}: {r} outside [0, 2π)");
+        assert_eq!(
+            times_2_pow_51(r),
+            times_2_pow_51(x) % t,
+            "i = {i}: x = {x:e}, r = {r:e}"
+        );
     }
 }
 
