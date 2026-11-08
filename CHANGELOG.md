@@ -84,6 +84,16 @@ section: every change after which an existing seed produces a different world
   `Invalid` should a built grid fail `validate()`, which `from_points` always
   runs) and `MAX_CELLS` (CSR offsets in `u32`). 650,000 cells take about
   2.8 s in release; their areas sum to 4π within 1.5e-14 relative (M1-06).
+- `SphereGrid::nearest(p, hint)`: the cell nearest to a point, the one with
+  the largest computed `p · c`, ties to the lower index (the brute-force
+  answer, whatever the hint), by a steepest-ascent walk on the neighbour
+  graph from the hint and a search through near ties (within 1e-12
+  relative) around its end, which also settles ties between co-circular
+  cells that are not neighbours. `SphereGrid::locator()` builds a `Locator`
+  of about `n/4` latitude/longitude buckets that supplies start cells for
+  queries without a hint (`Locator::start`, `Locator::nearest`). A 2048 ×
+  1024 map queried row by row on 650,000 cells takes about 0.09 s in
+  release (M1-07).
 
 ### Changed
 

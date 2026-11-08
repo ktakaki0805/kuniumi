@@ -27,6 +27,11 @@
 //!
 //! [`SphereGrid::octahedron`] provides a tiny hand-built grid for tests.
 //!
+//! [`SphereGrid::nearest`] finds the cell that contains a point (the
+//! nearest centre, ties to the lower index) by walking the neighbour graph
+//! from a hint, such as the previous pixel's cell; a [`Locator`]
+//! ([`SphereGrid::locator`]) supplies start cells for queries without one.
+//!
 //! [`coords`] converts between positions and latitude/longitude, gives the
 //! local east/north frame and great-circle distances. Rotations about an
 //! axis are [`kuniumi_math::Vec3::rotate_about`].
@@ -34,8 +39,10 @@
 pub mod coords;
 pub mod delaunay;
 mod grid;
+mod nearest;
 pub mod points;
 pub mod predicates;
 mod voronoi;
 
 pub use grid::{BuildError, GridError, MAX_CELLS, SphereGrid};
+pub use nearest::Locator;
