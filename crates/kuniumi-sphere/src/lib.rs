@@ -9,7 +9,8 @@
 //! Milestone 1 adds construction (the triangulation itself is written
 //! in-house):
 //!
-//! 1. jittered Fibonacci points from [`kuniumi_math::Rng`];
+//! 1. jittered Fibonacci points ([`points::fibonacci`]), randomised by the
+//!    stream [`points::STREAM`] of [`kuniumi_math::Rng`];
 //! 2. exact geometric predicates ([`predicates::orient3d`], over the `robust`
 //!    crate, a port of Shewchuk's adaptive predicates), so degenerate inputs
 //!    never flip a decision;
@@ -24,6 +25,7 @@
 
 pub mod coords;
 mod grid;
+pub mod points;
 pub mod predicates;
 
 pub use grid::{GridError, SphereGrid};

@@ -49,6 +49,14 @@ section: every change after which an existing seed produces a different world
   `robust` crate 1.2.0 (pinned exactly); exact for coordinates that are zero or
   of magnitude in [2⁻²⁰⁰, 2²⁰⁰], checked against exact integer evaluations
   (M1-03).
+- `kuniumi_sphere::points::fibonacci`: `n` jittered Fibonacci points on the
+  unit sphere, the cell centres of the global grid: the golden-angle spiral
+  `z = 1 − (2i + 1)/n`, `λ = i · π(3 − √5)`, each point moved in its tangent
+  plane by an offset uniform over a disc of radius `jitter × √(4π/n)` and
+  normalised; default jitter 0.35, clamped to [0, 0.45]; random numbers from
+  the stream `grid/points` (two per point); `jitter = 0` gives the plain
+  spiral bit for bit. Also `mean_spacing_rad`, and the example
+  `point_spacing`, which measures the closest pair over many seeds (M1-04).
 
 ### World-breaking
 
