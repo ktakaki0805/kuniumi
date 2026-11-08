@@ -16,5 +16,10 @@ kuniumi-math.workspace = true
 # and src/predicates/sos_tests.rs decide.
 robust = "=1.2.0"
 
+[[example]]
+name = "jitter_survey"
+# `cargo test` runs its tests of the path-bias measure (ticket M1-11).
+test = true
+
 [lints]
 workspace = true

@@ -590,11 +590,13 @@ fn listed_sizes_are_valid() {
         assert!(stats.area_sum_error <= 1e-12, "n = {n}");
         assert!(stats.plain_sum_error <= 1e-12, "n = {n}");
         assert!(stats.min_area_sr > 0.0, "n = {n}");
-        // The ticket expected a ratio below 3. That holds up to 10,000 cells,
-        // but the ratio compares the two most extreme cells, and with the
-        // default jitter (0.35) it grows with n: 3.25 for 100,000 cells and
-        // 3.43 for 650,000 (ticket M1-06, Result; M1-11). The bound guards
-        // against regressions.
+        // M1-06 expected a ratio below 3. That holds up to 10,000 cells, but
+        // the ratio compares the two most extreme cells, and with the default
+        // jitter (0.35) it grows with n towards a bound: 3.25 for 100,000
+        // cells, 3.43 for 650,000 and 3.44 for 2,600,000. The owner kept the
+        // jitter and accepted the ratio in ticket M1-11 (the reasons are in
+        // the documentation of `DEFAULT_JITTER`). The bound guards against
+        // regressions.
         assert!(ratio < 3.6, "n = {n}: ratio {ratio}");
         assert!(
             stats.ring_histogram[..3].iter().all(|&c| c == 0),

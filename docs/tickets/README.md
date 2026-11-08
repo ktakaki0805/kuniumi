@@ -63,6 +63,7 @@ planned once the code they build on exists.
 | [M1-09](M1-09-cli-grid.md) | Grid stage, `kuniumi grid` and golden tests | M1-08 |
 | [M1-10](M1-10-exact-operations.md) | Exact operations in the determinism rules | — |
 | [M1-11](M1-11-jitter-cell-shape.md) | Default jitter and the spread of cell areas | M1-06 |
+| [M1-12](M1-12-survey-slope-test.md) | Slope normalisation test of the jitter survey | M1-11 |
 
 ### M2 — One-shot plates and initial relief
 

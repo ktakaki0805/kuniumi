@@ -133,6 +133,11 @@ section: every change after which an existing seed produces a different world
   `mul_add`, integer conversions, decimal formatting, at their hard cases
   with hand values), and a check that the reduction `(i · g) % 2π` in
   `points` is exact for every point of a 650,000-point spiral (M1-10).
+- Example `jitter_survey` in `kuniumi-sphere`: for a grid size, a seed and
+  a list of jitters, the spread of cell areas, the closest centres, the
+  explicit diffusion limit, the ring sizes and hexagon shares by latitude,
+  and the path bias of steepest-descent drainage on a uniform slope, with
+  tests of the path bias against hand values (M1-11).
 
 ### Changed
 
@@ -173,6 +178,10 @@ section: every change after which an existing seed produces a different world
   bits or an output. `clippy.toml` also bans
   `f64::to_degrees`, `f64::to_radians` and `f64::abs_sub`, whose precision
   std leaves unspecified. No library code changes (M1-10).
+- The documentation of `points::DEFAULT_JITTER` records the owner's
+  decision to keep 0.35, with its measured effect on drainage, cell areas
+  (largest to smallest area about 3.4, accepted), ring sizes and explicit
+  time steps. No values change (M1-11).
 
 ### Removed
 

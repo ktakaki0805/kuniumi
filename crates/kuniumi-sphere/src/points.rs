@@ -78,6 +78,38 @@ pub const STREAM: &str = "grid/points";
 /// 10,000, nine fall below 0.25, the lowest at 0.20. With more points there
 /// are more pairs, and the closest one is a little closer (median 0.29 for
 /// n = 20,000 over 20 seeds).
+///
+/// The owner kept 0.35 in ticket M1-11 (2026-11-09), weighing what it does
+/// to drainage against the spread of cell areas. Measured by
+/// `examples/jitter_survey.rs` for 650,000 cells, seed 1 (its documentation
+/// defines the measures):
+///
+/// - Drainage. On a uniform slope, steepest-descent paths run on average up
+///   to 12.9° from the true downhill direction (rms 5.38°: the mean over the
+///   1° bands of latitude within 80° of the equator of the rms over the
+///   slope directions; the measure gives about 2° and 0.33° on an isotropic
+///   grid). Without jitter it is 43.8° and 18.37°: the paths follow the rows
+///   of the spiral. A jitter of 0.25 gives 19.8° and 8.86°, and the streams
+///   that drain a cone still form sectors of parallel lines (ticket M1-11,
+///   Implementation notes, Visual check); 0.45 gives 7.3° and 2.60°.
+/// - Cell areas. From 0.476 to 1.631 times the mean area (ratio 3.43; 1st
+///   and 99th percentiles 0.672 and 1.354). The ratio, which compares the
+///   two most extreme cells, grows with the number of cells only towards a
+///   bound, since no point moves by more than 0.35 spacings: 3.44 for
+///   2,600,000 cells. It was accepted; a jitter of 0.25 would give 2.34 and
+///   0.45 5.37. Without jitter the areas lie within 0.94 to 1.05.
+/// - Topology. The share of cells with six neighbours varies with latitude,
+///   from 0.42 to 0.43 at 30° to 40° N and S to 0.68 within 10° of the
+///   equator, after the lattice of the spiral (0.91 to 1.00 without
+///   jitter), and so does the drainage bias (rms 3.6° to 6.7° by 10° band).
+///   At 650,000 cells every cell has four to nine neighbours; at 2,600,000,
+///   three cells have three.
+/// - Explicit schemes. The step for which Gershgorin's theorem guarantees
+///   the stability of an explicit finite-volume diffusion,
+///   `min_i A_i / (K Σ_j ℓ_ij/d_ij)`, is 0.337 of that of a regular
+///   hexagonal lattice with the same mean area (0.491 at 0.25, 0.835
+///   without jitter); the stable step itself is 1 to 2 times this bound.
+///   The closest neighbours are 0.256 spacings apart.
 pub const DEFAULT_JITTER: f64 = 0.35;
 
 /// The largest jitter: larger values are clamped to it.
