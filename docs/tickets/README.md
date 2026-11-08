@@ -54,7 +54,7 @@ planned once the code they build on exists.
 | --- | --- | --- |
 | [M1-01](M1-01-det-math.md) | Deterministic math functions via libm | — |
 | [M1-02](M1-02-sphere-coordinates.md) | Spherical coordinates, rotations and distances | M1-01 |
-| [M1-03](M1-03-exact-orient3d.md) | Exact orient3d predicate | — |
+| [M1-03](M1-03-exact-orient3d.md) | Exact orient3d predicate | M1-01, M1-02 |
 | [M1-04](M1-04-fibonacci-points.md) | Jittered Fibonacci point set | M1-02 |
 | [M1-05](M1-05-spherical-delaunay.md) | Spherical Delaunay triangulation | M1-03, M1-04 |
 | [M1-06](M1-06-voronoi-grid.md) | Voronoi dual and `SphereGrid::fibonacci` | M1-05 |

@@ -43,6 +43,12 @@ section: every change after which an existing seed produces a different world
   within 1e-15 relative), all built on `det` and checked by output
   fingerprints; the example `rotate_length` measures the rotation's length
   change (M1-02).
+- `kuniumi_sphere::predicates::orient3d` and `Orientation`: the exact sign of
+  `det[b − a; c − a; d − a]` (`Positive` for a right-handed tetrahedron, the
+  opposite of Shewchuk's sign), over Shewchuk's adaptive predicates from the
+  `robust` crate 1.2.0 (pinned exactly); exact for coordinates that are zero or
+  of magnitude in [2⁻²⁰⁰, 2²⁰⁰], checked against exact integer evaluations
+  (M1-03).
 
 ### World-breaking
 

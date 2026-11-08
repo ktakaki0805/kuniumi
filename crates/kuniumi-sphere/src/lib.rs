@@ -10,9 +10,9 @@
 //! in-house):
 //!
 //! 1. jittered Fibonacci points from [`kuniumi_math::Rng`];
-//! 2. exact geometric predicates (`orient3d` from the `robust` crate, a port of
-//!    Shewchuk's adaptive predicates), so degenerate inputs never flip a
-//!    decision;
+//! 2. exact geometric predicates ([`predicates::orient3d`], over the `robust`
+//!    crate, a port of Shewchuk's adaptive predicates), so degenerate inputs
+//!    never flip a decision;
 //! 3. the spherical Delaunay triangulation as the 3D convex hull of the points;
 //! 4. the dual Voronoi cells, their areas and the CSR neighbour lists.
 //!
@@ -24,5 +24,6 @@
 
 pub mod coords;
 mod grid;
+pub mod predicates;
 
 pub use grid::{GridError, SphereGrid};
