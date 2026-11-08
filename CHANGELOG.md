@@ -29,6 +29,13 @@ section: every change after which an existing seed produces a different world
 - Design document, conventions, decisions, roadmap and tickets.
 - Claude Code skills `implement-ticket` and `implement-all-tickets`, and the
   subagents `ticket-reviewer` and `ticket-implementer`.
+- `kuniumi_math::det`: deterministic `sin`, `cos`, `sin_cos`, `tan`, `atan`,
+  `atan2`, `asin`, `acos`, `exp`, `ln` and `pow` over the pure-Rust `libm`
+  0.2.16 (pinned exactly), with accuracy, reference golden, special-value and
+  output-fingerprint tests (M1-01).
+- `tools/det_reference.py` and `tools/det_error.py`, the first development
+  scripts (mpmath reference values and error measurement of `det`); Python
+  3.14.10 pinned in `mise.toml`, packages in `tools/requirements.txt` (M1-01).
 
 ### World-breaking
 

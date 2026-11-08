@@ -8,6 +8,9 @@ min_version = "2026.11.0"
 # arrive only when the pin is raised on purpose, in its own commit.
 rust = { version = "1.97.0", components = ["rustfmt", "clippy"] }
 cargo-deny = "0.20.2"
+# Python for the development scripts under tools/ only (D-11); their packages
+# are pinned in tools/requirements.txt. Never part of the build.
+python = "3.14.10"
 
 [tasks.format]
 description = "Format the code"

@@ -9,3 +9,10 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# Deterministic math functions (D-10). On the generation path, so pinned to an
+# exact version: upgrading it is potentially world-breaking, and the golden and
+# fingerprint tests in src/det/tests.rs decide. Default features (`arch`) are
+# kept on purpose; see the documentation of `det`.
+libm = "=0.2.16"

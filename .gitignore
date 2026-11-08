@@ -5,3 +5,6 @@
 
 # Personal mise overrides
 mise.local.toml
+
+# Python virtual environment for tools/ (D-11)
+/tools/.venv

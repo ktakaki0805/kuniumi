@@ -1,0 +1,2 @@
+# Packages for the development scripts in tools/ (D-11), pinned exactly.
+mpmath==1.4.1
