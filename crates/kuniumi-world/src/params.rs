@@ -121,12 +121,14 @@ impl PlanetParams {
     }
 }
 
-/// Why a set of [`PlanetParams`] cannot be generated.
+/// Why a set of [`PlanetParams`], or of [`Settings`](crate::Settings),
+/// cannot be generated.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ParamError {
     /// A value is not finite or outside its valid range.
     OutOfRange {
-        /// Field name.
+        /// Field name, of [`PlanetParams`] or of
+        /// [`Settings`](crate::Settings).
         name: &'static str,
         /// The rejected value.
         value: f64,

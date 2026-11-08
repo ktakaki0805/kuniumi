@@ -112,6 +112,21 @@ section: every change after which an existing seed produces a different world
   colour map (M1-08).
 - `tools/colormap_tables.py` (the colour tables from their sources and test
   reference values) and `THIRD_PARTY.md` (M1-08).
+- `kuniumi_world::Settings { cells }`, the generation settings, separate from
+  the planet parameters: 650,000 cells by default, 1,000 to 715,827,884
+  (`MAX_CELLS` of the grid); `Settings::validate` names an out-of-range
+  setting with `ParamError::OutOfRange` (M1-09).
+- The Grid stage, `kuniumi_sim::stages::grid::run`: `SphereGrid::fibonacci`
+  with the settings' number of cells, random streams `grid/points` and
+  `grid/insertion`; a golden test checks that 10,000 cells, seed 1 give
+  exactly the fingerprints recorded in M1-06 (M1-09).
+- `kuniumi grid --seed N --out DIR [--cells N] [--width PX]`: builds the
+  grid and writes `cell_area.png` (equirectangular, area relative to the
+  mean, diverging map), `cell_area_globe.png` (the same on a globe centred
+  on 45° N, 180° E), `neighbors.png` (ring size, categorical) and
+  `stats.txt` (cell count, area sum and its error against 4π, smallest,
+  mean and largest area and their ratio, mean spacing, ring-size histogram,
+  neighbour entries against `6n − 12`, build time) (M1-09).
 
 ### Changed
 
@@ -129,6 +144,22 @@ section: every change after which an existing seed produces a different world
   deflate level, adaptive filters) instead of the in-house stored-deflate
   encoder: a 2048 × 1024 map takes 0.4–1.0 MB instead of 6.3 MB. The pixel
   type `png::Rgb8` is now `kuniumi_io::Rgb8` (M1-08).
+- `kuniumi_sim::generate(params, &settings, seed, progress)` takes the
+  settings, validates them before any stage, runs the Grid stage (progress
+  0 and 1), and returns `SimError::NotImplemented { stage: Tectonics }`
+  instead of stopping before the grid; new `SimError::Grid` for a grid that
+  cannot be built, and `SimError` reports its source (M1-09).
+- The CLI parses its arguments with `clap` 4.6 (derive, subcommands) instead
+  of a hand-written parser; `version`, `params`, `generate`, `test-image`,
+  `help`, `--help` and `--version` keep working, every subcommand has its own
+  `--help`, and every error, usage errors included, exits with code 2.
+  `generate` takes `--cells` (default 650,000) and now prints the Grid
+  stage's progress before the error that the tectonics stage is not
+  implemented yet (M1-09).
+
+### Removed
+
+- The hand-written argument parser and usage text of the CLI (M1-09).
 
 ### World-breaking
 

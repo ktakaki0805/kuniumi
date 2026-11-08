@@ -2,13 +2,17 @@
 //!
 //! - [`PlanetParams`]: everything that describes a planet before generation,
 //!   in SI units, including the regimes reserved for non-Earth-like planets.
+//! - [`Settings`]: how the planet is generated: the number of grid cells and,
+//!   later, the settings of each stage.
 //! - [`World`]: the generated result: the grid, the sea level and named
 //!   per-cell fields, in a fixed order so that output is deterministic.
 
 mod params;
+mod settings;
 mod world;
 
 pub use params::{ParamError, PlanetParams, RotationRegime, TectonicRegime};
+pub use settings::Settings;
 pub use world::{Field, World};
 
 /// Version of the generator, recorded in every output file. The same seed

@@ -31,6 +31,7 @@ Requires Rust 1.85 or later.
 cargo build --release
 cargo run --release -p kuniumi-cli -- help
 cargo run --release -p kuniumi-cli -- params
+cargo run --release -p kuniumi-cli -- grid --cells 650000 --seed 1 --out out/grid
 ```
 
 For development, the toolchains and tools are pinned in `mise.toml` for

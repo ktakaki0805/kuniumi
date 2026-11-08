@@ -1,16 +1,17 @@
 //! The kuniumi generation pipeline.
 //!
-//! [`generate`] turns [`PlanetParams`] and a seed into a [`World`]. It does no
-//! I/O, holds no global state and never reads the clock or the machine's core
-//! count, so it can be embedded in a CLI, a game engine or a test alike, and
-//! always returns the same world for the same inputs.
+//! [`generate`] turns [`PlanetParams`], [`Settings`] and a seed into a
+//! [`World`]. It does no I/O, holds no global state and never reads the clock
+//! or the machine's core count, so it can be embedded in a CLI, a game engine
+//! or a test alike, and always returns the same world for the same inputs.
 //!
 //! Stages run in [`StageId::PIPELINE`] order. Climate and erosion alternate
 //! two or three times (see the design document, "侵食と地形発達").
 
 use core::fmt;
 
-use kuniumi_world::{ParamError, PlanetParams, World};
+use kuniumi_sphere::BuildError;
+use kuniumi_world::{ParamError, PlanetParams, Settings, World};
 
 pub mod stages;
 
@@ -75,8 +76,12 @@ pub struct Progress {
 /// Why generation failed.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SimError {
-    /// The parameters are invalid or not supported yet.
+    /// The planet parameters or the settings are invalid, or ask for a
+    /// feature that is not supported yet.
     Params(ParamError),
+    /// The Grid stage could not build the grid; not expected for valid
+    /// settings.
+    Grid(BuildError),
     /// The stage has not been implemented yet.
     NotImplemented {
         /// The missing stage.
@@ -88,6 +93,7 @@ impl fmt::Display for SimError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Params(e) => write!(f, "invalid parameters: {e}"),
+            Self::Grid(e) => write!(f, "cannot build the grid: {e}"),
             Self::NotImplemented { stage } => {
                 write!(f, "stage `{}` is not implemented yet", stage.name())
             }
@@ -95,7 +101,15 @@ impl fmt::Display for SimError {
     }
 }
 
-impl std::error::Error for SimError {}
+impl std::error::Error for SimError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Params(e) => Some(e),
+            Self::Grid(e) => Some(e),
+            Self::NotImplemented { .. } => None,
+        }
+    }
+}
 
 impl From<ParamError> for SimError {
     fn from(e: ParamError) -> Self {
@@ -105,20 +119,52 @@ impl From<ParamError> for SimError {
 
 /// Generates a world.
 ///
-/// `progress` is called as stages advance; pass `&mut |_| {}` to ignore it.
+/// Checks `params` and `settings` first, then runs the stages in
+/// [`StageId::PIPELINE`] order. `progress` is called as stages advance (at
+/// fraction 0 when a stage starts and 1 when it ends); pass `&mut |_| {}`
+/// to ignore it.
+///
+/// Implemented so far: the Grid stage ([`stages::grid`]). The world it
+/// starts (the grid, sea level 0 m until the Crust stage, no fields yet) is
+/// dropped when the next stage turns out to be missing.
+///
+/// # Errors
+///
+/// [`SimError::Params`] for invalid parameters or settings, before any
+/// progress is reported; [`SimError::Grid`] if the grid cannot be built
+/// (not expected); [`SimError::NotImplemented`] naming the first stage that
+/// does not exist yet, now always [`StageId::Tectonics`].
 pub fn generate(
     params: &PlanetParams,
+    settings: &Settings,
     seed: u64,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<World, SimError> {
     params.validate()?;
-    let _ = seed;
-    let first = StageId::PIPELINE[0];
+    settings.validate()?;
+
     progress(Progress {
-        stage: first,
+        stage: StageId::Grid,
         fraction: 0.0,
     });
-    Err(SimError::NotImplemented { stage: first })
+    let grid = stages::grid::run(settings, seed).map_err(SimError::Grid)?;
+    progress(Progress {
+        stage: StageId::Grid,
+        fraction: 1.0,
+    });
+    let _world = World {
+        params: params.clone(),
+        seed,
+        grid,
+        sea_level_m: 0.0,
+        fields: Vec::new(),
+    };
+
+    // The pipeline runner and the partial world for the caller come with
+    // M2-01; the plates with M2-02.
+    Err(SimError::NotImplemented {
+        stage: StageId::Tectonics,
+    })
 }
 
 #[cfg(test)]
@@ -148,9 +194,98 @@ mod tests {
             radius_m: 0.0,
             ..PlanetParams::earth()
         };
+        let mut reports = 0;
         assert!(matches!(
-            generate(&bad, 1, &mut |_| {}),
-            Err(SimError::Params(_))
+            generate(&bad, &Settings { cells: 1_000 }, 1, &mut |_| reports += 1),
+            Err(SimError::Params(ParamError::OutOfRange {
+                name: "radius_m",
+                ..
+            }))
         ));
+        assert_eq!(reports, 0);
+    }
+
+    #[test]
+    fn generate_validates_settings_before_any_stage() {
+        for cells in [0, 999, Settings::MAX_CELLS + 1, u32::MAX] {
+            let mut reports = 0;
+            let result = generate(&PlanetParams::earth(), &Settings { cells }, 1, &mut |_| {
+                reports += 1
+            });
+            assert_eq!(
+                result.err(),
+                Some(SimError::Params(ParamError::OutOfRange {
+                    name: "cells",
+                    value: f64::from(cells),
+                })),
+                "{cells}"
+            );
+            assert_eq!(reports, 0, "{cells}");
+        }
+    }
+
+    #[test]
+    fn generate_runs_the_grid_stage_then_stops_at_tectonics() {
+        let mut reports = Vec::new();
+        let result = generate(
+            &PlanetParams::earth(),
+            &Settings { cells: 1_000 },
+            1,
+            &mut |p| reports.push(p),
+        );
+        assert!(
+            matches!(
+                result,
+                Err(SimError::NotImplemented {
+                    stage: StageId::Tectonics
+                })
+            ),
+            "{:?}",
+            result.err()
+        );
+        assert_eq!(
+            reports,
+            [
+                Progress {
+                    stage: StageId::Grid,
+                    fraction: 0.0
+                },
+                Progress {
+                    stage: StageId::Grid,
+                    fraction: 1.0
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_display_and_chain() {
+        use std::error::Error;
+
+        let not_implemented = SimError::NotImplemented {
+            stage: StageId::Tectonics,
+        };
+        assert_eq!(
+            not_implemented.to_string(),
+            "stage `tectonics` is not implemented yet"
+        );
+        assert!(not_implemented.source().is_none());
+
+        let params = SimError::from(ParamError::OutOfRange {
+            name: "cells",
+            value: 999.0,
+        });
+        assert_eq!(
+            params.to_string(),
+            "invalid parameters: cells is out of range: 999"
+        );
+        assert!(params.source().is_some());
+
+        let grid = SimError::Grid(BuildError::TooMany { n: 715_827_885 });
+        assert_eq!(
+            grid.to_string(),
+            "cannot build the grid: a grid has at most 715827884 cells, got 715827885"
+        );
+        assert!(grid.source().is_some());
     }
 }
