@@ -57,6 +57,19 @@ section: every change after which an existing seed produces a different world
   the stream `grid/points` (two per point); `jitter = 0` gives the plain
   spiral bit for bit. Also `mean_spacing_rad`, and the example
   `point_spacing`, which measures the closest pair over many seeds (M1-04).
+- `kuniumi_sphere::delaunay::triangulate`: the spherical Delaunay
+  triangulation of unit vectors as their 3D convex hull, built in-house by
+  randomised incremental construction with conflict lists (insertion order from
+  the stream `grid/insertion`, Fisher–Yates). Returns `Triangulation`:
+  `2n − 4` triangles counter-clockwise from outside and the triangle across
+  each edge, in a canonical order (smallest index first, sorted), so the result
+  depends only on the points, not on the seed. Every decision uses the exact
+  `orient3d`; exact ties (co-circular points) are broken by the point indices
+  with Simulation of Simplicity (Edelsbrunner and Mücke 1990), so degenerate
+  inputs such as the cube give a valid triangulation. Rejects too few or too
+  many points, non-unit points, duplicates, points that are not hull vertices,
+  points closer than 1e-12 and points within a closed hemisphere
+  (`DelaunayError`). 650,000 points take about 2.5 s in release (M1-05).
 
 ### World-breaking
 

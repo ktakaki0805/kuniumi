@@ -3,7 +3,7 @@ use core::fmt;
 use kuniumi_math::Vec3;
 
 /// Tolerance for "is this a unit vector".
-const UNIT_TOLERANCE: f64 = 1.0e-12;
+pub(crate) const UNIT_TOLERANCE: f64 = 1.0e-12;
 /// Relative tolerance for "do the cell areas add up to 4π".
 const AREA_TOLERANCE: f64 = 1.0e-9;
 

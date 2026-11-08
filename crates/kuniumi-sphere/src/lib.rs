@@ -14,7 +14,9 @@
 //! 2. exact geometric predicates ([`predicates::orient3d`], over the `robust`
 //!    crate, a port of Shewchuk's adaptive predicates), so degenerate inputs
 //!    never flip a decision;
-//! 3. the spherical Delaunay triangulation as the 3D convex hull of the points;
+//! 3. the spherical Delaunay triangulation as the 3D convex hull of the points
+//!    ([`delaunay::triangulate`]), with exact ties between co-circular points
+//!    broken by their indices (Simulation of Simplicity);
 //! 4. the dual Voronoi cells, their areas and the CSR neighbour lists.
 //!
 //! Until then, [`SphereGrid::octahedron`] provides a tiny valid grid for tests.
@@ -24,6 +26,7 @@
 //! axis are [`kuniumi_math::Vec3::rotate_about`].
 
 pub mod coords;
+pub mod delaunay;
 mod grid;
 pub mod points;
 pub mod predicates;

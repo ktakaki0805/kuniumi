@@ -9,10 +9,11 @@ publish.workspace = true
 
 [dependencies]
 kuniumi-math.workspace = true
-# Exact orient3d (D-10, D-14): Shewchuk's adaptive predicates, transcribed from
-# predicates.c by the GeoRust project. On the generation path, so pinned to an
-# exact version: upgrading it is potentially world-breaking, and the exactness
-# tests in src/predicates/tests.rs decide.
+# Exact orient3d, and orient2d for its tie-breaking (D-10, D-14): Shewchuk's
+# adaptive predicates, transcribed from predicates.c by the GeoRust project. On
+# the generation path, so pinned to an exact version: upgrading it is
+# potentially world-breaking, and the exactness tests in src/predicates/tests.rs
+# and src/predicates/sos_tests.rs decide.
 robust = "=1.2.0"
 
 [lints]
