@@ -142,6 +142,33 @@ section: every change after which an existing seed produces a different world
   the longer of two steps when that step is the steeper, which a receiver
   chosen by the drop over the squared step length fails; the example's
   documentation lists all six of its tests (M1-12).
+- The stage runner `kuniumi_sim::pipeline::run`: validates the inputs, runs
+  the Grid stage, then every later stage of `StageId::PIPELINE` in order from
+  a table of implementations (`pipeline::implementation`, `StageFn`), with
+  progress 0, the stage's own reports and 1 per stage, a debug check that
+  every output is finite and every class field holds class ids, and the
+  stage's name appended to `World::stages`;
+  it stops at the first missing stage with `SimError::NotImplemented`, or
+  with `Settings::allow_partial` returns the world built so far.
+  `kuniumi_sim::next_stage` names the stage a partial world stopped at;
+  `SimError::Field` reports a stage output the world rejects (M2-01).
+- `World::add_field`, `World::add_class_field` and `World::field_mut`;
+  `FieldKind::{Quantity, Class}` and `Field::kind`; `FieldError` (invalid
+  name, duplicate, wrong length, a class value that is not an integer in
+  [0, 2⁵³)); field names are `[a-z][a-z0-9_]*` and not a Windows device
+  name (`con`, `nul`, `com1`, …). `World` records its
+  `settings` and the `stages` that have run (M2-01).
+- The Grid stage adds the fields `cell_area` (sr) and `neighbor_count`
+  (class) (`stages::grid::add_fields`) (M2-01).
+- `kuniumi_io::world_dir::write(dir, &world)`: a `.kfield` file and a
+  2048 × 1024 equirectangular PNG per field (categorical palette for class
+  fields, viridis otherwise), then `world.json` (format version 1: generator
+  version, seed, settings, planet parameters, sea level, stages, fields with
+  units and kinds), through serde mirror structs (`WorldJson`) with `serde`
+  1.0 and `serde_json` 1.0 (feature `float_roundtrip`, so every `f64` parses
+  back bit for bit); the same world gives the same bytes; an existing
+  `world.json` is removed before the fields are written, so a failed rewrite
+  leaves none behind (M2-01).
 
 ### Changed
 
@@ -186,6 +213,15 @@ section: every change after which an existing seed produces a different world
   decision to keep 0.35, with its measured effect on drainage, cell areas
   (largest to smallest area about 3.4, accepted), ring sizes and explicit
   time steps. No values change (M1-11).
+- `kuniumi generate` writes the world built so far into `--out` (one
+  `wrote` line per file) before it exits with code 2 naming the first stage
+  that is not implemented yet; for now the grid's two fields and
+  `world.json` (M2-01).
+- `kuniumi_sim::generate` runs through the stage runner; `Settings` has the
+  new flag `allow_partial` (default `false`, which keeps the old behaviour),
+  `Field` the new member `kind`, and `World` the members `settings` and
+  `stages`; `.kfield` files are unchanged and are read back as quantities
+  (M2-01).
 
 ### Removed
 

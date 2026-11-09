@@ -9,8 +9,9 @@ use std::time::Instant;
 
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use kuniumi_io::colormap::{Colormap, Range};
-use kuniumi_io::{Rgb8, png, render};
+use kuniumi_io::{Rgb8, png, render, world_dir};
 use kuniumi_math::units::{self, deg_to_rad};
+use kuniumi_sim::SimError;
 use kuniumi_world::{GENERATOR_VERSION, PlanetParams, Settings};
 
 mod grid_report;
@@ -33,8 +34,8 @@ enum Command {
     Version,
     /// Print the Earth-like default parameters (SI)
     Params,
-    /// Generate a world (stops after the grid: the next stages do not exist
-    /// yet)
+    /// Generate a world and write it to a directory (the stages that do not
+    /// exist yet are missing: writes what exists, then exits with code 2)
     Generate(GenerateArgs),
     /// Build the cell grid and write maps of its cells and statistics
     Grid(GridArgs),
@@ -52,7 +53,8 @@ struct GenerateArgs {
     /// Random seed
     #[arg(long, value_name = "N")]
     seed: u64,
-    /// Output directory (not written yet)
+    /// Output directory for world.json and a .kfield file and a .png map
+    /// per field (created if missing)
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
     /// Number of grid cells, 1000 to 715827884
@@ -148,15 +150,25 @@ fn print_params(p: &PlanetParams) {
     println!("tectonics                  = {:?}", p.tectonics);
 }
 
+/// `kuniumi generate`: runs the pipeline as far as it exists, writes the
+/// world with [`world_dir::write`], and fails naming the first missing stage
+/// if there is one.
 fn generate(args: &GenerateArgs) -> Result<(), String> {
-    let settings = Settings { cells: args.cells };
+    let settings = Settings {
+        cells: args.cells,
+        allow_partial: true,
+    };
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, args.seed, &mut |p| {
         eprintln!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0);
     })
     .map_err(|e| e.to_string())?;
-    // Writing the world comes with M2-01.
-    let _ = (world, &args.out);
-    Ok(())
+    for path in world_dir::write(&args.out, &world).map_err(|e| e.to_string())? {
+        println!("wrote {}", path.display());
+    }
+    match kuniumi_sim::next_stage(&world) {
+        Some(stage) => Err(SimError::NotImplemented { stage }.to_string()),
+        None => Ok(()),
+    }
 }
 
 /// The view centre of `cell_area_globe.png`: 45° N, 180° E, so that the
@@ -166,7 +178,10 @@ const GLOBE_CENTRE_DEG: (f64, f64) = (45.0, 180.0);
 /// `kuniumi grid`: builds the grid of the Grid stage and writes maps of its
 /// cells and `stats.txt`.
 fn grid(args: &GridArgs) -> Result<(), String> {
-    let settings = Settings { cells: args.cells };
+    let settings = Settings {
+        cells: args.cells,
+        ..Settings::default()
+    };
     settings.validate().map_err(|e| e.to_string())?;
     let dir = &args.out;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;

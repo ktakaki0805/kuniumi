@@ -15,6 +15,17 @@ kuniumi-world.workspace = true
 # fingerprint the pixel buffers, never the compressed bytes, so it is not
 # pinned to an exact version.
 png = "0.18.1"
+# `world.json` (D-10), through mirror structs in `world_dir`, so that serde
+# stays out of kuniumi-world and kuniumi-sim. Not on the generation path: the
+# metadata is written from finished worlds and its numbers are checked to
+# parse back bit for bit, so neither is pinned to an exact version. The bytes
+# of `world.json` do depend on serde_json's float formatter (older releases
+# wrote `1.335e18` where 1.0.154 writes `1.335e+18`), so an upgrade may change
+# them; the byte-exact layout tests of `world_dir` decide, as the pixel
+# fingerprints do for `png`.
+# `float_roundtrip` makes serde_json's parser return every f64 exactly.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["float_roundtrip"] }
 
 [lints]
 workspace = true

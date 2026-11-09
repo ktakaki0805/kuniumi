@@ -2,14 +2,23 @@
 //!
 //! - `streams_are_under_the_stage_name`;
 //! - `builds_the_fibonacci_grid_of_the_settings`;
+//! - `adds_the_cell_areas_and_neighbour_counts`;
 //! - `golden_fingerprints`.
 
 use kuniumi_math::rng::fnv1a64;
 use kuniumi_sphere::{SphereGrid, delaunay, points};
-use kuniumi_world::Settings;
+use kuniumi_world::{FieldError, FieldKind, PlanetParams, Settings, World};
 
-use super::run;
+use super::{CELL_AREA, NEIGHBOR_COUNT, add_fields, run};
 use crate::StageId;
+
+/// The settings with `cells` cells.
+fn settings(cells: u32) -> Settings {
+    Settings {
+        cells,
+        ..Settings::default()
+    }
+}
 
 #[test]
 fn streams_are_under_the_stage_name() {
@@ -26,7 +35,7 @@ fn streams_are_under_the_stage_name() {
 #[test]
 fn builds_the_fibonacci_grid_of_the_settings() {
     for (cells, seed) in [(1_000, 1), (1_000, 2), (2_500, 7)] {
-        let grid = run(&Settings { cells }, seed).expect("valid settings");
+        let grid = run(&settings(cells), seed).expect("valid settings");
         assert_eq!(grid.len(), cells as usize);
         assert_eq!(
             grid,
@@ -35,9 +44,58 @@ fn builds_the_fibonacci_grid_of_the_settings() {
         );
     }
     // The seed reaches the points.
-    let one = run(&Settings { cells: 1_000 }, 1).expect("valid settings");
-    let two = run(&Settings { cells: 1_000 }, 2).expect("valid settings");
+    let one = run(&settings(1_000), 1).expect("valid settings");
+    let two = run(&settings(1_000), 2).expect("valid settings");
     assert_ne!(one.positions(), two.positions());
+}
+
+#[test]
+fn adds_the_cell_areas_and_neighbour_counts() {
+    for grid in [
+        SphereGrid::octahedron(),
+        run(&settings(1_000), 1).expect("valid settings"),
+    ] {
+        let mut world = World {
+            params: PlanetParams::earth(),
+            settings: settings(1_000),
+            seed: 1,
+            grid,
+            sea_level_m: 0.0,
+            stages: Vec::new(),
+            fields: Vec::new(),
+        };
+        add_fields(&mut world).expect("an empty world takes the fields");
+        let n = world.grid.len() as u32;
+        let (area, count) = (&world.fields[0], &world.fields[1]);
+        assert_eq!(world.fields.len(), 2);
+        assert_eq!(
+            (area.name.as_str(), area.unit.as_str(), area.kind),
+            (CELL_AREA, "sr", FieldKind::Quantity)
+        );
+        assert_eq!(
+            (count.name.as_str(), count.unit.as_str(), count.kind),
+            (NEIGHBOR_COUNT, "", FieldKind::Class)
+        );
+        // Bit for bit the grid's areas, and the ring sizes as integers.
+        let areas: Vec<_> = (0..n).map(|i| world.grid.area_sr(i).to_bits()).collect();
+        let bits: Vec<_> = area.values.iter().map(|v| v.to_bits()).collect();
+        assert_eq!(bits, areas);
+        let rings: Vec<_> = (0..n).map(|i| world.grid.neighbors(i).len()).collect();
+        let counts: Vec<_> = count.values.iter().map(|&v| v as usize).collect();
+        assert_eq!(counts, rings);
+        assert!(count.values.iter().all(|v| v.fract() == 0.0));
+        if n == 6 {
+            // The octahedron: six cells of four neighbours.
+            assert_eq!(count.values, [4.0; 6]);
+        }
+        // A second call clashes with the first.
+        assert_eq!(
+            add_fields(&mut world),
+            Err(FieldError::Duplicate {
+                name: CELL_AREA.into()
+            })
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -102,7 +160,7 @@ const RECORDED_NEIGHBOURS_EDGES: u64 = 0x01B8_F9CE_F488_A7C7;
 
 #[test]
 fn golden_fingerprints() {
-    let grid = run(&Settings { cells: 10_000 }, 1).expect("valid settings");
+    let grid = run(&settings(10_000), 1).expect("valid settings");
     let positions_areas = fingerprint_positions_areas(&grid);
     let neighbours_edges = fingerprint_neighbours_edges(&grid);
     assert_eq!(

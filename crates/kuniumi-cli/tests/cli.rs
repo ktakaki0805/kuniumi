@@ -20,6 +20,13 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// Reads a `.kfield` file.
+fn read_kfield(path: &Path) -> kuniumi_world::Field {
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    kuniumi_io::field_file::read_field(bytes.as_slice())
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
 fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
@@ -78,9 +85,19 @@ fn grid_writes_maps_and_statistics() {
     }
 }
 
+/// The files a world stopped after the Grid stage has, in the order
+/// `generate` writes them.
+const GRID_WORLD_FILES: [&str; 5] = [
+    "cell_area.kfield",
+    "cell_area.png",
+    "neighbor_count.kfield",
+    "neighbor_count.png",
+    "world.json",
+];
+
 #[test]
-fn generate_stops_after_the_grid_with_exit_code_2() {
-    let dir = scratch("generate_stops_after_the_grid");
+fn generate_writes_the_grid_world_then_exits_with_code_2() {
+    let dir = scratch("generate_writes_the_grid_world");
     let out = dir.to_str().expect("UTF-8 path");
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "1000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
@@ -88,6 +105,94 @@ fn generate_stops_after_the_grid_with_exit_code_2() {
         stderr(&o),
         "[grid] 0%\n[grid] 100%\nerror: stage `tectonics` is not implemented yet\n"
     );
+    let expected: String = GRID_WORLD_FILES
+        .iter()
+        .map(|f| format!("wrote {}\n", dir.join(f).display()))
+        .collect();
+    assert_eq!(stdout(&o), expected);
+    for map in ["cell_area.png", "neighbor_count.png"] {
+        assert_eq!(png_size(&dir.join(map)), (2048, 1024), "{map}");
+    }
+    let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+    for line in [
+        "  \"seed\": 1,",
+        "    \"cells\": 1000,",
+        "    \"allow_partial\": true",
+        "    \"radius_m\": 6371000.0,",
+        "  \"sea_level_m\": 0.0,",
+        "    \"grid\"",
+        "      \"name\": \"cell_area\",",
+        "      \"unit\": \"sr\",",
+        "      \"kind\": \"class\"",
+    ] {
+        assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
+    }
+    // The cell areas of 1,000 cells sum to 4π, as the grid's do (M1-06).
+    let areas = read_kfield(&dir.join("cell_area.kfield"));
+    assert_eq!(
+        (areas.name.as_str(), areas.unit.as_str()),
+        ("cell_area", "sr")
+    );
+    assert_eq!(areas.values.len(), 1_000);
+    let sum: f64 = areas.values.iter().sum();
+    assert!((sum - 4.0 * core::f64::consts::PI).abs() < 1e-12, "{sum}");
+    // Ring sizes 4 to 8, as `kuniumi grid` reports for this grid (M1-09).
+    let counts = read_kfield(&dir.join("neighbor_count.kfield"));
+    let mut histogram = [0usize; 10];
+    for &c in &counts.values {
+        histogram[c as usize] += 1;
+    }
+    assert_eq!(histogram, [0, 0, 0, 0, 12, 228, 535, 210, 15, 0]);
+}
+
+#[test]
+fn generate_writes_the_same_bytes_twice() {
+    let (a, b) = (scratch("generate_twice_a"), scratch("generate_twice_b"));
+    for dir in [&a, &b] {
+        let out = dir.to_str().expect("UTF-8 path");
+        let o = kuniumi(&["generate", "--seed", "3", "--cells", "1500", "--out", out]);
+        assert_eq!(o.status.code(), Some(2), "{o:?}");
+    }
+    for dir in [&a, &b] {
+        let mut files: Vec<_> = std::fs::read_dir(dir)
+            .expect("the output directory")
+            .map(|e| {
+                e.expect("an entry")
+                    .file_name()
+                    .into_string()
+                    .expect("UTF-8")
+            })
+            .collect();
+        files.sort();
+        assert_eq!(files, GRID_WORLD_FILES, "{}", dir.display());
+    }
+    for file in GRID_WORLD_FILES {
+        let bytes = |dir: &Path| std::fs::read(dir.join(file)).expect("written");
+        assert!(bytes(&a) == bytes(&b), "{file} differs");
+    }
+}
+
+/// Fingerprints of the Grid stage's fields for 10,000 cells, seed 1, as
+/// `kuniumi generate` writes them. Recorded by ticket M2-01 after the
+/// invariant tests passed and the maps of `out/M2-01` were looked at; both
+/// fields are exact copies of the grid, whose fingerprints M1-06 recorded
+/// (`stages::grid::tests::golden_fingerprints`).
+const GOLDEN_GRID_FIELDS: [(&str, u64); 2] = [
+    ("cell_area", 0x3293_5063_C4BF_C82D),
+    ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
+];
+
+#[test]
+fn generate_golden_fingerprints() {
+    let dir = scratch("generate_golden_fingerprints");
+    let out = dir.to_str().expect("UTF-8 path");
+    let o = kuniumi(&["generate", "--seed", "1", "--cells", "10000", "--out", out]);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    for (name, golden) in GOLDEN_GRID_FIELDS {
+        let field = read_kfield(&dir.join(format!("{name}.kfield")));
+        let fingerprint = kuniumi_io::field_file::fingerprint(&field);
+        assert_eq!(fingerprint, golden, "{name}: {fingerprint:#018X}");
+    }
 }
 
 #[test]

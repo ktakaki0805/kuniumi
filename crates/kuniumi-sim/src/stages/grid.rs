@@ -8,15 +8,26 @@
 //! does not change the result), both under the stage's name `"grid"`
 //! ([`StageId::name`](crate::StageId::name)).
 //!
-//! Output: [`World::grid`](kuniumi_world::World::grid). The grid is
-//! independent of the planet's size: areas are in steradians and lengths in
-//! radians on the unit sphere.
+//! Outputs: [`World::grid`], and two fields computed from it by
+//! [`add_fields`]: [`CELL_AREA`] (sr) and [`NEIGHBOR_COUNT`] (class). The
+//! grid is independent of the planet's size: areas are in steradians and
+//! lengths in radians on the unit sphere.
 //!
+//! [`World::grid`]: kuniumi_world::World::grid
 //! [`points::STREAM`]: kuniumi_sphere::points::STREAM
 //! [`delaunay::STREAM`]: kuniumi_sphere::delaunay::STREAM
 
 use kuniumi_sphere::{BuildError, SphereGrid};
-use kuniumi_world::Settings;
+use kuniumi_world::{FieldError, Settings, World};
+
+/// The field of cell areas on the unit sphere (sr), [`SphereGrid::area_sr`];
+/// multiply by `radius_m²` for square metres.
+pub const CELL_AREA: &str = "cell_area";
+
+/// The class field of neighbour counts: the number of neighbours of each
+/// cell (the length of [`SphereGrid::neighbors`]), so that the categorical
+/// palette shows the pentagons, hexagons and heptagons of the grid.
+pub const NEIGHBOR_COUNT: &str = "neighbor_count";
 
 /// Runs the Grid stage: the grid of `settings.cells` cells for `seed`,
 /// the same on every platform.
@@ -34,6 +45,25 @@ use kuniumi_world::Settings;
 /// As [`SphereGrid::fibonacci`]; not expected for valid settings.
 pub fn run(settings: &Settings, seed: u64) -> Result<SphereGrid, BuildError> {
     SphereGrid::fibonacci(settings.cells, seed)
+}
+
+/// Adds the fields of the Grid stage, [`CELL_AREA`] and [`NEIGHBOR_COUNT`],
+/// computed from `world.grid`, in that order. Both are exact copies of the
+/// grid's data (an area, an integer below 2⁵³), so they are as reproducible
+/// as the grid itself.
+///
+/// # Errors
+///
+/// [`FieldError::Duplicate`] if `world` already has one of the fields; the
+/// pipeline adds them to an empty world.
+pub fn add_fields(world: &mut World) -> Result<(), FieldError> {
+    let n = world.grid.len() as u32;
+    let areas_sr = (0..n).map(|i| world.grid.area_sr(i)).collect();
+    let counts = (0..n)
+        .map(|i| world.grid.neighbors(i).len() as f64)
+        .collect();
+    world.add_field(CELL_AREA, "sr", areas_sr)?;
+    world.add_class_field(NEIGHBOR_COUNT, counts)
 }
 
 #[cfg(test)]

@@ -32,7 +32,13 @@ cargo build --release
 cargo run --release -p kuniumi-cli -- help
 cargo run --release -p kuniumi-cli -- params
 cargo run --release -p kuniumi-cli -- grid --cells 650000 --seed 1 --out out/grid
+cargo run --release -p kuniumi-cli -- generate --seed 1 --out out/world
 ```
+
+`generate` runs the stages that exist so far and writes the world into the
+output directory: a `.kfield` file and a PNG map per field and `world.json`
+with the metadata; while later stages are missing it then exits with code 2,
+naming the first of them.
 
 For development, the toolchains and tools are pinned in `mise.toml` for
 [mise](https://mise.jdx.dev):

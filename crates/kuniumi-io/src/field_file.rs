@@ -13,11 +13,16 @@
 //!
 //! Values round-trip bit-exactly, so [`fingerprint`] of a field is identical
 //! on every platform for the same seed and generator version.
+//!
+//! The file does not store the field's [`FieldKind`]: [`read_field`] returns
+//! a [`FieldKind::Quantity`], and a world's `world.json` records which fields
+//! are class fields ([`crate::world_dir`]). Neither the encoding nor the
+//! [`fingerprint`] depends on the kind.
 
 use std::io::{self, Read, Write};
 
 use kuniumi_math::rng::fnv1a64;
-use kuniumi_world::Field;
+use kuniumi_world::{Field, FieldKind};
 
 /// File magic.
 pub const MAGIC: [u8; 8] = *b"KUNIFLD\0";
@@ -29,7 +34,8 @@ pub fn write_field(mut w: impl Write, field: &Field) -> io::Result<()> {
     w.write_all(&encode(field))
 }
 
-/// Reads a field written by [`write_field`].
+/// Reads a field written by [`write_field`], as a [`FieldKind::Quantity`]
+/// (the file does not store the kind).
 pub fn read_field(mut r: impl Read) -> io::Result<Field> {
     let mut magic = [0u8; 8];
     r.read_exact(&mut magic)?;
@@ -49,7 +55,12 @@ pub fn read_field(mut r: impl Read) -> io::Result<Field> {
         r.read_exact(&mut buf)?;
         values.push(f64::from_bits(u64::from_le_bytes(buf)));
     }
-    Ok(Field { name, unit, values })
+    Ok(Field {
+        name,
+        unit,
+        kind: FieldKind::Quantity,
+        values,
+    })
 }
 
 /// A 64-bit FNV-1a hash of the field's encoded bytes.
@@ -109,6 +120,7 @@ mod tests {
         Field {
             name: "surface_height".into(),
             unit: "m".into(),
+            kind: FieldKind::Quantity,
             values: vec![-3_700.25, 0.0, -0.0, 8_848.0, f64::MIN_POSITIVE, f64::NAN],
         }
     }
@@ -131,6 +143,23 @@ mod tests {
         let mut b = sample();
         b.values[1] = -0.0;
         assert_ne!(fingerprint(&a), fingerprint(&b));
+    }
+
+    #[test]
+    fn the_kind_is_not_part_of_the_file() {
+        let quantity = sample();
+        let class = Field {
+            kind: FieldKind::Class,
+            ..sample()
+        };
+        assert_eq!(fingerprint(&quantity), fingerprint(&class));
+        let mut buf = Vec::new();
+        write_field(&mut buf, &class).unwrap();
+        assert_eq!(encode(&quantity), buf);
+        assert_eq!(
+            read_field(buf.as_slice()).unwrap().kind,
+            FieldKind::Quantity
+        );
     }
 
     #[test]

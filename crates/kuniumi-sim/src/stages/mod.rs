@@ -3,11 +3,17 @@
 //!
 //! Every stage follows the same contract:
 //!
-//! - inputs come from the [`kuniumi_world::World`] built so far, the
-//!   [`kuniumi_world::PlanetParams`] and the [`kuniumi_world::Settings`];
+//! - it runs through the runner ([`crate::pipeline`]): the Grid stage starts
+//!   the world, every later stage is a [`crate::pipeline::StageFn`] listed in
+//!   [`crate::pipeline::implementation`];
+//! - inputs come from the [`kuniumi_world::World`] built so far, which holds
+//!   the [`kuniumi_world::PlanetParams`], the [`kuniumi_world::Settings`] and
+//!   the seed;
 //! - randomness comes only from `Rng::for_stream(seed, StageId::name())`
 //!   (or a sub-stream such as `"tectonics/rifting"`);
-//! - outputs are written as named [`kuniumi_world::Field`]s in SI units;
+//! - outputs are written as named [`kuniumi_world::Field`]s in SI units
+//!   (`World::add_field`), or as class fields (`World::add_class_field`),
+//!   and must be finite;
 //! - no I/O, no clock, no hash-ordered iteration.
 
 pub mod biomes;
