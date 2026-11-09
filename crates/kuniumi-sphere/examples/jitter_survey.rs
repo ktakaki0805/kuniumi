@@ -52,8 +52,18 @@
 //!   as the bands hold fewer cells.
 //!
 //! The tests (`cargo test -p kuniumi-sphere --example jitter_survey`; plain
-//! `cargo test` runs them too) check the path bias against hand values: a
-//! regular hexagonal lattice, and lattices turned evenly through 60°.
+//! `cargo test` runs them too) check the measure against hand values:
+//!
+//! - the path bias of a regular hexagonal lattice (worst 27.5°, rms
+//!   √(1787.5/6) ≈ 17.26° for the 72 directions `φ_m`), and of lattices
+//!   turned evenly through 60° (no bias);
+//! - the receiver follows the slope `v_ij · u_φ / |v_ij|`, neither under-
+//!   nor over-normalised: it takes the shorter of two steps when the longer
+//!   one has the larger drop but the smaller slope (not the drop
+//!   `v_ij · u_φ`), and the longer one when it is the steeper (not
+//!   `v_ij · u_φ / |v_ij|²`);
+//! - bands without cells are left out of the summary;
+//! - the bands of latitude are counted from the north pole.
 
 use core::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -357,6 +367,24 @@ mod tests {
         let mut sums = [(0.0, 0.0)];
         add_receivers(&steps, &[direction(0)], &mut sums);
         assert_eq!(sums, [(1.0, 0.0)]);
+    }
+
+    #[test]
+    fn receivers_take_the_longer_step_when_it_is_steeper() {
+        // Steps 1.2·(cos 4°, sin 4°) and (1, 0), slope direction φ_0 = 2.5°:
+        // the slope is larger along the long step (cos 1.5° = 0.99966
+        // against cos 2.5° = 0.99905; cos decreases on [0°, 180°]), and
+        // steepest descent takes it. The drop over the squared length would
+        // take the short one (cos 1.5°/1.2 = 0.833 against 0.99905). The
+        // drop takes the long one too (1.2 cos 1.5° = 1.1996 against
+        // 0.99905), so the drop is left to the test above. With that test,
+        // this bounds the exponent p of a normalisation v · u / |v|^p to
+        // 0.933 < p < 1.0033 (hand values).
+        let (sin_a, cos_a) = det::sin_cos(4.0 * RADIANS_PER_DEGREE);
+        let steps = [(1.2 * cos_a, 1.2 * sin_a), (1.0, 0.0)];
+        let mut sums = [(0.0, 0.0)];
+        add_receivers(&steps, &[direction(0)], &mut sums);
+        assert_eq!(sums, [steps[0]]);
     }
 
     #[test]

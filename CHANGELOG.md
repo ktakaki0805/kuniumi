@@ -138,6 +138,10 @@ section: every change after which an existing seed produces a different world
   explicit diffusion limit, the ring sizes and hexagon shares by latitude,
   and the path bias of steepest-descent drainage on a uniform slope, with
   tests of the path bias against hand values (M1-11).
+- A test of the example `jitter_survey`: its steepest-descent receiver takes
+  the longer of two steps when that step is the steeper, which a receiver
+  chosen by the drop over the squared step length fails; the example's
+  documentation lists all six of its tests (M1-12).
 
 ### Changed
 
