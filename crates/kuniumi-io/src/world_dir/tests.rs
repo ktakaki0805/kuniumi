@@ -33,6 +33,7 @@ fn world() -> World {
         params: PlanetParams::earth(),
         settings: Settings {
             cells: 1_000,
+            plate_count: 12,
             allow_partial: true,
         },
         seed: 1,
@@ -68,6 +69,7 @@ fn awkward_world() -> World {
         },
         settings: Settings {
             cells: u32::MAX,
+            plate_count: u32::MAX - 1,
             allow_partial: false,
         },
         seed: u64::MAX,
@@ -127,9 +129,14 @@ fn world_json_parses_back_bit_exactly() {
         assert_eq!(back.format_version, 1);
         assert_eq!(back.generator_version, kuniumi_world::GENERATOR_VERSION);
         assert_eq!(back.seed, world.seed);
+        let s = &back.settings;
         assert_eq!(
-            (back.settings.cells, back.settings.allow_partial),
-            (world.settings.cells, world.settings.allow_partial)
+            (s.cells, s.plate_count, s.allow_partial),
+            (
+                world.settings.cells,
+                world.settings.plate_count,
+                world.settings.allow_partial
+            )
         );
         assert_eq!(back.stages, world.stages);
         let fields: Vec<_> = back
@@ -219,6 +226,7 @@ const EARTH_JSON: &str = r#"{
   "seed": 1,
   "settings": {
     "cells": 20000,
+    "plate_count": 12,
     "allow_partial": true
   },
   "planet": {
@@ -261,6 +269,7 @@ fn earth_world_json_has_the_documented_layout() {
     let mut world = World {
         settings: Settings {
             cells: 20_000,
+            plate_count: 12,
             allow_partial: true,
         },
         fields: Vec::new(),
@@ -298,6 +307,7 @@ const AWKWARD_JSON: &str = r#"{
   "seed": 18446744073709551615,
   "settings": {
     "cells": 4294967295,
+    "plate_count": 4294967294,
     "allow_partial": false
   },
   "planet": {

@@ -76,6 +76,8 @@ planned once the code they build on exists.
 | [M2-05](M2-05-isostasy-sea-level.md) | Elevation from crust and sea level | M2-04 |
 | [M2-06](M2-06-hypsometry-metrics.md) | Land fraction and hypsometry metrics | M2-05 |
 | [M2-07](M2-07-settings-files.md) | Planet and generation settings from TOML files | M2-01 |
+| [M2-08](M2-08-planet-param-bounds.md) | Physical bounds for the planet parameters | — |
+| [M2-09](M2-09-rustdoc-warnings.md) | Rustdoc warnings | — |
 
 ### MV — Viewer
 

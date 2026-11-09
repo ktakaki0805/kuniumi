@@ -85,45 +85,64 @@ fn grid_writes_maps_and_statistics() {
     }
 }
 
-/// The files a world stopped after the Grid stage has, in the order
+/// The fields of a world stopped after the Tectonics stage, in the order
 /// `generate` writes them.
-const GRID_WORLD_FILES: [&str; 5] = [
-    "cell_area.kfield",
-    "cell_area.png",
-    "neighbor_count.kfield",
-    "neighbor_count.png",
-    "world.json",
+const WORLD_FIELDS: [&str; 5] = [
+    "cell_area",
+    "neighbor_count",
+    "plate_id",
+    "plate_velocity_east",
+    "plate_velocity_north",
 ];
 
+/// The files of a world stopped after the Tectonics stage, in the order
+/// `generate` writes them: `<name>.kfield` and `<name>.png` of each field,
+/// then `world.json`.
+fn world_files() -> Vec<String> {
+    let mut files: Vec<String> = WORLD_FIELDS
+        .iter()
+        .flat_map(|f| [format!("{f}.kfield"), format!("{f}.png")])
+        .collect();
+    files.push("world.json".into());
+    files
+}
+
 #[test]
-fn generate_writes_the_grid_world_then_exits_with_code_2() {
-    let dir = scratch("generate_writes_the_grid_world");
+fn generate_writes_the_world_so_far_then_exits_with_code_2() {
+    let dir = scratch("generate_writes_the_world_so_far");
     let out = dir.to_str().expect("UTF-8 path");
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "1000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
     assert_eq!(
         stderr(&o),
-        "[grid] 0%\n[grid] 100%\nerror: stage `tectonics` is not implemented yet\n"
+        "[grid] 0%\n[grid] 100%\n[tectonics] 0%\n[tectonics] 100%\n\
+         error: stage `crust` is not implemented yet\n"
     );
-    let expected: String = GRID_WORLD_FILES
+    let expected: String = world_files()
         .iter()
         .map(|f| format!("wrote {}\n", dir.join(f).display()))
         .collect();
     assert_eq!(stdout(&o), expected);
-    for map in ["cell_area.png", "neighbor_count.png"] {
-        assert_eq!(png_size(&dir.join(map)), (2048, 1024), "{map}");
+    for field in WORLD_FIELDS {
+        let map = format!("{field}.png");
+        assert_eq!(png_size(&dir.join(&map)), (2048, 1024), "{map}");
     }
     let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
     for line in [
         "  \"seed\": 1,",
         "    \"cells\": 1000,",
+        "    \"plate_count\": 12,",
         "    \"allow_partial\": true",
         "    \"radius_m\": 6371000.0,",
         "  \"sea_level_m\": 0.0,",
-        "    \"grid\"",
+        "    \"grid\",",
+        "    \"tectonics\"",
         "      \"name\": \"cell_area\",",
         "      \"unit\": \"sr\",",
         "      \"kind\": \"class\"",
+        "      \"name\": \"plate_id\",",
+        "      \"name\": \"plate_velocity_east\",",
+        "      \"unit\": \"m/s\",",
     ] {
         assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
     }
@@ -143,6 +162,21 @@ fn generate_writes_the_grid_world_then_exits_with_code_2() {
         histogram[c as usize] += 1;
     }
     assert_eq!(histogram, [0, 0, 0, 0, 12, 228, 535, 210, 15, 0]);
+    // Twelve plates, ids 0 to 11, each with a cell; no velocity above
+    // 10 cm/yr (3.17e-9 m/s).
+    let plates = read_kfield(&dir.join("plate_id.kfield"));
+    let mut sizes = [0usize; 12];
+    for &p in &plates.values {
+        sizes[p as usize] += 1;
+    }
+    assert!(sizes.iter().all(|&s| s > 0), "{sizes:?}");
+    let east = read_kfield(&dir.join("plate_velocity_east.kfield"));
+    let north = read_kfield(&dir.join("plate_velocity_north.kfield"));
+    assert_eq!((east.unit.as_str(), north.unit.as_str()), ("m/s", "m/s"));
+    for (e, n) in east.values.iter().zip(&north.values) {
+        let speed = (e * e + n * n).sqrt();
+        assert!(speed <= 0.1 / 31_557_600.0 * (1.0 + 1e-12), "{speed}");
+    }
 }
 
 #[test]
@@ -164,22 +198,29 @@ fn generate_writes_the_same_bytes_twice() {
             })
             .collect();
         files.sort();
-        assert_eq!(files, GRID_WORLD_FILES, "{}", dir.display());
+        let mut expected = world_files();
+        expected.sort();
+        assert_eq!(files, expected, "{}", dir.display());
     }
-    for file in GRID_WORLD_FILES {
-        let bytes = |dir: &Path| std::fs::read(dir.join(file)).expect("written");
+    for file in world_files() {
+        let bytes = |dir: &Path| std::fs::read(dir.join(&file)).expect("written");
         assert!(bytes(&a) == bytes(&b), "{file} differs");
     }
 }
 
-/// Fingerprints of the Grid stage's fields for 10,000 cells, seed 1, as
-/// `kuniumi generate` writes them. Recorded by ticket M2-01 after the
-/// invariant tests passed and the maps of `out/M2-01` were looked at; both
-/// fields are exact copies of the grid, whose fingerprints M1-06 recorded
-/// (`stages::grid::tests::golden_fingerprints`).
-const GOLDEN_GRID_FIELDS: [(&str, u64); 2] = [
+/// Fingerprints of the fields for 10,000 cells, seed 1, as `kuniumi
+/// generate` writes them. The Grid stage's two were recorded by ticket M2-01
+/// after the invariant tests passed and the maps of `out/M2-01` were looked
+/// at; both are exact copies of the grid, whose fingerprints M1-06 recorded
+/// (`stages::grid::tests::golden_fingerprints`). The Tectonics stage's three
+/// were recorded by ticket M2-02 after its invariant tests passed
+/// (`stages::tectonics::tests`) and the maps of `out/M2-02` were looked at.
+const GOLDEN_FIELDS: [(&str, u64); 5] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
+    ("plate_id", 0x5E9F_DB0A_B6B7_D521),
+    ("plate_velocity_east", 0x8FFF_DF16_93AF_9B25),
+    ("plate_velocity_north", 0x1A26_5DF6_79D2_2BB9),
 ];
 
 #[test]
@@ -188,7 +229,7 @@ fn generate_golden_fingerprints() {
     let out = dir.to_str().expect("UTF-8 path");
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "10000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
-    for (name, golden) in GOLDEN_GRID_FIELDS {
+    for (name, golden) in GOLDEN_FIELDS {
         let field = read_kfield(&dir.join(format!("{name}.kfield")));
         let fingerprint = kuniumi_io::field_file::fingerprint(&field);
         assert_eq!(fingerprint, golden, "{name}: {fingerprint:#018X}");

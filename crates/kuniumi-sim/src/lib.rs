@@ -142,9 +142,12 @@ impl From<FieldError> for SimError {
 ///
 /// Implemented so far: the Grid stage ([`stages::grid`]), which starts the
 /// world: the grid, its fields `cell_area` and `neighbor_count`, sea level
-/// 0 m until the Crust stage. With [`Settings::allow_partial`] that world is
-/// returned when the next stage turns out to be missing ([`next_stage`]
-/// names it); otherwise it is dropped and the error names the stage.
+/// 0 m until the Crust stage; and the Tectonics stage
+/// ([`stages::tectonics`]), which adds the plates: `plate_id`,
+/// `plate_velocity_east` and `plate_velocity_north`. With
+/// [`Settings::allow_partial`] that world is returned when the next stage
+/// turns out to be missing ([`next_stage`] names it); otherwise it is
+/// dropped and the error names the stage.
 ///
 /// # Errors
 ///
@@ -152,7 +155,7 @@ impl From<FieldError> for SimError {
 /// progress is reported; [`SimError::Grid`] if the grid cannot be built
 /// (not expected); without [`Settings::allow_partial`],
 /// [`SimError::NotImplemented`] naming the first stage that does not exist
-/// yet, now always [`StageId::Tectonics`].
+/// yet, now always [`StageId::Crust`].
 pub fn generate(
     params: &PlanetParams,
     settings: &Settings,
@@ -183,6 +186,7 @@ mod tests {
         Settings {
             cells,
             allow_partial: false,
+            ..Settings::default()
         }
     }
 
@@ -240,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_runs_the_grid_stage_then_stops_at_tectonics() {
+    fn generate_runs_grid_and_tectonics_then_stops_at_crust() {
         let mut reports = Vec::new();
         let result = generate(&PlanetParams::earth(), &settings(1_000), 1, &mut |p| {
             reports.push(p)
@@ -249,40 +253,33 @@ mod tests {
             matches!(
                 result,
                 Err(SimError::NotImplemented {
-                    stage: StageId::Tectonics
+                    stage: StageId::Crust
                 })
             ),
             "{:?}",
             result.err()
         );
-        assert_eq!(
-            reports,
-            [
-                Progress {
-                    stage: StageId::Grid,
-                    fraction: 0.0
-                },
-                Progress {
-                    stage: StageId::Grid,
-                    fraction: 1.0
-                },
-            ]
-        );
+        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics]
+            .into_iter()
+            .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
+            .collect();
+        assert_eq!(reports, expected);
     }
 
     #[test]
-    fn generate_returns_the_grid_world_when_partial_worlds_are_allowed() {
+    fn generate_returns_the_partial_world_when_allowed() {
         let settings = Settings {
             cells: 1_000,
             allow_partial: true,
+            ..Settings::default()
         };
         let mut reports = Vec::new();
         let world = generate(&PlanetParams::earth(), &settings, 7, &mut |p| {
             reports.push(p)
         })
         .expect("a partial world");
-        assert_eq!(world.stages, ["grid"]);
-        assert_eq!(next_stage(&world), Some(StageId::Tectonics));
+        assert_eq!(world.stages, ["grid", "tectonics"]);
+        assert_eq!(next_stage(&world), Some(StageId::Crust));
         assert_eq!(
             (
                 world.seed,
@@ -302,16 +299,20 @@ mod tests {
             fields,
             [
                 ("cell_area", "sr", FieldKind::Quantity),
-                ("neighbor_count", "", FieldKind::Class)
+                ("neighbor_count", "", FieldKind::Class),
+                ("plate_id", "", FieldKind::Class),
+                ("plate_velocity_east", "m/s", FieldKind::Quantity),
+                ("plate_velocity_north", "m/s", FieldKind::Quantity),
             ]
         );
-        assert_eq!(
-            reports,
-            [0.0, 1.0].map(|fraction| Progress {
-                stage: StageId::Grid,
-                fraction
-            })
-        );
+        let plates = stages::tectonics::partition(&world.grid, 12, 7);
+        let ids: Vec<f64> = plates.iter().map(|&p| f64::from(p)).collect();
+        assert_eq!(world.fields[2].values, ids);
+        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics]
+            .into_iter()
+            .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
+            .collect();
+        assert_eq!(reports, expected);
     }
 
     #[test]
@@ -321,6 +322,7 @@ mod tests {
             &Settings {
                 cells: 1_000,
                 allow_partial: true,
+                ..Settings::default()
             },
             1,
             &mut |_| {},

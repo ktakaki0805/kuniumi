@@ -157,6 +157,7 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
     let settings = Settings {
         cells: args.cells,
         allow_partial: true,
+        ..Settings::default()
     };
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, args.seed, &mut |p| {
         eprintln!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0);

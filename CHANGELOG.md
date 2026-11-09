@@ -169,6 +169,19 @@ section: every change after which an existing seed produces a different world
   back bit for bit); the same world gives the same bytes; an existing
   `world.json` is removed before the fields are written, so a failed rewrite
   leaves none behind (M2-01).
+- The Tectonics stage (one-shot plates), `kuniumi_sim::stages::tectonics`:
+  `partition` divides the cells into `Settings::plate_count` connected
+  plates by growth from seed cells at least `0.4 √(4π/K)` rad apart, with a
+  growth rate per plate uniform in [1, 3) and a slowness per cell
+  `exp(3 (u − ½))` (multi-source Dijkstra, heap ordered by priority, cell
+  and plate; stream `tectonics/partition`); `euler_poles` gives each plate a
+  uniformly random axis and an angular speed at which its fastest cell
+  moves at a log-uniform 1 to 10 cm/yr (stream `tectonics/poles`);
+  `EulerPole::velocity_m_s` is `ω × r`. The stage adds the fields
+  `plate_id` (class), `plate_velocity_east` and `plate_velocity_north`
+  (m/s) (M2-02).
+- `Settings::plate_count` (default 12, valid 2 to 64, rejected by name
+  otherwise), recorded in `world.json` as `settings.plate_count` (M2-02).
 
 ### Changed
 
@@ -222,6 +235,10 @@ section: every change after which an existing seed produces a different world
   `Field` the new member `kind`, and `World` the members `settings` and
   `stages`; `.kfield` files are unchanged and are read back as quantities
   (M2-01).
+- `kuniumi_sim::generate` and `kuniumi generate` run the Tectonics stage
+  after the Grid stage and now stop at the Crust stage
+  (``stage `crust` is not implemented yet``); the world they write has the
+  three plate fields too (M2-02).
 
 ### Removed
 

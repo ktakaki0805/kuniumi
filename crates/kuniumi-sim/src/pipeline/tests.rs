@@ -8,7 +8,7 @@
 //! - `rejects_a_non_finite_stage_output`, `rejects_a_non_finite_sea_level`
 //!   and `rejects_a_class_value_that_is_not_a_class` (debug builds);
 //! - `rejects_progress_outside_0_1` (debug builds);
-//! - `the_real_table_has_no_stage_after_grid_yet`.
+//! - `the_real_table_has_the_tectonics_stage_only`.
 
 use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, World};
 
@@ -21,6 +21,7 @@ fn settings(allow_partial: bool) -> Settings {
     Settings {
         cells: CELLS,
         allow_partial,
+        ..Settings::default()
     }
 }
 
@@ -245,6 +246,7 @@ fn checks_params_and_settings_before_any_progress() {
     let bad_settings = Settings {
         cells: 999,
         allow_partial: true,
+        ..Settings::default()
     };
     let result = run(
         &PlanetParams::earth(),
@@ -361,9 +363,16 @@ fn rejects_progress_outside_0_1() {
     );
 }
 
+/// Only the Tectonics stage exists after Grid so far; that it is
+/// `stages::tectonics::run` is checked through its outputs by the tests of
+/// `generate` (`lib.rs`).
 #[test]
-fn the_real_table_has_no_stage_after_grid_yet() {
+fn the_real_table_has_the_tectonics_stage_only() {
     for stage in StageId::PIPELINE {
-        assert!(implementation(stage).is_none(), "{stage:?}");
+        assert_eq!(
+            implementation(stage).is_some(),
+            stage == StageId::Tectonics,
+            "{stage:?}"
+        );
     }
 }

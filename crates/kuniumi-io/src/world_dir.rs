@@ -34,6 +34,7 @@
 //!   "seed": 1,
 //!   "settings": {
 //!     "cells": 20000,
+//!     "plate_count": 12,
 //!     "allow_partial": true
 //!   },
 //!   "planet": {
@@ -120,6 +121,8 @@ pub struct WorldJson {
 pub struct SettingsJson {
     /// [`Settings::cells`].
     pub cells: u32,
+    /// [`Settings::plate_count`].
+    pub plate_count: u32,
     /// [`Settings::allow_partial`].
     pub allow_partial: bool,
 }
@@ -238,6 +241,7 @@ impl SettingsJson {
     pub fn of(settings: &Settings) -> Self {
         Self {
             cells: settings.cells,
+            plate_count: settings.plate_count,
             allow_partial: settings.allow_partial,
         }
     }
