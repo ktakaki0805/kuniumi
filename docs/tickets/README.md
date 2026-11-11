@@ -80,6 +80,8 @@ planned once the code they build on exists.
 | [M2-08](M2-08-planet-param-bounds.md) | Physical bounds for the planet parameters | — |
 | [M2-09](M2-09-rustdoc-warnings.md) | Rustdoc warnings | — |
 | [M2-10](M2-10-enclosed-ocean-pockets.md) | Oceanic pockets enclosed by continents | M2-03 |
+| [M2-12](M2-12-ridgeless-ocean-floor.md) | Ocean floor of plates without a ridge | M2-11 |
+| [M2-13](M2-13-slow-ridge-seams.md) | Age steps around very slow ridge cells | M2-11 |
 
 ### MV — Viewer
 

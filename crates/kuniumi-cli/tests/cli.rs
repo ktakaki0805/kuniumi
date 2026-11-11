@@ -225,7 +225,8 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         }
     }
     assert!(types.iter().all(|&t| t > 0), "{types:?}");
-    // Crust: oceanic 7 km, continental 35 to 70 km; ages up to 180 Myr;
+    // Crust: oceanic 7 km, continental 15 to 70 km (thinned towards the
+    // margins, ticket M2-11); ages up to 180 Myr;
     // uplift up to 10 mm/yr, only on continental crust; trenches only on
     // oceanic convergent cells, and some trench.
     let thickness = read_kfield(&dir.join("crust_thickness.kfield"));
@@ -243,7 +244,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         let continental = crust.values[i].to_bits() == land;
         let (t, a, u) = (thickness.values[i], age.values[i], uplift.values[i]);
         if continental {
-            assert!((35e3..=70e3).contains(&t), "cell {i}: {t}");
+            assert!((15e3..=70e3).contains(&t), "cell {i}: {t}");
         } else {
             assert_eq!(t.to_bits(), 7e3_f64.to_bits(), "cell {i}");
             assert_eq!(u.to_bits(), 0, "cell {i}");
@@ -298,10 +299,13 @@ fn generate_writes_the_same_bytes_twice() {
 /// (`stages::tectonics::tests`) and the maps of `out/M2-02` were looked at;
 /// its last three (continents and boundaries) by ticket M2-03 after the
 /// tests of `stages::tectonics::continents` and `::boundaries` passed and
-/// the maps of `out/M2-03` were looked at; the crust (thickness, age,
-/// uplift and trenches) by ticket M2-04 after the tests of
-/// `stages::tectonics::crust` passed and the maps of `out/M2-04` were looked
-/// at.
+/// the maps of `out/M2-03` were looked at; the uplift by ticket M2-04 after
+/// the tests of `stages::tectonics::crust` passed and the maps of
+/// `out/M2-04` were looked at; the thickness, age and trenches again by
+/// ticket M2-11 (margins, Earth's area–age distribution and the
+/// time-nearest ridge, world-breaking) after the tests of
+/// `stages::tectonics::crust` (`tests.rs`, `age_tests.rs`,
+/// `margin_tests.rs`) passed and the maps of `out/M2-11` were looked at.
 const GOLDEN_FIELDS: [(&str, u64); 12] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
@@ -311,10 +315,10 @@ const GOLDEN_FIELDS: [(&str, u64); 12] = [
     ("crust_type", 0x791F_6B17_52CF_D2B8),
     ("boundary_type", 0x5163_2C85_7C3F_C400),
     ("convergence_rate", 0x04BB_B545_5B56_84CC),
-    ("crust_thickness", 0xAB89_127D_E598_AF4E),
-    ("crust_age", 0x9B68_EB58_6AF8_700A),
+    ("crust_thickness", 0x9118_E6AA_2F43_6389),
+    ("crust_age", 0x4293_1D66_883A_3DF9),
     ("uplift_rate", 0x6725_720D_C775_FE38),
-    ("trench", 0x0DC3_352B_B86C_E68A),
+    ("trench", 0xA2D4_773C_1D13_3C93),
 ];
 
 #[test]

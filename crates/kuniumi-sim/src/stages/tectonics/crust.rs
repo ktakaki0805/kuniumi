@@ -1,11 +1,13 @@
 //! Crust thickness, ocean-floor age, uplift rate and trenches for the
-//! one-shot tectonics (ticket M2-04; design: プレートテクトニクス / 境界ごとの処理,
-//! 地殻から標高へ).
+//! one-shot tectonics (tickets M2-04 and M2-11; design: プレートテクトニクス /
+//! 境界ごとの処理, 地殻から標高へ).
 //!
 //! Without time evolution, each cell gets its crust from its distance to the
-//! boundaries of its own plate: ocean floor ages away from the divergent
-//! boundaries at their half spreading rate; continental crust thickens near
-//! collisions and inland of subduction zones, where it also rises. M6
+//! boundaries and coasts of its own plate: ocean floor ages away from the
+//! divergent boundaries at their half spreading rate, with Earth's
+//! distribution of area by age; continental crust thins towards the open
+//! ocean and continental rifts (margins, mostly under the sea), thickens
+//! near collisions and inland of subduction zones, and rises there. M6
 //! replaces this with the history of the plates.
 
 use core::cmp::{Ordering, Reverse};
@@ -110,6 +112,367 @@ pub const ARC_UPLIFT_RATIO: f64 = 0.03;
 /// collisions can ask for more.
 pub const MAX_UPLIFT_RATE_M_S: f64 = 0.01 / SECONDS_PER_YEAR;
 
+/// The thickness of continental crust at the coastline of a margin (m):
+/// 15 km. Continental crust thins towards the ocean along rifted margins,
+/// to well below 15 km at the continent–ocean transition, and the thinned
+/// crust lies under the continental shelf and slope (design, 地殻から標高へ
+/// / 大陸). An order-of-magnitude choice made with the owner (ticket M2-11):
+/// with [`MARGIN_WIDTH_M`] it floods the area that takes Earth's 40 % of
+/// continental crust to about 29 % of land.
+pub const MARGIN_COAST_THICKNESS_M: f64 = 15_000.0;
+
+/// The distance from the coastline (m) at which a margin's crust is back to
+/// [`CONTINENTAL_THICKNESS_M`]: 600 km, linearly from
+/// [`MARGIN_COAST_THICKNESS_M`]. Chosen with the owner (ticket M2-11): on
+/// Earth about 11 % of the surface is continental crust under the sea
+/// (40 % continental crust, 29 % land), a band a few hundred kilometres
+/// wide along the margins (the passive ones alone are about 105,000 km
+/// long; Bradley 2008, "Passive margins through earth history",
+/// Earth-Science Reviews 91, 1–26). With the sea level of Earth's water
+/// about 0.7 km below the datum, about the outer 400 km of the 600 km
+/// flood.
+pub const MARGIN_WIDTH_M: f64 = 600_000.0;
+
+/// The least area of an ocean region, as a fraction of the planet's
+/// surface, whose coasts are margins: 0.5 % (ticket M2-11). An ocean
+/// region is a set of oceanic cells connected through neighbours of any
+/// plate; smaller regions, such as the oceanic pockets that continents
+/// enclose (ticket M2-10), thin no crust around them.
+pub const MARGIN_MIN_OCEAN_FRACTION: f64 = 0.005;
+
+/// The first arrival of the ridges' fronts at every cell
+/// ([`ridge_times`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RidgeTimes {
+    /// The time (s) at which the first front arrives, `2ℓ / (−c)` for the
+    /// path length `ℓ` and the convergence rate `c` of its ridge cell;
+    /// `+∞` where no ridge of the plate reaches (or if a rate underflows).
+    pub time_s: Vec<f64>,
+    /// The length (m) of the path of the first front, `+∞` where none
+    /// reaches.
+    pub path_m: Vec<f64>,
+    /// The ridge cell (a divergent boundary cell) of the first front,
+    /// `None` where none reaches.
+    pub ridge: Vec<Option<u32>>,
+}
+
+/// The heap entry of [`ridge_times`]: the front of ridge cell `ridge`
+/// reaching `cell` at `time_s` along a path of `path_m`. Ordered by time
+/// ([`f64::total_cmp`]), cell, ridge and path, so that no two different
+/// entries compare equal and the heap pops entries in one order whatever
+/// its internals.
+#[derive(Clone, Copy, Debug)]
+struct Front {
+    time_s: f64,
+    cell: u32,
+    ridge: u32,
+    path_m: f64,
+}
+
+impl Ord for Front {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.time_s
+            .total_cmp(&other.time_s)
+            .then(self.cell.cmp(&other.cell))
+            .then(self.ridge.cmp(&other.ridge))
+            .then(self.path_m.total_cmp(&other.path_m))
+    }
+}
+
+impl PartialOrd for Front {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Front {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for Front {}
+
+/// The time at which the ocean floor of every cell of `grid` left its
+/// ridge, if every ridge cell had been spreading at its own rate: the first
+/// arrival of fronts that grow from the divergent cells of each plate
+/// (`plates`, `bounds`) at their half spreading rates, on a planet of
+/// radius `radius_m` (ticket M2-11, the "time-nearest" ridge).
+///
+/// Multi-source Dijkstra on time: every divergent cell `s` enters a
+/// priority queue at time 0 with a path of length 0; the entry of least
+/// time is taken, and if its cell is not settled yet the cell is settled
+/// with the entry's time, path length and ridge, and every neighbour `j`
+/// on the same plate that is not settled enters the queue with the path
+/// length `ℓ' = ℓ + d_ij R` (`d_ij` the distance between the centres, rad)
+/// and the time `2ℓ' / (−c_s)`, `−c_s/2 > 0` the half spreading rate of
+/// the ridge cell ([`Boundaries::convergence_rate_m_s`] is negative on
+/// divergent cells). Entries are ordered by time ([`f64::total_cmp`]),
+/// cell, ridge and path length. A front so passes only through cells that
+/// it reached first, as the growth of [`partition`](super::partition), and
+/// a slow ridge cell next to fast ones holds only the cells it reaches
+/// first. Between neighbours the time then changes by at most the time of
+/// one step of the front that reached the later of them, which removes
+/// most of the seams that the nearest ridge by distance leaves where
+/// neighbouring ridge cells spread at very different rates (a ridge's rate
+/// falls to zero at the relative pole of its plates); steps remain only
+/// next to ridge cells so slow that their own front is the first to reach
+/// their neighbours, as in clusters of slow cells near a relative pole
+/// (ticket M2-11 measures them; M2-13). Paths pass through any cell of the
+/// plate, continental cells included, as in ticket M2-04; cells of a plate
+/// without a divergent cell are not reached.
+///
+/// # Panics
+///
+/// If `plates` or `bounds` do not hold one value per cell of `grid`.
+pub fn ridge_times(
+    grid: &SphereGrid,
+    plates: &[u32],
+    radius_m: f64,
+    bounds: &Boundaries,
+) -> RidgeTimes {
+    let n = grid.len();
+    assert_eq!(
+        plates.len(),
+        n,
+        "a plate for each of the {n} cells, got {}",
+        plates.len()
+    );
+    assert_eq!(
+        bounds.kind.len(),
+        n,
+        "a boundary for each of the {n} cells, got {}",
+        bounds.kind.len()
+    );
+    let mut result = RidgeTimes {
+        time_s: vec![f64::INFINITY; n],
+        path_m: vec![f64::INFINITY; n],
+        ridge: vec![None; n],
+    };
+    let mut heap: BinaryHeap<Reverse<Front>> = (0..n as u32)
+        .filter(|&i| bounds.kind[i as usize] == BoundaryType::Divergent)
+        .map(|i| {
+            Reverse(Front {
+                time_s: 0.0,
+                cell: i,
+                ridge: i,
+                path_m: 0.0,
+            })
+        })
+        .collect();
+    while let Some(Reverse(front)) = heap.pop() {
+        let cell = front.cell as usize;
+        if result.ridge[cell].is_some() {
+            continue;
+        }
+        result.time_s[cell] = front.time_s;
+        result.path_m[cell] = front.path_m;
+        result.ridge[cell] = Some(front.ridge);
+        // Positive: the cell is divergent.
+        let spreading_m_s = -bounds.convergence_rate_m_s[front.ridge as usize];
+        let distances_rad = grid.centre_distances_rad(front.cell);
+        for (&j, &d_rad) in grid.neighbors(front.cell).iter().zip(distances_rad) {
+            if result.ridge[j as usize].is_none() && plates[j as usize] == plates[cell] {
+                let path_m = front.path_m + d_rad * radius_m;
+                heap.push(Reverse(Front {
+                    time_s: 2.0 * path_m / spreading_m_s,
+                    cell: j,
+                    ridge: front.ridge,
+                    path_m,
+                }));
+            }
+        }
+    }
+    result
+}
+
+/// The age (s) of every cell of `grid` from the times of [`ridge_times`]
+/// (`time_s`), with the area–age distribution of Earth's ocean floor
+/// (ticket M2-11).
+///
+/// On Earth the area of ocean floor falls off linearly with its age,
+/// `dA/dt ∝ 1 − t/t_max`, to the oldest floor at `t_max`: the triangular
+/// distribution that steady plate creation and destruction gives (Parsons
+/// 1982, "Causes and consequences of the relation between area and age of
+/// the ocean floor", JGR 87(B1), 289–302), whose mean age is `t_max/3`, here
+/// 60 Myr with `t_max` = [`MAX_CRUST_AGE_S`]. The one-shot plates have no
+/// history, so their ridges alone give an ocean floor much older than
+/// Earth's (79–144 Myr; ticket M2-04): the ages keep the order of the
+/// times, and the distribution is Earth's.
+///
+/// The oceanic cells (`continental` false) with a finite time are sorted by
+/// time, then index; with `A` their area (summed in that order), `A_<i` the
+/// area of the cells before cell `i` and `a_i` its own,
+/// `G_i = (A_<i + a_i/2) / A` is the middle of the cell's share of the
+/// area, and its age is the inverse of the cumulative distribution
+/// `F(t) = 1 − (1 − t/t_max)²` there: `t_max (1 − √(1 − G_i))`. Ridge cells
+/// (time 0) are `+0`, at the front of the order. Continental cells and
+/// oceanic cells without a ridge on their plate are `t_max` old.
+///
+/// # Panics
+///
+/// If `continental` or `time_s` do not hold one value per cell of `grid`.
+pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -> Vec<f64> {
+    let n = grid.len();
+    assert_eq!(
+        continental.len(),
+        n,
+        "a crust type for each of the {n} cells, got {}",
+        continental.len()
+    );
+    assert_eq!(
+        time_s.len(),
+        n,
+        "a time for each of the {n} cells, got {}",
+        time_s.len()
+    );
+    let mut age_s = vec![MAX_CRUST_AGE_S; n];
+    let mut order: Vec<u32> = (0..n as u32)
+        .filter(|&i| !continental[i as usize] && time_s[i as usize].is_finite())
+        .collect();
+    // The cells are distinct, so the order is total.
+    order.sort_unstable_by(|&a, &b| {
+        time_s[a as usize]
+            .total_cmp(&time_s[b as usize])
+            .then(a.cmp(&b))
+    });
+    let mut total_sr = 0.0;
+    for &i in &order {
+        total_sr += grid.area_sr(i);
+    }
+    let mut before_sr = 0.0;
+    for &i in &order {
+        let area_sr = grid.area_sr(i);
+        // Times are never negative: a ridge cell is at +0.
+        if time_s[i as usize] <= 0.0 {
+            age_s[i as usize] = 0.0;
+        } else {
+            let share = (before_sr + 0.5 * area_sr) / total_sr;
+            // At most 1 (the partial sums grow to `total_sr`); kept at +0 or
+            // above against rounding.
+            let rest = larger(1.0 - share, 0.0);
+            age_s[i as usize] = MAX_CRUST_AGE_S * (1.0 - rest.sqrt());
+        }
+        before_sr += area_sr;
+    }
+    age_s
+}
+
+/// The distance (m) of every continental cell of `grid` from the coastline
+/// or rift of its margin, through continental cells of its plate (ticket
+/// M2-11); `+∞` for oceanic cells and where no margin reaches.
+///
+/// Margins thin continental crust where it meets the open ocean or splits:
+///
+/// 1. Ocean regions: the oceanic cells (`continental` false) connected
+///    through neighbours of any plate. A region is *open* if its area
+///    (summed in index order) is at least [`MARGIN_MIN_OCEAN_FRACTION`] of
+///    the grid's.
+/// 2. Sources: every continental cell that is not a convergent boundary
+///    cell (an arc or collision front, which is not a source, though a
+///    margin from a coast or rift nearby thins it too) and has
+///    a neighbour in an open region (a coast, also across a divergent or
+///    transform boundary), or is itself a divergent boundary cell (a
+///    continental rift, design 境界ごとの処理: 大陸内なら地溝から始める). It
+///    starts at `½ d_ij R`, half the distance to the nearest such
+///    neighbour (oceanic and open, or for a rift on another plate): the
+///    coastline and the rift lie on the Voronoi edges, halfway between the
+///    centres, so the distances do not depend on the size of the cells.
+/// 3. Multi-source Dijkstra from the sources through continental cells of
+///    the same plate, as [`nearest_sources`] with the starting distances
+///    of step 2.
+///
+/// # Panics
+///
+/// If `plates`, `continental` or `bounds` do not hold one value per cell of
+/// `grid`.
+pub fn margin_distances(
+    grid: &SphereGrid,
+    plates: &[u32],
+    continental: &[bool],
+    bounds: &Boundaries,
+    radius_m: f64,
+) -> Vec<f64> {
+    let n = grid.len();
+    assert_eq!(
+        continental.len(),
+        n,
+        "a crust type for each of the {n} cells, got {}",
+        continental.len()
+    );
+    assert_eq!(
+        bounds.kind.len(),
+        n,
+        "a boundary for each of the {n} cells, got {}",
+        bounds.kind.len()
+    );
+    // Ocean regions, numbered in the index order of their first cell.
+    const NONE: u32 = u32::MAX;
+    let mut region = vec![NONE; n];
+    let mut region_count = 0;
+    let mut stack = Vec::new();
+    for first in 0..n as u32 {
+        if continental[first as usize] || region[first as usize] != NONE {
+            continue;
+        }
+        region[first as usize] = region_count;
+        stack.push(first);
+        while let Some(k) = stack.pop() {
+            for &j in grid.neighbors(k) {
+                if !continental[j as usize] && region[j as usize] == NONE {
+                    region[j as usize] = region_count;
+                    stack.push(j);
+                }
+            }
+        }
+        region_count += 1;
+    }
+    let mut region_sr = vec![0.0; region_count as usize];
+    let mut total_sr = 0.0;
+    for i in 0..n as u32 {
+        total_sr += grid.area_sr(i);
+        if !continental[i as usize] {
+            region_sr[region[i as usize] as usize] += grid.area_sr(i);
+        }
+    }
+    let min_sr = MARGIN_MIN_OCEAN_FRACTION * total_sr;
+    let open_ocean =
+        |j: u32| !continental[j as usize] && region_sr[region[j as usize] as usize] >= min_sr;
+    let mut starts = Vec::new();
+    for i in 0..n as u32 {
+        let kind = bounds.kind[i as usize];
+        if !continental[i as usize] || kind == BoundaryType::Convergent {
+            continue;
+        }
+        let mut start_m: Option<f64> = None;
+        let distances_rad = grid.centre_distances_rad(i);
+        for (&j, &d_rad) in grid.neighbors(i).iter().zip(distances_rad) {
+            let rift = kind == BoundaryType::Divergent && plates[j as usize] != plates[i as usize];
+            if rift || open_ocean(j) {
+                let half_m = 0.5 * d_rad * radius_m;
+                start_m = Some(start_m.map_or(half_m, |d| smaller(d, half_m)));
+            }
+        }
+        if let Some(d) = start_m {
+            starts.push((i, d));
+        }
+    }
+    grow(grid, plates, radius_m, &starts, &|j| {
+        continental[j as usize]
+    })
+    .distance_m
+}
+
+/// The thickness (m) of continental crust at the distance `distance_m` from
+/// its margin ([`margin_distances`]), before any orogen: from
+/// [`MARGIN_COAST_THICKNESS_M`] at the coastline linearly to
+/// [`CONTINENTAL_THICKNESS_M`] at [`MARGIN_WIDTH_M`], and exactly that
+/// from there on (also for `+∞`).
+fn margin_profile(distance_m: f64) -> f64 {
+    let x = smaller(distance_m / MARGIN_WIDTH_M, 1.0);
+    MARGIN_COAST_THICKNESS_M + (CONTINENTAL_THICKNESS_M - MARGIN_COAST_THICKNESS_M) * x
+}
+
 /// The distance from the nearest source of each cell ([`nearest_sources`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Nearest {
@@ -149,6 +512,21 @@ pub fn nearest_sources(
     sources: &[u32],
     passable: &dyn Fn(u32) -> bool,
 ) -> Nearest {
+    let starts: Vec<(u32, f64)> = sources.iter().map(|&s| (s, 0.0)).collect();
+    grow(grid, plates, radius_m, &starts, passable)
+}
+
+/// [`nearest_sources`] with every source `s` entering the queue at its own
+/// distance `d₀` (`starts`, pairs `(s, d₀)`, `d₀` finite and not
+/// negative) instead of 0; a source may be settled from another source
+/// first.
+fn grow(
+    grid: &SphereGrid,
+    plates: &[u32],
+    radius_m: f64,
+    starts: &[(u32, f64)],
+    passable: &dyn Fn(u32) -> bool,
+) -> Nearest {
     let n = grid.len();
     assert_eq!(
         plates.len(),
@@ -162,14 +540,14 @@ pub fn nearest_sources(
     };
     // The heap grows as needed: a few hundred fronts need far less than
     // the cells.
-    let mut heap = BinaryHeap::with_capacity(sources.len());
-    for &cell in sources {
+    let mut heap = BinaryHeap::with_capacity(starts.len());
+    for &(cell, start_m) in starts {
         assert!(
             (cell as usize) < n,
             "source {cell} is not one of the {n} cells"
         );
         heap.push(Reverse(Entry {
-            priority: 0.0,
+            priority: start_m,
             cell,
             source: cell,
         }));
@@ -222,12 +600,14 @@ enum Role {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Crust {
     /// The crust thickness (m): [`OCEANIC_THICKNESS_M`] for oceanic crust;
-    /// for continental crust [`CONTINENTAL_THICKNESS_M`], more in collision
+    /// for continental crust [`CONTINENTAL_THICKNESS_M`], less towards its
+    /// margins (down to [`MARGIN_COAST_THICKNESS_M`]), more in collision
     /// belts (up to [`COLLISION_THICKNESS_M`]) and under arcs (up to
-    /// [`ARC_THICKNESS_M`]).
+    /// [`ARC_THICKNESS_M`] where no margin thins them).
     pub thickness_m: Vec<f64>,
     /// The age (s) of the crust: of oceanic crust the time since it left
-    /// its ridge, at most [`MAX_CRUST_AGE_S`]; of continental crust
+    /// its ridge, in `[0, `[`MAX_CRUST_AGE_S`]`]` with Earth's area–age
+    /// distribution ([`earth_area_age`]); of continental crust
     /// [`MAX_CRUST_AGE_S`].
     pub age_s: Vec<f64>,
     /// The rock uplift rate (m/s), in `[0, `[`MAX_UPLIFT_RATE_M_S`]`]`;
@@ -244,29 +624,34 @@ pub struct Crust {
 /// boundaries of the partition (`bounds`, from
 /// [`boundaries`](super::boundaries)), on a planet of radius `radius_m`.
 ///
-/// The method (ticket M2-04, chosen with the owner), with every distance
-/// measured inside the cell's own plate by [`nearest_sources`]:
+/// The method (tickets M2-04 and M2-11, chosen with the owner), with every
+/// distance measured inside the cell's own plate:
 ///
-/// 1. Ocean-floor age: `t = d / h = 2d / (−c)` with `d` the distance (m)
-///    to the nearest divergent cell of the plate (paths through any cell
-///    of the plate) and `h = −c/2` the half spreading rate of that cell
-///    (`c`, the convergence rate of [`Boundaries`], is negative on divergent
-///    cells), capped at [`MAX_CRUST_AGE_S`]; a plate without a divergent
-///    cell is at the cap. Continental crust gets the cap.
+/// 1. Ocean-floor age: the time `t` at which the first front from the
+///    divergent cells of the plate, each growing at its own half spreading
+///    rate, reaches the cell ([`ridge_times`]), ranked onto Earth's
+///    area–age distribution ([`earth_area_age`]): 0 at ridge cells, at most
+///    [`MAX_CRUST_AGE_S`], mean 60 Myr; a plate without a divergent cell is
+///    at [`MAX_CRUST_AGE_S`]. Continental crust gets [`MAX_CRUST_AGE_S`].
 /// 2. The role of each convergent cell, from its crust and that of the
 ///    *cell across*, its neighbour on the plate across with the longest
 ///    shared Voronoi edge (the first in neighbour order on a tie):
 ///    continental against continental, a collision front; continental
 ///    against oceanic, an arc front; oceanic against continental, a trench;
-///    oceanic against oceanic, a trench if its uncapped age `2d / (−c)`
-///    (`+∞` without a ridge) is larger than that of the cell across, or
-///    equal and its plate id lower (the older, denser floor sinks; design,
+///    oceanic against oceanic, a trench if its time `t` of step 1 (`+∞`
+///    without a ridge) is larger than that of the cell across, or equal and
+///    its plate id lower (the older, denser floor sinks; design,
 ///    境界ごとの処理), otherwise the side of an island arc, which M2-04
 ///    leaves flat.
 /// 3. Continental thickness:
-///    `T = T₀ + max(ΔT_c f_c(d_c), ΔT_a f_a(d_a))`, with `d_c` and `d_a`
+///    `T = m(d_m) + max(ΔT_c f_c(d_c), ΔT_a f_a(d_a))`, with `d_c` and `d_a`
 ///    the distances to the nearest collision and arc fronts of the plate
-///    through continental cells (a missing front adds nothing):
+///    through continental cells ([`nearest_sources`]; a missing front adds
+///    nothing) and `d_m` the distance from the margin
+///    ([`margin_distances`]):
+///    - margin: `m(d) = T_m + (T₀ − T_m) · min(1, d / W)`, with `T_m` =
+///      [`MARGIN_COAST_THICKNESS_M`] and `W` = [`MARGIN_WIDTH_M`], so
+///      `T₀` beyond `W` (and without a margin);
 ///    - `T₀` = [`CONTINENTAL_THICKNESS_M`];
 ///    - collision: `ΔT_c = (`[`COLLISION_THICKNESS_M`]` − T₀) · min(1, c/c_ref)`
 ///      with `c` the front's convergence rate and `c_ref` =
@@ -313,27 +698,8 @@ pub fn crust(
         "a boundary for each of the {n} cells, got {}",
         bounds.kind.len()
     );
-    let of_kind = |kind: BoundaryType| -> Vec<u32> {
-        (0..n as u32)
-            .filter(|&i| bounds.kind[i as usize] == kind)
-            .collect()
-    };
-    let ridge = nearest_sources(
-        grid,
-        plates,
-        radius_m,
-        &of_kind(BoundaryType::Divergent),
-        &|_| true,
-    );
-    let raw_age_s: Vec<f64> = (0..n)
-        .map(|i| match ridge.source[i] {
-            // `−c > 0` on a divergent cell, so the age is never NaN; it is
-            // `+∞` only if the rate underflows, and then capped.
-            Some(s) => 2.0 * ridge.distance_m[i] / -bounds.convergence_rate_m_s[s as usize],
-            None => f64::INFINITY,
-        })
-        .collect();
-    let role = roles(grid, plates, continental, bounds, &raw_age_s);
+    let times = ridge_times(grid, plates, radius_m, bounds);
+    let role = roles(grid, plates, continental, bounds, &times.time_s);
     let fronts =
         |r: Role| -> Vec<u32> { (0..n as u32).filter(|&i| role[i as usize] == r).collect() };
     let on_continent = |j: u32| continental[j as usize];
@@ -345,17 +711,17 @@ pub fn crust(
         &on_continent,
     );
     let arc = nearest_sources(grid, plates, radius_m, &fronts(Role::Arc), &on_continent);
+    let margin = margin_distances(grid, plates, continental, bounds, radius_m);
 
     let mut result = Crust {
         thickness_m: Vec::with_capacity(n),
-        age_s: Vec::with_capacity(n),
+        age_s: earth_area_age(grid, continental, &times.time_s),
         uplift_rate_m_s: Vec::with_capacity(n),
         trench: role.iter().map(|&r| r == Role::Trench).collect(),
     };
     for i in 0..n {
         if !continental[i] {
             result.thickness_m.push(OCEANIC_THICKNESS_M);
-            result.age_s.push(smaller(raw_age_s[i], MAX_CRUST_AGE_S));
             result.uplift_rate_m_s.push(0.0);
             continue;
         }
@@ -377,8 +743,7 @@ pub fn crust(
             added_m = larger(added_m, (ARC_THICKNESS_M - CONTINENTAL_THICKNESS_M) * f);
             uplift_m_s = larger(uplift_m_s, ARC_UPLIFT_RATIO * c * f);
         }
-        result.thickness_m.push(CONTINENTAL_THICKNESS_M + added_m);
-        result.age_s.push(MAX_CRUST_AGE_S);
+        result.thickness_m.push(margin_profile(margin[i]) + added_m);
         result
             .uplift_rate_m_s
             .push(smaller(uplift_m_s, MAX_UPLIFT_RATE_M_S));
@@ -433,14 +798,14 @@ fn raised_cosine(x: f64) -> f64 {
 
 /// The role of every cell of `grid` ([`Role`]; [`Role::None`] for cells
 /// that are not convergent), given the plates, crust types, boundaries and
-/// the uncapped age of every cell (`raw_age_s`, `+∞` without a ridge);
-/// rule 2 of [`crust`].
+/// the time of every cell from its ridges (`time_s`, from
+/// [`ridge_times`], `+∞` without a ridge); rule 2 of [`crust`].
 fn roles(
     grid: &SphereGrid,
     plates: &[u32],
     continental: &[bool],
     bounds: &Boundaries,
-    raw_age_s: &[f64],
+    time_s: &[f64],
 ) -> Vec<Role> {
     (0..grid.len() as u32)
         .map(|i| {
@@ -461,7 +826,7 @@ fn roles(
                 (true, false) => Role::Arc,
                 (false, true) => Role::Trench,
                 (false, false) => {
-                    let older = match raw_age_s[i as usize].total_cmp(&raw_age_s[j as usize]) {
+                    let older = match time_s[i as usize].total_cmp(&time_s[j as usize]) {
                         Ordering::Greater => true,
                         Ordering::Less => false,
                         Ordering::Equal => plates[i as usize] < b,
@@ -475,3 +840,9 @@ fn roles(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod age_tests;
+
+#[cfg(test)]
+mod margin_tests;

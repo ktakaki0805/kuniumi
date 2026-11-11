@@ -11,9 +11,12 @@
 //! プレートテクトニクス / 初期条件の目安), and every boundary cell is classified
 //! as convergent, divergent or transform from the relative velocity of the
 //! two plates ([`boundaries`]; the boundary types of 境界ごとの処理). Each
-//! cell then gets its crust from its distance to the boundaries of its own
-//! plate ([`crust`]): ocean floor ages away from the divergent boundaries at
-//! their half spreading rate; continental crust thickens into plateaus at
+//! cell then gets its crust from its distance to the boundaries and coasts
+//! of its own plate ([`crust`]): ocean floor ages away from the divergent
+//! boundaries at their half spreading rates ([`ridge_times`]), with Earth's
+//! distribution of area by age ([`earth_area_age`]); continental crust
+//! thins towards the open ocean and continental rifts, where much of it
+//! lies under the sea ([`margin_distances`]), thickens into plateaus at
 //! collisions and into arcs inland of subduction zones, where it also
 //! rises; the oceanic side of each subduction boundary is a trench.
 //!
@@ -61,8 +64,10 @@ pub use continents::{CONTINENT_PLATE_COVER, CONTINENTS_STREAM, CRUST_TYPE, conti
 pub use crust::{
     ARC_DISTANCE_M, ARC_HALF_WIDTH_M, ARC_THICKNESS_M, ARC_UPLIFT_RATIO, COLLISION_PLATEAU_M,
     COLLISION_REFERENCE_RATE_M_S, COLLISION_TAPER_M, COLLISION_THICKNESS_M, COLLISION_UPLIFT_RATIO,
-    CONTINENTAL_THICKNESS_M, CRUST_AGE, CRUST_THICKNESS, Crust, MAX_CRUST_AGE_S,
-    MAX_UPLIFT_RATE_M_S, Nearest, OCEANIC_THICKNESS_M, TRENCH, UPLIFT_RATE, crust, nearest_sources,
+    CONTINENTAL_THICKNESS_M, CRUST_AGE, CRUST_THICKNESS, Crust, MARGIN_COAST_THICKNESS_M,
+    MARGIN_MIN_OCEAN_FRACTION, MARGIN_WIDTH_M, MAX_CRUST_AGE_S, MAX_UPLIFT_RATE_M_S, Nearest,
+    OCEANIC_THICKNESS_M, RidgeTimes, TRENCH, UPLIFT_RATE, crust, earth_area_age, margin_distances,
+    nearest_sources, ridge_times,
 };
 
 /// The random stream of the partition: the seed cells, then the growth rate

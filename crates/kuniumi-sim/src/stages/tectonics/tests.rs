@@ -18,8 +18,9 @@
 //! - `the_stage_adds_its_fields`.
 //!
 //! The continents and boundaries of ticket M2-03 are tested in
-//! `continents/tests.rs` and `boundaries/tests.rs`, the crust of ticket
-//! M2-04 in `crust/tests.rs`, with the helpers shared here.
+//! `continents/tests.rs` and `boundaries/tests.rs`, the crust of tickets
+//! M2-04 and M2-11 in `crust/tests.rs`, `crust/age_tests.rs` and
+//! `crust/margin_tests.rs`, with the helpers shared here.
 
 use std::sync::OnceLock;
 

@@ -1,4 +1,6 @@
-//! Tests of the crust of the one-shot tectonics (ticket M2-04):
+//! Tests of the crust of the one-shot tectonics (tickets M2-04 and M2-11;
+//! the ages of M2-11 are tested in `age_tests.rs`, its margins and the land
+//! fraction in `margin_tests.rs`, with the helpers shared here):
 //!
 //! - `the_field_names_and_constants`;
 //! - `profiles_worked_out_by_hand`;
@@ -22,9 +24,13 @@
 //! - `the_same_inputs_give_the_same_bits` and
 //!   `crust_rejects_inputs_of_another_grid`.
 //!
-//! Expected values come from the formulas of the ticket evaluated here with
-//! the standard library's `cos`, and from `reference_nearest`, a search
-//! written independently of `nearest_sources` (Bellman–Ford sweeps).
+//! Expected values come from the formulas of the tickets evaluated here
+//! with the standard library's `cos`, and from searches written
+//! independently of the code under test: Bellman–Ford sweeps in
+//! `reference_nearest` and `reference_from` for `nearest_sources` and in
+//! `reference_margin_distances` for `margin_distances`, and fixed-point
+//! sweeps that recompute every label from its neighbours in
+//! `reference_times` for `ridge_times`.
 #![allow(clippy::disallowed_methods)]
 
 use core::cmp::Ordering;
@@ -32,7 +38,7 @@ use std::sync::OnceLock;
 
 use kuniumi_math::Vec3;
 use kuniumi_math::units::{SECONDS_PER_MYR, SECONDS_PER_YEAR};
-use kuniumi_sphere::{SphereGrid, coords};
+use kuniumi_sphere::SphereGrid;
 use kuniumi_world::Settings;
 
 use super::*;
@@ -44,12 +50,12 @@ use crate::stages::tectonics::{EulerPole, boundaries, continents, euler_poles, p
 const OMEGA_RAD_S: f64 = 1e-15;
 
 /// 1 km, 1 Myr, 1 mm/yr and 1 cm/yr in SI, for the expected values.
-const KM: f64 = 1_000.0;
-const MM_PER_YR: f64 = 0.001 / SECONDS_PER_YEAR;
-const CM_PER_YR: f64 = 0.01 / SECONDS_PER_YEAR;
+pub(super) const KM: f64 = 1_000.0;
+pub(super) const MM_PER_YR: f64 = 0.001 / SECONDS_PER_YEAR;
+pub(super) const CM_PER_YR: f64 = 0.01 / SECONDS_PER_YEAR;
 
 /// The pole of the angular velocity `omega` (rad/s); at rest for zero.
-fn pole(omega: Vec3) -> EulerPole {
+pub(super) fn pole(omega: Vec3) -> EulerPole {
     match omega.normalized() {
         Some(axis) => EulerPole {
             axis,
@@ -64,7 +70,7 @@ fn pole(omega: Vec3) -> EulerPole {
 
 /// The grids of the two-plate tests: 10,000 cells with grid seeds 1–3 and
 /// 100,000 cells with seed 1, built once.
-fn grids() -> &'static [SphereGrid] {
+pub(super) fn grids() -> &'static [SphereGrid] {
     static GRIDS: OnceLock<Vec<SphereGrid>> = OnceLock::new();
     GRIDS.get_or_init(|| {
         [(10_000, 1), (10_000, 2), (10_000, 3), (100_000, 1)]
@@ -77,18 +83,18 @@ fn grids() -> &'static [SphereGrid] {
 /// A two-plate case: plate 0 where `p · normal > 0`, plate 1 elsewhere,
 /// plate 1 turning relative to plate 0 about an axis on the circle, with a
 /// rotation common to both, and its boundaries at Earth's radius.
-struct TwoPlates<'a> {
-    grid: &'a SphereGrid,
+pub(super) struct TwoPlates<'a> {
+    pub(super) grid: &'a SphereGrid,
     /// The unit normal of the circle, towards plate 0.
-    normal: Vec3,
-    plates: Vec<u32>,
-    bounds: Boundaries,
-    label: String,
+    pub(super) normal: Vec3,
+    pub(super) plates: Vec<u32>,
+    pub(super) bounds: Boundaries,
+    pub(super) label: String,
 }
 
 /// The two-plate cases: every grid of [`grids`], the equator and three
 /// tilted circles, both signs of the relative rotation; built once.
-fn two_plate_cases() -> &'static [TwoPlates<'static>] {
+pub(super) fn two_plate_cases() -> &'static [TwoPlates<'static>] {
     static CASES: OnceLock<Vec<TwoPlates<'static>>> = OnceLock::new();
     CASES.get_or_init(build_two_plate_cases)
 }
@@ -131,36 +137,52 @@ fn build_two_plate_cases() -> Vec<TwoPlates<'static>> {
 }
 
 /// The cells of `kind` in index order.
-fn cells_of(bounds: &Boundaries, kind: BoundaryType) -> Vec<u32> {
+pub(super) fn cells_of(bounds: &Boundaries, kind: BoundaryType) -> Vec<u32> {
     (0..bounds.kind.len() as u32)
         .filter(|&i| bounds.kind[i as usize] == kind)
         .collect()
 }
 
 /// The nearest source of each cell, by a search independent of
-/// `nearest_sources`: every cell holds the best `(distance, source, parent)`
-/// found so far (sources `(0, itself, none)`), and sweeps over all cells,
-/// alternately in increasing and decreasing index order, offer each
-/// neighbour on the same plate that is passable the label `(d + d_ij R,
-/// source, cell)`, kept if `(distance, source)` is lexicographically
-/// smaller, until a sweep changes nothing. The fixed point is the shortest
-/// path distance with ties to the lower source, as the ticket specifies.
-fn reference_nearest(
+/// `nearest_sources`: [`reference_from`] with every source starting at 0.
+pub(super) fn reference_nearest(
     grid: &SphereGrid,
     plates: &[u32],
     radius_m: f64,
     sources: &[u32],
     passable: &dyn Fn(u32) -> bool,
 ) -> Vec<Option<(f64, u32, Option<u32>)>> {
+    let starts: Vec<(u32, f64)> = sources.iter().map(|&s| (s, 0.0)).collect();
+    reference_from(grid, plates, radius_m, &starts, passable)
+}
+
+/// The nearest source of each cell when each source `s` starts at its own
+/// distance `d₀` (`starts`, pairs `(s, d₀)`): every cell holds the best
+/// `(distance, source, parent)` found so far (sources `(d₀, itself,
+/// none)`, unless a better label reaches them), and sweeps over all cells,
+/// alternately in increasing and decreasing index order, offer each
+/// neighbour on the same plate that is passable the label `(d + d_ij R,
+/// source, cell)`, kept if `(distance, source)` is lexicographically
+/// smaller, until a sweep changes nothing. The fixed point is the shortest
+/// path distance with ties to the lower source, as the tickets specify.
+pub(super) fn reference_from(
+    grid: &SphereGrid,
+    plates: &[u32],
+    radius_m: f64,
+    starts: &[(u32, f64)],
+    passable: &dyn Fn(u32) -> bool,
+) -> Vec<Option<(f64, u32, Option<u32>)>> {
     let n = grid.len() as u32;
     let mut label: Vec<Option<(f64, u32, Option<u32>)>> = vec![None; n as usize];
-    for &s in sources {
-        label[s as usize] = Some((0.0, s, None));
-    }
     let better = |new: (f64, u32), old: Option<(f64, u32, Option<u32>)>| match old {
         None => true,
         Some((d, s, _)) => new.0.total_cmp(&d).then(new.1.cmp(&s)) == Ordering::Less,
     };
+    for &(s, d0) in starts {
+        if better((d0, s), label[s as usize]) {
+            label[s as usize] = Some((d0, s, None));
+        }
+    }
     let mut forward = true;
     loop {
         let mut changed = false;
@@ -191,9 +213,233 @@ fn reference_nearest(
     }
 }
 
+/// The first arrival of the ridges' fronts, by a search independent of
+/// `ridge_times` (ticket M2-11): every divergent cell `s` holds
+/// `(0, s, 0)` (time, ridge, path length); every other cell holds the
+/// least, in the lexicographic order of `(time, ridge, path)`, of the
+/// offers `(2ℓ'/(−c_s), s, ℓ')` with `ℓ' = ℓ + d_ij R` from the current
+/// labels `(·, s, ℓ)` of its neighbours on the same plate, recomputed from
+/// scratch at every visit (so a front passes only through cells whose
+/// label it holds now, and a label left by a front that lost its cell goes
+/// too). Sweeps over all cells, alternately in increasing and decreasing
+/// index order, until a sweep changes nothing. The labels are then a fixed
+/// point of these equations; offers are later than the label they come
+/// from, so the fixed point is unique and is the first-arrival growth of
+/// the ticket.
+pub(super) fn reference_times(
+    grid: &SphereGrid,
+    plates: &[u32],
+    radius_m: f64,
+    bounds: &Boundaries,
+) -> Vec<Option<(f64, u32, f64)>> {
+    let n = grid.len() as u32;
+    let mut label: Vec<Option<(f64, u32, f64)>> = vec![None; n as usize];
+    for s in cells_of(bounds, BoundaryType::Divergent) {
+        label[s as usize] = Some((0.0, s, 0.0));
+    }
+    let mut forward = true;
+    for _ in 0..100_000 {
+        let mut changed = false;
+        let order: Vec<u32> = if forward {
+            (0..n).collect()
+        } else {
+            (0..n).rev().collect()
+        };
+        for j in order {
+            if bounds.kind[j as usize] == BoundaryType::Divergent {
+                continue;
+            }
+            let best = best_offer(grid, plates, radius_m, bounds, &label, j);
+            let same = match (best, label[j as usize]) {
+                (None, None) => true,
+                (Some(a), Some(b)) => {
+                    (a.0.to_bits(), a.1, a.2.to_bits()) == (b.0.to_bits(), b.1, b.2.to_bits())
+                }
+                _ => false,
+            };
+            if !same {
+                label[j as usize] = best;
+                changed = true;
+            }
+        }
+        forward = !forward;
+        if !changed {
+            return label;
+        }
+    }
+    panic!("the reference search did not settle");
+}
+
+/// The least offer `(2ℓ'/(−c_s), s, ℓ')`, `ℓ' = ℓ + d_ij R`, that the
+/// labels `(·, s, ℓ)` of `j`'s neighbours on its plate make to `j`, in the
+/// lexicographic order of `(time, ridge, path)`; `None` without a labelled
+/// neighbour.
+pub(super) fn best_offer(
+    grid: &SphereGrid,
+    plates: &[u32],
+    radius_m: f64,
+    bounds: &Boundaries,
+    label: &[Option<(f64, u32, f64)>],
+    j: u32,
+) -> Option<(f64, u32, f64)> {
+    let mut best: Option<(f64, u32, f64)> = None;
+    for &i in grid.neighbors(j) {
+        if plates[i as usize] != plates[j as usize] {
+            continue;
+        }
+        let Some((_, s, l)) = label[i as usize] else {
+            continue;
+        };
+        let path = l + grid_distance_m_at(grid, i, j, radius_m);
+        let offer = (
+            2.0 * path / -bounds.convergence_rate_m_s[s as usize],
+            s,
+            path,
+        );
+        let better = best.is_none_or(|b| {
+            offer
+                .0
+                .total_cmp(&b.0)
+                .then(offer.1.cmp(&b.1))
+                .then(offer.2.total_cmp(&b.2))
+                == Ordering::Less
+        });
+        if better {
+            best = Some(offer);
+        }
+    }
+    best
+}
+
+/// The distance (m) from the centre of `i` to that of its neighbour `j`
+/// on a planet of radius `radius_m`, as `i`'s list of centre distances
+/// gives it.
+pub(super) fn grid_distance_m_at(grid: &SphereGrid, i: u32, j: u32, radius_m: f64) -> f64 {
+    let k = grid
+        .neighbors(i)
+        .iter()
+        .position(|&x| x == j)
+        .expect("neighbours");
+    grid.centre_distances_rad(i)[k] * radius_m
+}
+
+/// The times of [`reference_times`], `+∞` where no ridge reaches.
+pub(super) fn reference_time_values(
+    grid: &SphereGrid,
+    plates: &[u32],
+    bounds: &Boundaries,
+) -> Vec<f64> {
+    reference_times(grid, plates, EARTH_RADIUS_M, bounds)
+        .iter()
+        .map(|r| r.map_or(f64::INFINITY, |(t, _, _)| t))
+        .collect()
+}
+
+/// The distance of each continental cell from its margin, by a search
+/// independent of `margin_distances` (ticket M2-11). Ocean regions are
+/// found by sweeps that give every oceanic cell the lowest index of an
+/// oceanic neighbour until nothing changes; a region's area is summed in
+/// index order. A continental cell `i` that is not convergent starts at the
+/// least `½ d_ij R` over its neighbours `j` that are oceanic in a region of
+/// at least 0.5 % of the surface, or, if `i` is divergent (a rift), on
+/// another plate; [`reference_from`] then searches through continental
+/// cells of the plate. `+∞` where no margin reaches.
+pub(super) fn reference_margin_distances(
+    grid: &SphereGrid,
+    plates: &[u32],
+    continental: &[bool],
+    bounds: &Boundaries,
+    radius_m: f64,
+) -> Vec<f64> {
+    let n = grid.len() as u32;
+    let mut region: Vec<u32> = (0..n).collect();
+    loop {
+        let mut changed = false;
+        for i in 0..n {
+            if continental[i as usize] {
+                continue;
+            }
+            for &j in grid.neighbors(i) {
+                if !continental[j as usize] && region[j as usize] < region[i as usize] {
+                    region[i as usize] = region[j as usize];
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut region_sr = vec![0.0; n as usize];
+    let mut total_sr = 0.0;
+    for i in 0..n {
+        total_sr += grid.area_sr(i);
+        if !continental[i as usize] {
+            region_sr[region[i as usize] as usize] += grid.area_sr(i);
+        }
+    }
+    let large = |j: u32| {
+        !continental[j as usize] && region_sr[region[j as usize] as usize] >= 0.005 * total_sr
+    };
+    let mut starts = Vec::new();
+    for i in 0..n {
+        let kind = bounds.kind[i as usize];
+        if !continental[i as usize] || kind == BoundaryType::Convergent {
+            continue;
+        }
+        let mut start: Option<f64> = None;
+        for (&j, &d_rad) in grid.neighbors(i).iter().zip(grid.centre_distances_rad(i)) {
+            let rift = kind == BoundaryType::Divergent && plates[j as usize] != plates[i as usize];
+            if large(j) || rift {
+                let half = 0.5 * d_rad * radius_m;
+                start = Some(start.map_or(half, |d: f64| d.min(half)));
+            }
+        }
+        if let Some(d0) = start {
+            starts.push((i, d0));
+        }
+    }
+    reference_from(grid, plates, radius_m, &starts, &|j| {
+        continental[j as usize]
+    })
+    .iter()
+    .map(|r| r.map_or(f64::INFINITY, |(d, _, _)| d))
+    .collect()
+}
+
+/// The margin profile of ticket M2-11: 15 km at the coastline, back to
+/// 35 km linearly at 600 km.
+pub(super) fn expected_margin_profile(d_m: f64) -> f64 {
+    15.0 * KM + 20.0 * KM * (d_m / (600.0 * KM)).min(1.0)
+}
+
+/// The grid and partition of seed 1 at 100,000 cells with 12 plates,
+/// built once.
+pub(super) fn hundred_thousand() -> &'static (SphereGrid, Vec<u32>) {
+    static WORLD: OnceLock<(SphereGrid, Vec<u32>)> = OnceLock::new();
+    WORLD.get_or_init(|| {
+        let grid = SphereGrid::fibonacci(100_000, 1).expect("valid grid");
+        let plates = partition(&grid, Settings::DEFAULT_PLATE_COUNT, 1);
+        (grid, plates)
+    })
+}
+
+/// The continents and boundaries of a real world of `seed` on `grid` with
+/// the partition `plates` (Earth's radius and 40 % continental crust).
+pub(super) fn crust_inputs(
+    grid: &SphereGrid,
+    plates: &[u32],
+    seed: u64,
+) -> (Vec<bool>, Boundaries) {
+    let poles = euler_poles(grid, plates, 12, EARTH_RADIUS_M, seed);
+    let continental = continents(grid, plates, 12, 0.4, seed);
+    let bounds = boundaries(grid, plates, &poles, EARTH_RADIUS_M);
+    (continental, bounds)
+}
+
 /// The collision profile of the ticket: 1 up to 200 km, a half cosine down
 /// to 0 at 400 km.
-fn expected_collision_profile(d_m: f64) -> f64 {
+pub(super) fn expected_collision_profile(d_m: f64) -> f64 {
     if d_m <= 200.0 * KM {
         1.0
     } else if d_m >= 400.0 * KM {
@@ -205,7 +451,7 @@ fn expected_collision_profile(d_m: f64) -> f64 {
 
 /// The arc profile of the ticket: a raised cosine from 0 at the front to 1
 /// at 200 km and 0 at 400 km.
-fn expected_arc_profile(d_m: f64) -> f64 {
+pub(super) fn expected_arc_profile(d_m: f64) -> f64 {
     let x = (d_m - 200.0 * KM).abs() / (200.0 * KM);
     if x >= 1.0 {
         0.0
@@ -216,13 +462,13 @@ fn expected_arc_profile(d_m: f64) -> f64 {
 
 /// Whether `got` equals `want` within 1e-9 relative (or 1e-9 of `scale`
 /// near zero): the expected values use the standard library's `cos`.
-fn close(got: f64, want: f64, scale: f64) -> bool {
+pub(super) fn close(got: f64, want: f64, scale: f64) -> bool {
     (got - want).abs() <= 1e-9 * want.abs().max(scale)
 }
 
 /// The cell across a convergent cell `i`: its neighbour on the plate
 /// across with the longest shared edge, the first on a tie.
-fn cell_across(grid: &SphereGrid, plates: &[u32], bounds: &Boundaries, i: u32) -> u32 {
+pub(super) fn cell_across(grid: &SphereGrid, plates: &[u32], bounds: &Boundaries, i: u32) -> u32 {
     let b = bounds.other_plate[i as usize].expect("a boundary cell");
     let mut best: Option<(f64, u32)> = None;
     for (&j, &l) in grid.neighbors(i).iter().zip(grid.edge_lengths_rad(i)) {
@@ -262,6 +508,16 @@ fn the_field_names_and_constants() {
     assert_eq!(
         [COLLISION_UPLIFT_RATIO, ARC_UPLIFT_RATIO].map(f64::to_bits),
         [0.1, 0.03].map(f64::to_bits)
+    );
+    // The margins of ticket M2-11.
+    assert_eq!(
+        [
+            MARGIN_COAST_THICKNESS_M,
+            MARGIN_WIDTH_M,
+            MARGIN_MIN_OCEAN_FRACTION
+        ]
+        .map(f64::to_bits),
+        [15e3, 600e3, 0.005].map(f64::to_bits)
     );
 }
 
@@ -345,7 +601,7 @@ fn nearest_sources_on_the_octahedron() {
 }
 
 /// The bits of each value, for exact comparisons.
-fn bits(values: &[f64]) -> Vec<u64> {
+pub(super) fn bits(values: &[f64]) -> Vec<u64> {
     values.iter().map(|v| v.to_bits()).collect()
 }
 
@@ -386,60 +642,40 @@ fn nearest_sources_matches_a_reference_search() {
     }
 }
 
-/// Two oceanic plates: every cell's age is `d / h`, with `d` its distance
-/// to the nearest divergent cell of its plate and `h` that cell's half
-/// spreading rate, both from [`reference_nearest`], within 1e-12 relative,
-/// or exactly 180 Myr where `d / h` is larger. Ridge cells have age `+0`;
-/// along the reference shortest paths the age increases strictly from cell
-/// to cell (below the cap); the distance is at least the great-circle
-/// distance to the ridge cell. Some cells reach the cap, and both plates
-/// have a ridge.
+/// Two oceanic plates (ticket M2-11): every cell's age is its time from
+/// [`reference_times`] ranked onto Earth's area–age distribution
+/// (`earth_area_age`), bit for bit; ridge cells have age `+0`; along the
+/// reference paths the age increases strictly from cell to cell; every
+/// cell is reached and lies below 180 Myr. 7 km and no uplift everywhere.
 #[test]
 fn ages_grow_away_from_a_ridge() {
-    let mut capped = 0;
     for case in two_plate_cases() {
         let (grid, plates, bounds) = (case.grid, &case.plates, &case.bounds);
         let n = grid.len();
         let continental = vec![false; n];
         let got = crust(grid, plates, &continental, bounds, EARTH_RADIUS_M);
-        let ridges = cells_of(bounds, BoundaryType::Divergent);
-        assert!(!ridges.is_empty(), "{}", case.label);
-        let reference = reference_nearest(grid, plates, EARTH_RADIUS_M, &ridges, &|_| true);
-        let expected: Vec<f64> = reference
-            .iter()
-            .map(|r| {
-                let (d, s, _) = r.expect("every cell has a ridge on its plate");
-                let half_rate = -bounds.convergence_rate_m_s[s as usize] / 2.0;
-                (d / half_rate).min(MAX_CRUST_AGE_S)
-            })
-            .collect();
+        let reference = reference_times(grid, plates, EARTH_RADIUS_M, bounds);
+        let times = reference_time_values(grid, plates, bounds);
+        let want = earth_area_age(grid, &continental, &times);
+        assert_eq!(bits(&got.age_s), bits(&want), "{}", case.label);
         for i in 0..n {
             let label = format!("{}, cell {i}", case.label);
-            let (age, want) = (got.age_s[i], expected[i]);
-            if want.to_bits() == MAX_CRUST_AGE_S.to_bits() {
-                capped += 1;
-                assert_eq!(age.to_bits(), MAX_CRUST_AGE_S.to_bits(), "{label}");
-            } else {
-                assert!(
-                    (age - want).abs() <= 1e-12 * want,
-                    "{label}: {age} against {want}"
-                );
-            }
-            let (d, s, parent) = reference[i].expect("reached");
+            let (t, s, _) = reference[i].expect("every cell has a ridge on its plate");
+            assert!(got.age_s[i] < MAX_CRUST_AGE_S, "{label}");
             if s == i as u32 {
-                assert_eq!(age.to_bits(), 0, "{label}");
+                assert_eq!(got.age_s[i].to_bits(), 0, "{label}");
             }
-            if let Some(p) = parent {
-                if expected[p as usize] < MAX_CRUST_AGE_S {
-                    assert!(age > got.age_s[p as usize], "{label}: parent {p}");
+            for &j in grid.neighbors(i as u32) {
+                let (t_j, s_j, l_j) = reference[j as usize].expect("reached");
+                // `i` continues the path of its neighbour `j` when `i`'s
+                // label is `j`'s offer.
+                let spreading = -bounds.convergence_rate_m_s[s_j as usize];
+                let offer = 2.0 * (l_j + grid_distance_m(grid, j, i as u32)) / spreading;
+                if plates[j as usize] == plates[i] && s_j == s && offer.to_bits() == t.to_bits() {
+                    assert!(t_j < t, "{label}");
+                    assert!(got.age_s[i] > got.age_s[j as usize], "{label}: from {j}");
                 }
             }
-            let geodesic_m = EARTH_RADIUS_M
-                * coords::great_circle_rad(grid.position(s), grid.position(i as u32));
-            assert!(
-                d >= geodesic_m * (1.0 - 1e-12),
-                "{label}: {d} < {geodesic_m}"
-            );
             assert_eq!(
                 got.thickness_m[i].to_bits(),
                 OCEANIC_THICKNESS_M.to_bits(),
@@ -447,25 +683,22 @@ fn ages_grow_away_from_a_ridge() {
             );
             assert_eq!(got.uplift_rate_m_s[i].to_bits(), 0, "{label}");
         }
-        for plate in [0, 1] {
-            assert!(
-                ridges.iter().any(|&r| plates[r as usize] == plate),
-                "{}",
-                case.label
-            );
-        }
     }
-    assert!(capped > 0);
+}
+
+/// The distance (m) between the centres of the neighbours `i` and `j`, at
+/// Earth's radius, as the searches add it.
+fn grid_distance_m(grid: &SphereGrid, i: u32, j: u32) -> f64 {
+    grid_distance_m_at(grid, i, j, EARTH_RADIUS_M)
 }
 
 /// Two oceanic plates with a continental band inside plate 0, between
 /// `p · n = 0.2` and `0.4` (about 1,300 to 2,600 km from the boundary),
-/// which cuts plate 0's cap off from the ridge: ages are measured along
+/// which cuts plate 0's cap off from the ridge: times are measured along
 /// paths through any cell of the plate, continental cells included, so the
-/// oceanic cells beyond the band have `d / h` with `d` from
-/// [`reference_nearest`] through every cell (within 1e-12 relative, or the
-/// cap), and some of them lie below the cap; continental cells are exactly
-/// 180 Myr old.
+/// oceanic ages are the ranked times of [`reference_times`] through every
+/// cell (bit for bit), and the oceanic cells beyond the band are reached
+/// and younger than 180 Myr; continental cells are exactly 180 Myr old.
 #[test]
 fn ages_cross_continents_on_their_plate() {
     let mut beyond = 0;
@@ -476,52 +709,46 @@ fn ages_cross_continents_on_their_plate() {
             .map(|i| (0.2..0.4).contains(&grid.position(i).dot(normal)))
             .collect();
         let got = crust(grid, plates, &continental, bounds, EARTH_RADIUS_M);
-        let ridges = cells_of(bounds, BoundaryType::Divergent);
-        let reference = reference_nearest(grid, plates, EARTH_RADIUS_M, &ridges, &|_| true);
-        for (i, nearest) in reference.iter().enumerate() {
+        let times = reference_time_values(grid, plates, bounds);
+        let want = earth_area_age(grid, &continental, &times);
+        assert_eq!(bits(&got.age_s), bits(&want), "{}", case.label);
+        for i in 0..grid.len() {
             let label = format!("{}, cell {i}", case.label);
             let age = got.age_s[i];
             if continental[i] {
                 assert_eq!(age.to_bits(), MAX_CRUST_AGE_S.to_bits(), "{label}");
-                continue;
-            }
-            let (d, s, _) = nearest.expect("every cell has a ridge on its plate");
-            let half_rate = -bounds.convergence_rate_m_s[s as usize] / 2.0;
-            let want = (d / half_rate).min(MAX_CRUST_AGE_S);
-            if want.to_bits() == MAX_CRUST_AGE_S.to_bits() {
-                assert_eq!(age.to_bits(), MAX_CRUST_AGE_S.to_bits(), "{label}");
-            } else {
-                assert!(
-                    (age - want).abs() <= 1e-12 * want,
-                    "{label}: {age} against {want}"
-                );
-                if grid.position(i as u32).dot(normal) >= 0.4 {
-                    beyond += 1;
-                }
+            } else if grid.position(i as u32).dot(normal) >= 0.4 {
+                assert!(times[i].is_finite() && age < MAX_CRUST_AGE_S, "{label}");
+                beyond += 1;
             }
         }
     }
     assert!(beyond > 0);
 }
 
-/// Two continental plates: every convergent cell is a collision front.
-/// Each cell's thickness is `35 km + 35 km · min(1, c / 5 cm/yr) · f(d)`
-/// and its uplift `min(10 mm/yr, 0.1 c f(d))`, with `d` the distance to
-/// its nearest front through continental cells of its plate, `c` that
-/// front's convergence rate and `f` the collision profile; cells farther
-/// than 400 km keep 35 km and no uplift. Ages are 180 Myr, no trench. The
-/// fronts converge at up to 20 cm/yr, so the rate scaling saturates and
-/// the uplift reaches its cap of 10 mm/yr.
+/// Two continental plates: every convergent cell is a collision front and
+/// every divergent cell a rift. Each cell's thickness is
+/// `m(d_m) + 35 km · min(1, c / 5 cm/yr) · f(d)` and its uplift
+/// `min(10 mm/yr, 0.1 c f(d))`, with `d` the distance to its nearest front
+/// through continental cells of its plate, `c` that front's convergence
+/// rate, `f` the collision profile and `m` the margin profile of the
+/// distance `d_m` from [`reference_margin_distances`] (the rifts); cells
+/// farther than 400 km from the fronts and 600 km from the rifts keep
+/// 35 km and no uplift. Ages are 180 Myr, no trench. The fronts converge at
+/// up to 20 cm/yr, so the rate scaling saturates and the uplift reaches its
+/// cap of 10 mm/yr; some cells are thinned.
 #[test]
 fn a_collision_thickens_and_uplifts_both_plates() {
-    let (mut at_cap, mut full, mut partial) = (0, 0, 0);
+    let (mut at_cap, mut full, mut partial, mut thinned) = (0, 0, 0, 0);
     for case in two_plate_cases() {
         let (grid, plates, bounds) = (case.grid, &case.plates, &case.bounds);
         let n = grid.len();
-        let got = crust(grid, plates, &vec![true; n], bounds, EARTH_RADIUS_M);
+        let continental = vec![true; n];
+        let got = crust(grid, plates, &continental, bounds, EARTH_RADIUS_M);
         let fronts = cells_of(bounds, BoundaryType::Convergent);
         assert!(!fronts.is_empty(), "{}", case.label);
         let reference = reference_nearest(grid, plates, EARTH_RADIUS_M, &fronts, &|_| true);
+        let margin = reference_margin_distances(grid, plates, &continental, bounds, EARTH_RADIUS_M);
         for (i, nearest) in reference.iter().enumerate() {
             let label = format!("{}, cell {i}", case.label);
             let (d, s, _) = nearest.expect("both plates have fronts");
@@ -529,8 +756,9 @@ fn a_collision_thickens_and_uplifts_both_plates() {
             assert!(c > 0.0, "{label}");
             let f = expected_collision_profile(d);
             let scale = (c / (5.0 * CM_PER_YR)).min(1.0);
-            let thickness = 35.0 * KM + 35.0 * KM * scale * f;
+            let thickness = expected_margin_profile(margin[i]) + 35.0 * KM * scale * f;
             let uplift = (0.1 * c * f).min(10.0 * MM_PER_YR);
+            thinned += usize::from(margin[i] < 600.0 * KM);
             assert!(
                 close(got.thickness_m[i], thickness, KM),
                 "{label}: {} against {thickness}",
@@ -542,11 +770,13 @@ fn a_collision_thickens_and_uplifts_both_plates() {
                 got.uplift_rate_m_s[i]
             );
             if d >= 400.0 * KM {
-                assert_eq!(
-                    got.thickness_m[i].to_bits(),
-                    (35.0 * KM).to_bits(),
-                    "{label}"
-                );
+                if margin[i] >= 600.0 * KM {
+                    assert_eq!(
+                        got.thickness_m[i].to_bits(),
+                        (35.0 * KM).to_bits(),
+                        "{label}"
+                    );
+                }
                 assert_eq!(got.uplift_rate_m_s[i].to_bits(), 0, "{label}");
             }
             assert_eq!(got.age_s[i].to_bits(), MAX_CRUST_AGE_S.to_bits(), "{label}");
@@ -563,18 +793,20 @@ fn a_collision_thickens_and_uplifts_both_plates() {
         }
     }
     assert!(
-        at_cap > 0 && full > 0 && partial > 0,
-        "{at_cap} {full} {partial}"
+        at_cap > 0 && full > 0 && partial > 0 && thinned > 0,
+        "{at_cap} {full} {partial} {thinned}"
     );
 }
 
 /// Plate 0 continental, plate 1 oceanic: plate 0's convergent cells are
 /// arc fronts, plate 1's are trenches. Plate 0's cells get
-/// `35 km + 15 km · f(d)` and `min(10 mm/yr, 0.03 c f(d))` with the arc
+/// `m(d_m) + 15 km · f(d)` and `min(10 mm/yr, 0.03 c f(d))` with the arc
 /// profile `f` of the distance to the nearest arc front through
-/// continental cells; plate 1 keeps 7 km and no uplift. Trenches are
-/// exactly plate 1's convergent cells. Then the same with the crust types
-/// swapped.
+/// continental cells and the margin profile `m` of the distance `d_m` from
+/// [`reference_margin_distances`] (the coast along the divergent and
+/// transform parts of the boundary); plate 1 keeps 7 km and no uplift.
+/// Trenches are exactly plate 1's convergent cells. Then the same with the
+/// crust types swapped.
 #[test]
 fn an_arc_rises_inland_of_a_trench() {
     let mut crests = 0;
@@ -590,6 +822,8 @@ fn an_arc_rises_inland_of_a_trench() {
                 .collect();
             assert!(!fronts.is_empty(), "{}", case.label);
             let reference = reference_nearest(grid, plates, EARTH_RADIUS_M, &fronts, &|_| true);
+            let margin =
+                reference_margin_distances(grid, plates, &continental, bounds, EARTH_RADIUS_M);
             for i in 0..n {
                 let label = format!("{}, land {land}, cell {i}", case.label);
                 let convergent = bounds.kind[i] == BoundaryType::Convergent;
@@ -597,7 +831,7 @@ fn an_arc_rises_inland_of_a_trench() {
                     let (d, s, _) = reference[i].expect("the land plate has fronts");
                     let c = bounds.convergence_rate_m_s[s as usize];
                     let f = expected_arc_profile(d);
-                    let thickness = 35.0 * KM + 15.0 * KM * f;
+                    let thickness = expected_margin_profile(margin[i]) + 15.0 * KM * f;
                     let uplift = (0.03 * c * f).min(10.0 * MM_PER_YR);
                     assert!(
                         close(got.thickness_m[i], thickness, KM),
@@ -623,9 +857,9 @@ fn an_arc_rises_inland_of_a_trench() {
 }
 
 /// Both plates oceanic: a convergent cell is a trench exactly when its
-/// uncapped age `d / h` (from [`reference_nearest`] to the divergent cells)
-/// is larger than that of the cell across (its neighbour on the other
-/// plate with the longest shared edge), or equal and its plate is plate 0.
+/// time from the ridges (from [`reference_times`]) is larger than that of
+/// the cell across (its neighbour on the other plate with the longest
+/// shared edge), or equal and its plate is plate 0.
 /// No uplift, 7 km everywhere; both kinds of convergent cell occur.
 #[test]
 fn the_older_ocean_floor_subducts() {
@@ -634,12 +868,8 @@ fn the_older_ocean_floor_subducts() {
         let (grid, plates, bounds) = (case.grid, &case.plates, &case.bounds);
         let n = grid.len();
         let got = crust(grid, plates, &vec![false; n], bounds, EARTH_RADIUS_M);
-        let ridges = cells_of(bounds, BoundaryType::Divergent);
-        let reference = reference_nearest(grid, plates, EARTH_RADIUS_M, &ridges, &|_| true);
-        let raw_age = |i: u32| {
-            let (d, s, _) = reference[i as usize].expect("reached");
-            d / (-bounds.convergence_rate_m_s[s as usize] / 2.0)
-        };
+        let times = reference_time_values(grid, plates, bounds);
+        let raw_age = |i: u32| times[i as usize];
         for i in 0..n as u32 {
             let label = format!("{}, cell {i}", case.label);
             if bounds.kind[i as usize] != BoundaryType::Convergent {
@@ -719,41 +949,28 @@ fn roles_of_hand_chosen_ages() {
 /// Real worlds (Earth's parameters: seeds 1–20 at 10,000 cells, seed 1 at
 /// 100,000 cells, 12 plates, 40 % continental crust): oceanic cells are
 /// 7 km thick, have no uplift, and an age in `[0, 180 Myr]`; continental
-/// cells are 35–70 km thick (within the 25–75 km of the ticket) and 180 Myr
-/// old; uplift lies in `[0, 10 mm/yr]` and is 0 for continental cells
-/// farther than 400 km from every collision and arc front of their plate;
-/// trenches are oceanic convergent cells. Among these worlds some
-/// collision belt exceeds 60 km and some arc, far from collisions,
-/// reaches 49–50 km.
+/// cells are 15–70 km thick (`[MARGIN_COAST_THICKNESS_M, 70 km]`, ticket
+/// M2-11) and 180 Myr old; uplift lies in `[0, 10 mm/yr]` and is 0 for
+/// continental cells farther than 400 km from every collision and arc
+/// front of their plate, which are exactly 35 km thick unless within
+/// 600 km of a margin (`margin_distances`); trenches are oceanic
+/// convergent cells. Among these worlds some collision belt exceeds 60 km,
+/// some arc far from collisions reaches 49–50 km before the thinning of
+/// its margin, and some margin is thinner than 20 km.
 #[test]
 fn thickness_and_uplift_stay_in_range_on_real_worlds() {
-    static HUNDRED_THOUSAND: OnceLock<(SphereGrid, Vec<u32>)> = OnceLock::new();
-    let large = HUNDRED_THOUSAND.get_or_init(|| {
-        let grid = SphereGrid::fibonacci(100_000, 1).expect("valid grid");
-        let plates = partition(&grid, Settings::DEFAULT_PLATE_COUNT, 1);
-        (grid, plates)
-    });
     let worlds = ten_thousand()
         .iter()
         .zip(1..)
-        .chain(core::iter::once((large, 1)));
-    let (mut thickest, mut highest_arc) = (0.0_f64, 0.0_f64);
+        .chain(core::iter::once((hundred_thousand(), 1)));
+    let (mut thickest, mut highest_arc, mut thinnest) = (0.0_f64, 0.0_f64, f64::INFINITY);
     let mut fastest = 0.0_f64;
     for ((grid, plates), seed) in worlds {
         let label = format!("{} cells, seed {seed}", grid.len());
-        let poles = euler_poles(grid, plates, 12, EARTH_RADIUS_M, seed);
-        let continental = continents(grid, plates, 12, 0.4, seed);
-        let bounds = boundaries(grid, plates, &poles, EARTH_RADIUS_M);
+        let (continental, bounds) = crust_inputs(grid, plates, seed);
         let got = crust(grid, plates, &continental, &bounds, EARTH_RADIUS_M);
-        let ridge = cells_of(&bounds, BoundaryType::Divergent);
-        let raw = nearest_sources(grid, plates, EARTH_RADIUS_M, &ridge, &|_| true);
-        let raw_age: Vec<f64> = (0..grid.len())
-            .map(|i| match raw.source[i] {
-                Some(s) => raw.distance_m[i] / (-bounds.convergence_rate_m_s[s as usize] / 2.0),
-                None => f64::INFINITY,
-            })
-            .collect();
-        let role = roles(grid, plates, &continental, &bounds, &raw_age);
+        let times = ridge_times(grid, plates, EARTH_RADIUS_M, &bounds).time_s;
+        let role = roles(grid, plates, &continental, &bounds, &times);
         let fronts = |r: Role| -> Vec<u32> {
             (0..grid.len() as u32)
                 .filter(|&i| role[i as usize] == r)
@@ -774,6 +991,7 @@ fn thickness_and_uplift_stay_in_range_on_real_worlds() {
             &fronts(Role::Arc),
             &on_continent,
         );
+        let margin = margin_distances(grid, plates, &continental, &bounds, EARTH_RADIUS_M);
         for (i, &on_land) in continental.iter().enumerate() {
             let (t, a, u) = (got.thickness_m[i], got.age_s[i], got.uplift_rate_m_s[i]);
             let cell = format!("{label}, cell {i}");
@@ -781,17 +999,25 @@ fn thickness_and_uplift_stay_in_range_on_real_worlds() {
             assert_eq!(u.to_bits() >> 63, 0, "{cell}");
             fastest = fastest.max(u);
             if on_land {
-                assert!((35.0 * KM..=70.0 * KM).contains(&t), "{cell}: {t}");
+                assert!(
+                    (MARGIN_COAST_THICKNESS_M..=70.0 * KM).contains(&t),
+                    "{cell}: {t}"
+                );
                 assert_eq!(a.to_bits(), MAX_CRUST_AGE_S.to_bits(), "{cell}");
                 assert!(!got.trench[i], "{cell}");
                 thickest = thickest.max(t);
+                thinnest = thinnest.min(t);
                 let (dc, da) = (collision.distance_m[i], arc.distance_m[i]);
                 if dc >= 400.0 * KM && da >= 400.0 * KM {
                     assert_eq!(u.to_bits(), 0, "{cell}");
-                    assert_eq!(t.to_bits(), (35.0 * KM).to_bits(), "{cell}");
+                    if margin[i] >= 600.0 * KM {
+                        assert_eq!(t.to_bits(), (35.0 * KM).to_bits(), "{cell}");
+                    }
                 }
                 if dc >= 400.0 * KM {
-                    highest_arc = highest_arc.max(t);
+                    // The arc's crust without the margin's thinning.
+                    let thinning = 35.0 * KM - expected_margin_profile(margin[i]);
+                    highest_arc = highest_arc.max(t + thinning);
                 }
             } else {
                 assert_eq!(t.to_bits(), OCEANIC_THICKNESS_M.to_bits(), "{cell}");
@@ -805,9 +1031,11 @@ fn thickness_and_uplift_stay_in_range_on_real_worlds() {
         }
     }
     eprintln!(
-        "thickest crust {:.1} km, highest arc {:.1} km, fastest uplift {:.2} mm/yr",
+        "thickest crust {:.1} km, highest arc {:.1} km, thinnest continental crust {:.1} km, \
+         fastest uplift {:.2} mm/yr",
         thickest / KM,
         highest_arc / KM,
+        thinnest / KM,
         fastest / MM_PER_YR
     );
     assert!(thickest > 60.0 * KM, "{thickest}");
@@ -815,6 +1043,7 @@ fn thickness_and_uplift_stay_in_range_on_real_worlds() {
         (49.0 * KM..=50.0 * KM).contains(&highest_arc),
         "{highest_arc}"
     );
+    assert!(thinnest < 20.0 * KM, "{thinnest}");
 }
 
 #[test]

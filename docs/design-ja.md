@@ -136,13 +136,15 @@ d(t) = 6400 - 3200\, e^{-t/62.8} \quad (t \ge 26.3)
 
 原論文の2式は適用範囲が20〜70 Myrで重なっており、70 Myrで切り替えると約78 mの段差が出ます。そこで2式が交わる約26.3 Myr（水深約4,294 m）で切り替えます。海嶺で約2.5 km、古い海洋底で約6 kmになり、海嶺から両側へゆるやかに深くなる地形が年代だけで決まります。
 
+一発生成（M2）では履歴がないため、年代は次のように決めます。各海嶺セルから、それぞれの半拡大速度でプレート内に広がる前線を考え、各セルに最初に届いた前線の到達時間を求めます（隣の海嶺セルと速度が大きく違っても、年代の継ぎ目はほとんどできません。相対極の近くに集まった非常に遅い海嶺セルのまわりにだけ、少し段差が残ります）。この時間の順位を、地球の海洋底の面積–年代分布（面積が年代とともに直線的に減る三角形の分布、最大180 Myr、平均60 Myr; Parsons 1982）に写して年代とします。海嶺のないプレートの海洋底は180 Myrです。時間発展（M6）では年代は履歴から直接決まります。
+
 ### 大陸：厚さから標高（アイソスタシー）
 
 大陸地殻はマントルに浮いており、厚いほど高くなります（エアリー型アイソスタシー）。地殻密度2,800 kg/m³、マントル密度3,300 kg/m³とすると、厚さが1 km増えるごとに標高は約0.15 km上がります。この比は密度だけで決まり、重力加速度には依存しません。
 
 - 標準的な大陸地殻（約35 km）が標高約300 mになるよう基準を合わせます。
 - 衝突で70 km程度まで厚くなると標高は約5.6 kmになり、チベット型の高原が再現されます。
-- 分裂で薄くなった縁辺部（25〜30 km）は海面下に沈み、大陸棚になります。
+- 分裂で薄くなった縁辺部は海面下に沈み、大陸棚と大陸斜面になります。一発生成（M2）では、収束前線以外の海岸（面積が表面の0.5%以上の海に面するもの）と大陸内のリフトから内陸へ、地殻が海岸線で15 km、内陸600 kmで35 kmに戻るよう直線的に薄くします。地球の水量では海面が基準より約0.7 km下になるため、海岸から約400 kmまで（厚さ約28 km以下）が沈み、陸地率は約29%になります。
 
 ### 古い山脈を低くする
 
@@ -375,6 +377,7 @@ NPP = \min\!\left( \frac{3000}{1 + e^{\,1.315 - 0.119\,T}},\; 3000\,(1 - e^{-0.0
 ### 地球物理・気候
 
 - Parsons & Sclater (1977). An analysis of the variation of ocean floor bathymetry and heat flow with age. JGR 82.
+- Parsons (1982). Causes and consequences of the relation between area and age of the ocean floor. JGR 87(B1).
 - Stommel (1948). The westward intensification of wind-driven ocean currents. Transactions AGU 29.
 - Smith & Barstad (2004). A linear theory of orographic precipitation. Journal of the Atmospheric Sciences 61.
 - Beck ほか (2018). Present and future Köppen-Geiger climate classification maps at 1-km resolution. Scientific Data 5.

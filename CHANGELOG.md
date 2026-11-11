@@ -271,6 +271,22 @@ section: every change after which an existing seed produces a different world
 - The world written by `kuniumi generate` has the three fields of the
   continents and boundaries after the plate fields; the plate fields and
   their golden values are unchanged (M2-03).
+- The one-shot crust reaches Earth's land fraction (M2-11). Ocean-floor
+  age: the first arrival of fronts that grow from every ridge cell at its
+  own half spreading rate (`ridge_times`, which removes most of the seams
+  where neighbouring ridge cells spread at very different rates; steps
+  remain next to very slow ridge cells, M2-13), ranked onto Earth's
+  triangular area–age distribution (`earth_area_age`, Parsons 1982: at
+  most 180 Myr, mean 60 Myr; plates without a ridge stay at 180 Myr); the
+  older side of an ocean–ocean subduction is decided by these times.
+  Continental margins: crust thins linearly from 15 km at the coastline to
+  35 km at 600 km inland (`margin_distances`, `MARGIN_COAST_THICKNESS_M`,
+  `MARGIN_WIDTH_M`), from every coast on an ocean of at least 0.5 % of the
+  surface (`MARGIN_MIN_OCEAN_FRACTION`) except at convergent fronts, and
+  from continental rifts; continental crust is now 15–70 km thick. With
+  the formulas of M2-05 the land fraction for Earth's parameters is
+  27.9–29.7 % at 10,000 cells (seeds 1–10) and 28.7–31.4 % at 650,000
+  cells, instead of 40.0 %.
 
 ### Removed
 
@@ -278,4 +294,7 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
-- None yet.
+- M2-11: `crust_thickness`, `crust_age` and `trench` change for every seed
+  (thinned margins, the time-nearest ridge and Earth's area–age
+  distribution); the plates, continents, boundaries and `uplift_rate` are
+  unchanged.
