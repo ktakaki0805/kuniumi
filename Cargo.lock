@@ -180,6 +180,7 @@ name = "kuniumi-io"
 version = "0.0.1"
 dependencies = [
  "kuniumi-math",
+ "kuniumi-sim",
  "kuniumi-sphere",
  "kuniumi-world",
  "png",

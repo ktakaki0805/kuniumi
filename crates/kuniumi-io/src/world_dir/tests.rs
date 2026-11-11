@@ -12,7 +12,12 @@
 //! - `writes_every_field_and_world_json_last`;
 //! - `file_system_errors_name_the_path`;
 //! - `maps_use_the_categorical_palette_for_classes`;
-//! - `writes_maps_of_2048_by_1024`.
+//! - `writes_maps_of_2048_by_1024`;
+//! - `metrics_txt_by_hand` and `metrics_txt_without_land_or_peaks`;
+//! - `chart_axes` and `hypsometry_chart_draws_the_bins_and_the_markers`;
+//! - `writes_metrics_and_the_chart_before_world_json`;
+//! - `no_metrics_without_a_surface_height_and_none_left_over`;
+//! - `rejects_non_finite_heights_before_writing_anything`.
 
 use std::path::PathBuf;
 
@@ -22,7 +27,10 @@ use kuniumi_world::{
     Field, FieldKind, PlanetParams, RotationRegime, Settings, TectonicRegime, World,
 };
 
+use kuniumi_sim::metrics::{ElevationMetrics, earth};
+
 use super::*;
+use crate::chart;
 use crate::colormap::{Colormap, Range};
 
 /// A world on a 1,000-cell grid with a quantity field and a class field.
@@ -581,6 +589,357 @@ fn writes_maps_of_2048_by_1024() {
     );
     assert_eq!(pixels, reference);
     remove(&dir);
+}
+
+/// A world on the octahedron grid whose six cells stand at −4,500, −3,500,
+/// +700 (twice), +1,500 and +3,000 m above a sea level of −500 m.
+fn octahedron_world() -> World {
+    let mut world = World {
+        grid: SphereGrid::octahedron(),
+        sea_level_m: -500.0,
+        stages: vec!["grid".into(), "tectonics".into(), "crust".into()],
+        fields: Vec::new(),
+        ..world()
+    };
+    world
+        .add_field(
+            "surface_height",
+            "m",
+            vec![200.0, -5_000.0, 1_000.0, -4_000.0, 2_500.0, 200.0],
+        )
+        .unwrap();
+    world
+}
+
+/// The text of `metrics.txt` for [`octahedron_world`], written by hand from
+/// the definitions of `kuniumi_sim::metrics`: land 4/6, its mean
+/// (700 + 700 + 1,500 + 3,000)/4 m, the ocean (4,500 + 3,500)/2 m deep;
+/// the percentiles from the sorted elevations −4,500, −3,500, 700, 700,
+/// 1,500, 3,000 (1/6 each); bins −45 to 30, 1/6 at −4,500, −3,500, +1,500
+/// and +3,000 m and 2/6 at +700 m; the ocean mode the lower of the two
+/// ocean bins, the valley the lowest empty bin above it; the chart from
+/// −11 km to +9 km and up to 7 steps of 0.05.
+fn octahedron_metrics_txt() -> String {
+    let mut text = String::from(
+        "# kuniumi metrics: land fraction and hypsometry (ticket M2-06)
+# Area-weighted over the cells. Elevations are heights above the sea level
+# (m), negative below it; cells below the sea level are ocean, all others
+# land. Earth's values are approximate (docs/design-ja.md, 検証方法).
+generator_version = 0.0.1
+seed = 1
+cells = 6
+sea_level_m = -500.000
+
+# Earth: land fraction about 0.29, mean land elevation about 800 m, mean
+# ocean depth about 3700 m, highest about 8800 m, lowest about -11000 m.
+land_fraction = 0.666667
+mean_land_elevation_m = 1475.0
+mean_ocean_depth_m = 4000.0
+highest_m = 3000.0
+lowest_m = -4500.0
+
+# Percentiles: the elevation of the first cell, from the lowest, at which
+# the share of the surface at or below it reaches the given percentage.
+percentile_1_m = -4500.0
+percentile_5_m = -4500.0
+percentile_10_m = -4500.0
+percentile_25_m = -3500.0
+percentile_50_m = 700.0
+percentile_75_m = 1500.0
+percentile_90_m = 3000.0
+percentile_95_m = 3000.0
+percentile_99_m = 3000.0
+
+# Peaks: the centres of the bins with the largest share below and above
+# the sea level (Earth: about -4500 m and +100 m), and the valley, the bin
+# between them with the smallest share. The peaks are separate when the
+# valley holds at most 0.5 of the smaller one.
+ocean_mode_m = -4450.0
+ocean_mode_fraction = 0.166667
+land_mode_m = 750.0
+land_mode_fraction = 0.333333
+valley_m = -4350.0
+valley_fraction = 0.000000
+separate_peaks = yes
+
+# hypsometry.png: the histogram as bars, blue below the sea level and green
+# to brown above it; a black line at the sea level and red lines at Earth's
+# modes; grey lines every chart_x_step_m and every chart_y_step_fraction.
+chart_x_min_m = -11000
+chart_x_max_m = 9000
+chart_x_step_m = 1000
+chart_y_max_fraction = 0.350
+chart_y_step_fraction = 0.050
+
+# Histogram: bins of bin_width_m from the lowest elevation to the highest:
+# lower edge (m), upper edge (m), share of the surface.
+bin_width_m = 100
+",
+    );
+    for k in -45..=30 {
+        let share = match k {
+            -45 | -35 | 15 | 30 => "0.16666667",
+            7 => "0.33333333",
+            _ => "0.00000000",
+        };
+        text.push_str(&format!("{} {} {share}\n", 100 * k, 100 * (k + 1)));
+    }
+    text
+}
+
+#[test]
+fn metrics_txt_by_hand() {
+    let world = octahedron_world();
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    assert_eq!(kuniumi_world::GENERATOR_VERSION, "0.0.1");
+    let text = metrics_txt(&world, &metrics);
+    let expected = octahedron_metrics_txt();
+    for (k, (a, b)) in text.lines().zip(expected.lines()).enumerate() {
+        assert_eq!(a, b, "line {}", k + 1);
+    }
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn metrics_txt_without_land_or_peaks() {
+    // A water world: no land, so no mean elevation, land mode or valley.
+    let mut world = octahedron_world();
+    world.sea_level_m = 10_000.0;
+    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap());
+    for line in [
+        "land_fraction = 0.000000",
+        "mean_land_elevation_m = none",
+        // (9,800 · 2 + 15,000 + 9,000 + 14,000 + 7,500)/6 m.
+        "mean_ocean_depth_m = 10850.0",
+        "land_mode_m = none",
+        "land_mode_fraction = none",
+        "valley_m = none",
+        "valley_fraction = none",
+        "separate_peaks = no",
+    ] {
+        assert!(text.lines().any(|l| l == line), "`{line}` missing:\n{text}");
+    }
+    // No water: no ocean.
+    world.sea_level_m = -5_000.0;
+    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap());
+    for line in [
+        "land_fraction = 1.000000",
+        "mean_ocean_depth_m = none",
+        "ocean_mode_m = none",
+        "ocean_mode_fraction = none",
+        "separate_peaks = no",
+    ] {
+        assert!(text.lines().any(|l| l == line), "`{line}` missing:\n{text}");
+    }
+}
+
+#[test]
+fn chart_axes() {
+    // Earth's range for the octahedron world, steps of 1 km and 0.05.
+    let metrics = ElevationMetrics::of_world(&octahedron_world()).unwrap();
+    let axes = hypsometry_axes(&metrics);
+    assert_eq!(
+        (axes.x_min, axes.x_max, axes.x_step, axes.y_step),
+        (-11_000.0, 9_000.0, 1_000.0, 0.05)
+    );
+    assert!((axes.y_max - 0.35).abs() < 1e-15, "{}", axes.y_max);
+    // From −30 km: 41 lines of 1 km would be too many, 21 of 2 km do.
+    let deep = ElevationMetrics::new(&[1.0, 3.0], &[-30_000.0, 1_500.0], 0.0);
+    let axes = hypsometry_axes(&deep);
+    assert_eq!(
+        (axes.x_min, axes.x_max, axes.x_step, axes.y_max, axes.y_step),
+        (-30_000.0, 10_000.0, 2_000.0, 0.8, 0.1)
+    );
+    // A sea level 1,000 km up: steps of 50 km; one bin with everything.
+    let wet = ElevationMetrics::new(&[1.0], &[-8_000.0], 1.0e6);
+    let axes = hypsometry_axes(&wet);
+    assert_eq!(
+        (axes.x_min, axes.x_max, axes.x_step, axes.y_max, axes.y_step),
+        (-1_050_000.0, 50_000.0, 50_000.0, 1.0, 0.1)
+    );
+    // A sea level near the largest double: finite axes (rounded, so far
+    // out), and a chart.
+    let far = ElevationMetrics::new(&[1.0], &[-8_000.0], 1.7e308);
+    let axes = hypsometry_axes(&far);
+    assert!(axes.x_min.is_finite() && axes.x_max.is_finite(), "{axes:?}");
+    assert!(
+        (axes.x_min / -1.7e308 - 1.0).abs() < 1e-15 && axes.x_max >= earth::HIGHEST_M,
+        "{axes:?}"
+    );
+    let pixels = hypsometry_chart(&far);
+    assert_eq!(pixels.len(), (CHART_WIDTH_PX * CHART_HEIGHT_PX) as usize);
+    // The markers at the sea level and at Earth's modes, 1e307 m from the
+    // right edge, fall into one plot column near it, drawn top to bottom.
+    let m = chart::MARGIN_PX as usize;
+    let row = |r: usize| &pixels[(m + r) * CHART_WIDTH_PX as usize..][m..m + 1_000];
+    let marked: Vec<usize> = (0..1_000)
+        .filter(|&c| (0..500).all(|r| row(r)[c] != chart::BACKGROUND && row(r)[c] != chart::GRID))
+        .collect();
+    assert_eq!(marked.len(), 1, "{marked:?}");
+    assert!(marked[0] > 900, "{marked:?}");
+    // Little area in the fullest bin: the smallest step.
+    let flat_area = vec![1.0; 2_000];
+    let flat_height: Vec<f64> = (0..2_000).map(|k| f64::from(k) * 100.0 + 50.0).collect();
+    let flat = ElevationMetrics::new(&flat_area, &flat_height, 0.0);
+    let axes = hypsometry_axes(&flat);
+    assert_eq!((axes.y_max, axes.y_step), (0.001, 0.001));
+}
+
+#[test]
+fn hypsometry_chart_draws_the_bins_and_the_markers() {
+    let metrics = ElevationMetrics::of_world(&octahedron_world()).unwrap();
+    let pixels = hypsometry_chart(&metrics);
+    assert_eq!(pixels.len(), (CHART_WIDTH_PX * CHART_HEIGHT_PX) as usize);
+    let axes = hypsometry_axes(&metrics);
+    let bars: Vec<chart::Bar> = (0..metrics.hypsometry.shares().len())
+        .map(|bin| {
+            let hyps = &metrics.hypsometry;
+            chart::Bar {
+                lower: hyps.lower_edge_m(bin),
+                upper: hyps.upper_edge_m(bin),
+                value: hyps.shares()[bin],
+                colour: Colormap::Elevation { sea_level: 0.0 }.colour(
+                    hyps.centre_m(bin),
+                    axes.x_min,
+                    axes.x_max,
+                ),
+            }
+        })
+        .collect();
+    let markers = [
+        chart::Marker {
+            x: 0.0,
+            colour: SEA_LEVEL_MARKER,
+        },
+        chart::Marker {
+            x: earth::OCEAN_MODE_M,
+            colour: EARTH_MARKER,
+        },
+        chart::Marker {
+            x: earth::LAND_MODE_M,
+            colour: EARTH_MARKER,
+        },
+    ];
+    let reference = chart::histogram(&bars, &axes, &markers, CHART_WIDTH_PX, CHART_HEIGHT_PX);
+    assert_eq!(pixels, reference);
+    // By hand: 20 m per column from −11 km, so the sea level in plot column
+    // 550, Earth's modes in 325 and 555; the bin at +700 m in columns 585 to
+    // 589, 2/6 / 0.35 · 500 = 476 rows high, in the land colour at +750 m.
+    let m = chart::MARGIN_PX as usize;
+    let at = |c: usize, r: usize| pixels[(m + r) * CHART_WIDTH_PX as usize + m + c];
+    for r in 0..500 {
+        assert_eq!(at(550, r), SEA_LEVEL_MARKER, "row {r}");
+        assert_eq!(at(325, r), EARTH_MARKER, "row {r}");
+        assert_eq!(at(555, r), EARTH_MARKER, "row {r}");
+    }
+    let land = Colormap::Elevation { sea_level: 0.0 }.colour(750.0, -11_000.0, 9_000.0);
+    for c in 585..590 {
+        assert_eq!(at(c, 499), land, "column {c}");
+        assert_eq!(at(c, 500 - 476), land, "column {c}");
+        assert_ne!(at(c, 500 - 477), land, "column {c}");
+    }
+    assert_ne!(at(584, 499), land);
+    assert_ne!(at(590, 499), land);
+}
+
+/// [`world`] with a surface 5 km · z − 600 m high and the sea level at
+/// −700 m.
+fn world_with_relief() -> World {
+    let mut world = world();
+    let heights = world
+        .grid
+        .positions()
+        .iter()
+        .map(|p| 5_000.0 * p.z - 600.0)
+        .collect();
+    world.add_field("surface_height", "m", heights).unwrap();
+    world.sea_level_m = -700.0;
+    world
+}
+
+#[test]
+fn writes_metrics_and_the_chart_before_world_json() {
+    let dir = scratch("metrics");
+    let world = world_with_relief();
+    let written = write_maps_of_width(&dir, &world, 64).unwrap();
+    let names: Vec<_> = written
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "height.kfield",
+            "height.png",
+            "zone.kfield",
+            "zone.png",
+            "surface_height.kfield",
+            "surface_height.png",
+            "metrics.txt",
+            "hypsometry.png",
+            "world.json"
+        ]
+    );
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    assert_eq!(
+        read(&dir.join(METRICS_FILE)),
+        metrics_txt(&world, &metrics).as_bytes()
+    );
+    let (width, height, pixels) = decode_png(&dir.join(HYPSOMETRY_FILE));
+    assert_eq!((width, height), (CHART_WIDTH_PX, CHART_HEIGHT_PX));
+    assert_eq!(pixels, hypsometry_chart(&metrics));
+    // Land above z = −0.02, (1 + 0.02)/2 of the surface (Archimedes),
+    // within the discretisation of 1,000 cells.
+    let text = String::from_utf8(read(&dir.join(METRICS_FILE))).unwrap();
+    let land: f64 = text
+        .lines()
+        .find_map(|l| l.strip_prefix("land_fraction = "))
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((land - 0.51).abs() < 0.01, "{land}");
+    remove(&dir);
+}
+
+#[test]
+fn no_metrics_without_a_surface_height_and_none_left_over() {
+    let dir = scratch("no_metrics");
+    write_maps_of_width(&dir, &world_with_relief(), 64).unwrap();
+    assert!(dir.join(METRICS_FILE).exists() && dir.join(HYPSOMETRY_FILE).exists());
+    // A world without a surface height removes the earlier world's metrics.
+    let written = write_maps_of_width(&dir, &world(), 64).unwrap();
+    assert_eq!(written.len(), 5);
+    assert!(!dir.join(METRICS_FILE).exists());
+    assert!(!dir.join(HYPSOMETRY_FILE).exists());
+    assert!(
+        dir.join("surface_height.kfield").exists(),
+        "other files stay"
+    );
+    // So does a rewrite that fails halfway.
+    write_maps_of_width(&dir, &world_with_relief(), 64).unwrap();
+    std::fs::remove_file(dir.join("zone.kfield")).unwrap();
+    std::fs::create_dir(dir.join("zone.kfield")).unwrap();
+    assert!(write_maps_of_width(&dir, &world_with_relief(), 64).is_err());
+    for file in [METRICS_FILE, HYPSOMETRY_FILE, METADATA_FILE] {
+        assert!(!dir.join(file).exists(), "{file}");
+    }
+    remove(&dir);
+}
+
+#[test]
+fn rejects_non_finite_heights_before_writing_anything() {
+    for (value, shown) in [(f64::NAN, "NaN"), (f64::NEG_INFINITY, "-inf")] {
+        let mut world = world_with_relief();
+        world.fields[2].values[3] = value;
+        let dir = scratch("non_finite_height");
+        let err = write(&dir, &world).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            format!("field `surface_height` has the non-finite value {shown} at cell 3")
+        );
+        assert!(!dir.exists(), "nothing is written");
+    }
 }
 
 /// A fresh path for the test `name` under the system's temporary directory

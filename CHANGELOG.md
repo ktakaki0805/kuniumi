@@ -228,6 +228,23 @@ section: every change after which an existing seed produces a different world
   cells (M2-05).
 - `tools/crust_reference.py`: mpmath reference values of the depth curve
   and Airy isostasy for the tests of the Crust stage (M2-05).
+- `kuniumi_sim::metrics`, the first validation metrics of the design
+  (検証方法), area-weighted over the cells with heights relative to the
+  sea level (a cell below it is ocean, every other cell land): the land
+  fraction, the mean land elevation and ocean depth, the lowest and
+  highest elevation, percentiles (`percentiles_m`, the lower quantile, at
+  `PERCENTILES`), the elevation histogram in 100 m bins from the sea level
+  (`Hypsometry`, `HYPSOMETRY_BIN_M`) with its land and ocean modes, the
+  valley between them and whether the two peaks are separate (the valley
+  holds at most `VALLEY_RATIO` = ½ of the smaller mode), all in
+  `ElevationMetrics`, and Earth's approximate values (`metrics::earth`).
+  With Earth's parameters at 650,000 cells (seeds 1–10) every histogram
+  has two separate peaks: land modes +0.95 to +1.15 km (Earth about
+  +0.1 km) and ocean modes −5.15 to −5.35 km (Earth about −4.5 km) (M2-06).
+- `kuniumi_io::chart::histogram`: bar charts drawn into RGB pixel buffers,
+  without text, with grid lines, axes and vertical markers (M2-06).
+- `tools/hypsometry_reference.py`: the metrics of a world directory with
+  exact rational arithmetic, for the tests of `metrics.txt` (M2-06).
 
 ### Changed
 
@@ -310,6 +327,14 @@ section: every change after which an existing seed produces a different world
   (``stage `climate` is not implemented yet``); the world they write has
   the field `surface_height`, and `world.json` the solved sea level instead
   of 0 m. The earlier fields and their golden values are unchanged (M2-05).
+- World directories (`world_dir::write`, `kuniumi generate`) of a world
+  with `surface_height` hold `metrics.txt` (the metrics of
+  `kuniumi_sim::metrics` with Earth's values, the axes of the chart and the
+  histogram) and `hypsometry.png` (the histogram as a 1040 × 540 bar
+  chart), written before `world.json`; existing ones are removed before
+  the first field is written. A non-finite `surface_height` is rejected
+  before anything is written. `kuniumi-io` now depends on `kuniumi-sim`
+  (M2-06).
 
 ### Removed
 

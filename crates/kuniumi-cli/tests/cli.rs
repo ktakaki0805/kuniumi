@@ -105,12 +105,13 @@ const WORLD_FIELDS: [&str; 13] = [
 
 /// The files of a world stopped after the Crust stage, in the order
 /// `generate` writes them: `<name>.kfield` and `<name>.png` of each field,
-/// then `world.json`.
+/// the metrics (ticket M2-06), then `world.json`.
 fn world_files() -> Vec<String> {
     let mut files: Vec<String> = WORLD_FIELDS
         .iter()
         .flat_map(|f| [format!("{f}.kfield"), format!("{f}.png")])
         .collect();
+    files.extend(["metrics.txt".into(), "hypsometry.png".into()]);
     files.push("world.json".into());
     files
 }
@@ -135,6 +136,14 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     for field in WORLD_FIELDS {
         let map = format!("{field}.png");
         assert_eq!(png_size(&dir.join(&map)), (2048, 1024), "{map}");
+    }
+    assert_eq!(png_size(&dir.join("hypsometry.png")), (1040, 540));
+    let metrics = std::fs::read_to_string(dir.join("metrics.txt")).expect("metrics.txt");
+    for line in ["seed = 1", "cells = 1000", "bin_width_m = 100"] {
+        assert!(
+            metrics.lines().any(|l| l == line),
+            "`{line}` missing:\n{metrics}"
+        );
     }
     let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
     for line in [
@@ -383,6 +392,72 @@ fn generate_golden_fingerprints() {
         GOLDEN_SEA_LEVEL_M.to_bits(),
         "sea level {sea_level}"
     );
+}
+
+/// The value of `key` in `metrics.txt`.
+fn metric(text: &str, key: &str) -> String {
+    let prefix = format!("{key} = ");
+    text.lines()
+        .find_map(|l| l.strip_prefix(prefix.as_str()))
+        .unwrap_or_else(|| panic!("no `{key}` in\n{text}"))
+        .to_owned()
+}
+
+/// The numbers of `metrics.txt` of the golden world (10,000 cells, seed 1),
+/// from `tools/hypsometry_reference.py out/M2-06/10k` (ticket M2-06): exact
+/// rational sums and bins over the `.kfield` files of the world, which
+/// [`GOLDEN_FIELDS`] fixes. Shares are printed with 6 decimals, metres with
+/// 1, so each agrees within half the last digit (and a rounding error).
+const REFERENCE_METRICS: [(&str, f64, f64); 21] = [
+    ("land_fraction", 0.296_053_819_165_441, 5e-7),
+    ("mean_land_elevation_m", 1_061.460_292_780_781, 0.05),
+    ("mean_ocean_depth_m", 3_718.062_915_493_437_2, 0.05),
+    ("highest_m", 6_384.794_070_848_209, 0.05),
+    ("lowest_m", -7_218.236_232_182_094, 0.05),
+    ("percentile_1_m", -7_218.236_232_182_094, 0.05),
+    ("percentile_5_m", -5_322.235_678_982_984, 0.05),
+    ("percentile_10_m", -5_122.144_186_468_786, 0.05),
+    ("percentile_25_m", -4_524.030_165_973_157, 0.05),
+    ("percentile_50_m", -3_133.760_124_026_571, 0.05),
+    ("percentile_75_m", 1_077.949_929_428_346_9, 0.05),
+    ("percentile_90_m", 1_081.763_767_817_906_7, 0.05),
+    ("percentile_95_m", 1_081.763_767_817_906_7, 0.05),
+    ("percentile_99_m", 1_081.763_767_817_906_7, 0.05),
+    ("ocean_mode_m", -1_750.0, 0.0),
+    ("ocean_mode_fraction", 0.028_606_005_230_792_698, 5e-7),
+    ("land_mode_m", 1_050.0, 0.0),
+    ("land_mode_fraction", 0.245_278_992_164_091_3, 5e-7),
+    ("valley_m", -850.0, 0.0),
+    ("valley_fraction", 0.000_314_532_086_759_371_95, 5e-7),
+    ("sea_level_m", -781.763_767_817_906_6, 5e-4),
+];
+
+#[test]
+fn generate_writes_the_metrics_of_the_reference() {
+    let dir = scratch("generate_writes_the_metrics_of_the_reference");
+    let out = dir.to_str().expect("UTF-8 path");
+    let o = kuniumi(&["generate", "--seed", "1", "--cells", "10000", "--out", out]);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    let text = std::fs::read_to_string(dir.join("metrics.txt")).expect("metrics.txt");
+    for (key, reference, tolerance) in REFERENCE_METRICS {
+        let value: f64 = metric(&text, key).parse().expect("a number");
+        assert!(
+            (value - reference).abs() <= tolerance * (1.0 + 1e-9),
+            "{key}: {value} against {reference}"
+        );
+    }
+    assert_eq!(metric(&text, "separate_peaks"), "yes");
+    assert_eq!(metric(&text, "cells"), "10000");
+    // 137 bins of 100 m, from −7,300 m to +6,400 m.
+    let bins: Vec<&str> = text
+        .lines()
+        .skip_while(|l| !l.starts_with("bin_width_m = "))
+        .skip(1)
+        .collect();
+    assert_eq!(bins.len(), 137);
+    assert!(bins[0].starts_with("-7300 -7200 "), "{}", bins[0]);
+    assert!(bins[136].starts_with("6300 6400 "), "{}", bins[136]);
+    assert_eq!(png_size(&dir.join("hypsometry.png")), (1040, 540));
 }
 
 #[test]

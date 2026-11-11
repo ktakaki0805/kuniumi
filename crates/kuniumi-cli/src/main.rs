@@ -53,8 +53,9 @@ struct GenerateArgs {
     /// Random seed
     #[arg(long, value_name = "N")]
     seed: u64,
-    /// Output directory for world.json and a .kfield file and a .png map
-    /// per field (created if missing)
+    /// Output directory for world.json, a .kfield file and a .png map per
+    /// field, and metrics.txt and hypsometry.png once the Crust stage has
+    /// run (created if missing)
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
     /// Number of grid cells, 1000 to 715827884

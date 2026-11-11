@@ -8,12 +8,24 @@
 //!   the categorical palette, quantities with viridis over the field's own
 //!   range;
 //!
-//! and then `world.json` ([`METADATA_FILE`]), the metadata: generator
+//! then, for a world with the field `surface_height` (the Crust stage has
+//! run), the validation metrics of `kuniumi_sim::metrics` (ticket M2-06):
+//!
+//! - `metrics.txt` ([`METRICS_FILE`], [`metrics_txt`]): the land fraction,
+//!   the mean land elevation and ocean depth, the extremes, percentiles,
+//!   the modes of the elevation histogram and the histogram itself, as
+//!   `key = value` lines with Earth's values in comments;
+//! - `hypsometry.png` ([`HYPSOMETRY_FILE`], [`hypsometry_chart`]): the
+//!   histogram as a bar chart, [`CHART_WIDTH_PX`] × [`CHART_HEIGHT_PX`],
+//!   whose axes `metrics.txt` describes;
+//!
+//! and last `world.json` ([`METADATA_FILE`]), the metadata: generator
 //! version, seed, settings, planet parameters, sea level, the stages that
-//! have run and the field list. An existing `world.json` is removed before
-//! the first field is written, and the new one is written last, so a
-//! directory with a `world.json` holds every file it lists, from the same
-//! world, even after a write that failed halfway. Other files in the
+//! have run and the field list. An existing `world.json`, `metrics.txt` and
+//! `hypsometry.png` are removed before the first field is written, and the
+//! new `world.json` is written last, so a directory with a `world.json`
+//! holds every file it lists, from the same world, even after a write that
+//! failed halfway, and no metrics of another world. Other files in the
 //! directory are left alone.
 //!
 //! # `world.json`
@@ -75,12 +87,15 @@
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+use kuniumi_sim::metrics::{ElevationMetrics, PERCENTILES, VALLEY_RATIO, earth};
+use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
 use kuniumi_world::{
     Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings, TectonicRegime,
     World,
 };
 use serde::{Deserialize, Serialize};
 
+use crate::chart::{self, Axes, Bar, Marker};
 use crate::colormap::{Colormap, Range};
 use crate::{Rgb8, field_file, png, render};
 
@@ -92,6 +107,26 @@ pub const METADATA_FILE: &str = "world.json";
 
 /// The width of the maps in pixels; they are half as high.
 pub const MAP_WIDTH_PX: u32 = 2048;
+
+/// The name of the text report of the metrics.
+pub const METRICS_FILE: &str = "metrics.txt";
+
+/// The name of the chart of the elevation histogram.
+pub const HYPSOMETRY_FILE: &str = "hypsometry.png";
+
+/// The width of [`HYPSOMETRY_FILE`] in pixels: 1,040, a plot of 1,000
+/// columns ([`chart::MARGIN_PX`] on each side).
+pub const CHART_WIDTH_PX: u32 = 1_040;
+
+/// The height of [`HYPSOMETRY_FILE`] in pixels: 540, a plot of 500 rows.
+pub const CHART_HEIGHT_PX: u32 = 540;
+
+/// The colour of the line at the sea level in [`HYPSOMETRY_FILE`]: black.
+pub const SEA_LEVEL_MARKER: Rgb8 = [0, 0, 0];
+
+/// The colour of the lines at Earth's two modes in [`HYPSOMETRY_FILE`]: a
+/// red.
+pub const EARTH_MARKER: Rgb8 = [200, 0, 0];
 
 /// The contents of `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -315,9 +350,216 @@ pub fn colormap(field: &Field) -> Colormap {
     }
 }
 
+/// The most vertical grid lines of [`HYPSOMETRY_FILE`].
+const MAX_X_LINES: f64 = 25.0;
+
+/// The most horizontal grid lines of [`HYPSOMETRY_FILE`].
+const MAX_Y_LINES: f64 = 10.0;
+
+/// The spacings of the horizontal grid lines of [`HYPSOMETRY_FILE`], as
+/// shares of the surface, smallest first.
+const Y_STEPS: [f64; 9] = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5];
+
+/// The axes of [`HYPSOMETRY_FILE`] for `metrics`.
+///
+/// The x axis (m above the sea level) spans Earth's range, from
+/// [`earth::LOWEST_M`] to [`earth::HIGHEST_M`] (−11 km to +8.8 km), widened
+/// to hold every bin, and rounded outwards to whole multiples of its step:
+/// the smallest of 1, 2, 5, 10, 20, 50, … km that gives at most 25 vertical
+/// lines; −11 km to +9 km in steps of 1 km for Earth-like worlds. (Should a
+/// bound overflow, for a sea level beyond about 1e307 m, the bound is not
+/// rounded.) The y axis (the share of the surface) has the smallest step of
+/// 0.001, 0.002, 0.005, …, 0.5 that gives at most 10 lines up to the
+/// largest share, and ends at the largest share rounded up to a whole
+/// multiple of the step.
+pub fn hypsometry_axes(metrics: &ElevationMetrics) -> Axes {
+    let hyps = &metrics.hypsometry;
+    let last = hyps.shares().len() - 1;
+    let (lowest, highest) = (hyps.lower_edge_m(0), hyps.upper_edge_m(last));
+    let x_lo = if lowest < earth::LOWEST_M {
+        lowest
+    } else {
+        earth::LOWEST_M
+    };
+    let x_hi = if highest > earth::HIGHEST_M {
+        highest
+    } else {
+        earth::HIGHEST_M
+    };
+    let lines = |step: f64| (x_hi / step).ceil() - (x_lo / step).floor() + 1.0;
+    let mut step = 1_000.0;
+    for factor in [2.0, 2.5, 2.0].into_iter().cycle() {
+        if lines(step) <= MAX_X_LINES || !(step * factor).is_finite() {
+            break;
+        }
+        step *= factor;
+    }
+    let (x_min, x_max) = ((x_lo / step).floor() * step, (x_hi / step).ceil() * step);
+    let largest = hyps
+        .shares()
+        .iter()
+        .fold(0.0, |max, &s| if s > max { s } else { max });
+    // A share is at most 1, so the step 0.1 always fits.
+    let y_step = Y_STEPS
+        .into_iter()
+        .find(|&step| (largest / step).ceil() <= MAX_Y_LINES)
+        .unwrap_or(0.5);
+    Axes {
+        x_min: if x_min.is_finite() { x_min } else { x_lo },
+        x_max: if x_max.is_finite() { x_max } else { x_hi },
+        x_step: step,
+        y_max: (largest / y_step).ceil() * y_step,
+        y_step,
+    }
+}
+
+/// The pixels of [`HYPSOMETRY_FILE`] for `metrics`, [`CHART_WIDTH_PX`] ×
+/// [`CHART_HEIGHT_PX`] ([`chart::histogram`]): a bar per bin of the
+/// histogram, as high as its share of the surface and coloured by
+/// [`Colormap::Elevation`] at sea level 0 over the x axis (blue below the
+/// sea level, green to brown above it), on the axes of [`hypsometry_axes`];
+/// markers at the sea level ([`SEA_LEVEL_MARKER`]) and at Earth's two modes,
+/// [`earth::OCEAN_MODE_M`] and [`earth::LAND_MODE_M`] ([`EARTH_MARKER`]).
+pub fn hypsometry_chart(metrics: &ElevationMetrics) -> Vec<Rgb8> {
+    let axes = hypsometry_axes(metrics);
+    let hyps = &metrics.hypsometry;
+    let colours = Colormap::Elevation { sea_level: 0.0 };
+    let bars: Vec<Bar> = (0..hyps.shares().len())
+        .map(|bin| Bar {
+            lower: hyps.lower_edge_m(bin),
+            upper: hyps.upper_edge_m(bin),
+            value: hyps.shares()[bin],
+            colour: colours.colour(hyps.centre_m(bin), axes.x_min, axes.x_max),
+        })
+        .collect();
+    let markers = [
+        Marker {
+            x: 0.0,
+            colour: SEA_LEVEL_MARKER,
+        },
+        Marker {
+            x: earth::OCEAN_MODE_M,
+            colour: EARTH_MARKER,
+        },
+        Marker {
+            x: earth::LAND_MODE_M,
+            colour: EARTH_MARKER,
+        },
+    ];
+    chart::histogram(&bars, &axes, &markers, CHART_WIDTH_PX, CHART_HEIGHT_PX)
+}
+
+/// The text of [`METRICS_FILE`] for `world` and its `metrics`: `key =
+/// value` lines with `#` comments, as `stats.txt` of `kuniumi grid`.
+///
+/// The generator version, the seed, the number of cells and the sea level
+/// (m, 3 decimals); the metrics of `kuniumi_sim::metrics` in SI, shares with
+/// 6 decimals and metres with 1 (`none` for a mean, mode or valley that does
+/// not exist), with Earth's values ([`earth`]) in the comments; the modes,
+/// the valley and `separate_peaks = yes` or `no`; the axes of
+/// [`HYPSOMETRY_FILE`] ([`hypsometry_axes`]); and the histogram, one line
+/// per bin: lower edge (m), upper edge (m) and share (8 decimals).
+pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
+    let hyps = &metrics.hypsometry;
+    let axes = hypsometry_axes(metrics);
+    let metres = |v: Option<f64>| v.map_or_else(|| "none".to_owned(), |v| format!("{v:.1}"));
+    let share = |v: Option<f64>| v.map_or_else(|| "none".to_owned(), |v| format!("{v:.6}"));
+    let centre = |bin: Option<usize>| metres(bin.map(|b| hyps.centre_m(b)));
+    let share_of = |bin: Option<usize>| share(bin.map(|b| hyps.shares()[b]));
+    let (ocean, valley, land) = (hyps.ocean_mode(), hyps.valley(), hyps.land_mode());
+    let mut lines = vec![
+        "# kuniumi metrics: land fraction and hypsometry (ticket M2-06)".to_owned(),
+        "# Area-weighted over the cells. Elevations are heights above the sea level".to_owned(),
+        "# (m), negative below it; cells below the sea level are ocean, all others".to_owned(),
+        "# land. Earth's values are approximate (docs/design-ja.md, 検証方法).".to_owned(),
+        format!("generator_version = {GENERATOR_VERSION}"),
+        format!("seed = {}", world.seed),
+        format!("cells = {}", world.grid.len()),
+        format!("sea_level_m = {:.3}", metrics.sea_level_m),
+        String::new(),
+        format!(
+            "# Earth: land fraction about {}, mean land elevation about {} m, mean",
+            earth::LAND_FRACTION,
+            earth::MEAN_LAND_ELEVATION_M
+        ),
+        format!(
+            "# ocean depth about {} m, highest about {} m, lowest about {} m.",
+            earth::MEAN_OCEAN_DEPTH_M,
+            earth::HIGHEST_M,
+            earth::LOWEST_M
+        ),
+        format!("land_fraction = {:.6}", metrics.land_fraction),
+        format!(
+            "mean_land_elevation_m = {}",
+            metres(metrics.mean_land_elevation_m)
+        ),
+        format!(
+            "mean_ocean_depth_m = {}",
+            metres(metrics.mean_ocean_depth_m)
+        ),
+        format!("highest_m = {:.1}", metrics.highest_m),
+        format!("lowest_m = {:.1}", metrics.lowest_m),
+        String::new(),
+        "# Percentiles: the elevation of the first cell, from the lowest, at which".to_owned(),
+        "# the share of the surface at or below it reaches the given percentage.".to_owned(),
+    ];
+    for (p, x) in PERCENTILES.iter().zip(&metrics.percentiles_m) {
+        lines.push(format!("percentile_{}_m = {x:.1}", (p * 100.0).round()));
+    }
+    lines.extend([
+        String::new(),
+        "# Peaks: the centres of the bins with the largest share below and above".to_owned(),
+        format!(
+            "# the sea level (Earth: about {:+} m and {:+} m), and the valley, the bin",
+            earth::OCEAN_MODE_M,
+            earth::LAND_MODE_M
+        ),
+        "# between them with the smallest share. The peaks are separate when the".to_owned(),
+        format!("# valley holds at most {VALLEY_RATIO} of the smaller one."),
+        format!("ocean_mode_m = {}", centre(ocean)),
+        format!("ocean_mode_fraction = {}", share_of(ocean)),
+        format!("land_mode_m = {}", centre(land)),
+        format!("land_mode_fraction = {}", share_of(land)),
+        format!("valley_m = {}", centre(valley)),
+        format!("valley_fraction = {}", share_of(valley)),
+        format!(
+            "separate_peaks = {}",
+            if hyps.has_separate_peaks() {
+                "yes"
+            } else {
+                "no"
+            }
+        ),
+        String::new(),
+        format!("# {HYPSOMETRY_FILE}: the histogram as bars, blue below the sea level and green"),
+        "# to brown above it; a black line at the sea level and red lines at Earth's".to_owned(),
+        "# modes; grey lines every chart_x_step_m and every chart_y_step_fraction.".to_owned(),
+        format!("chart_x_min_m = {}", axes.x_min),
+        format!("chart_x_max_m = {}", axes.x_max),
+        format!("chart_x_step_m = {}", axes.x_step),
+        format!("chart_y_max_fraction = {:.3}", axes.y_max),
+        format!("chart_y_step_fraction = {:.3}", axes.y_step),
+        String::new(),
+        "# Histogram: bins of bin_width_m from the lowest elevation to the highest:".to_owned(),
+        "# lower edge (m), upper edge (m), share of the surface.".to_owned(),
+        format!("bin_width_m = {}", hyps.bin_width_m()),
+    ]);
+    for (bin, s) in hyps.shares().iter().enumerate() {
+        lines.push(format!(
+            "{} {} {s:.8}",
+            hyps.lower_edge_m(bin),
+            hyps.upper_edge_m(bin)
+        ));
+    }
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text
+}
+
 /// Writes `world` into the directory `dir`, creating it if needed (module
 /// documentation), and returns the paths written, in order: `<name>.kfield`
-/// and `<name>.png` of every field, then `world.json`.
+/// and `<name>.png` of every field, `metrics.txt` and `hypsometry.png` if
+/// the world has a `surface_height`, then `world.json`.
 ///
 /// The world is checked before anything is written.
 ///
@@ -326,8 +568,9 @@ pub fn colormap(field: &Field) -> Colormap {
 /// [`io::ErrorKind::InvalidInput`] if a field name is not valid
 /// ([`Field::is_valid_name`]) or appears twice, if a field does not hold one
 /// value per cell, if a class field holds a value that is not a class id
-/// ([`Field::is_class_value`]), or as [`world_json`]; otherwise the error
-/// of the file system, with the path in its message.
+/// ([`Field::is_class_value`]), as [`world_json`], or if `surface_height`
+/// holds a value that is not finite; otherwise the error of the file
+/// system, with the path in its message.
 pub fn write(dir: &Path, world: &World) -> io::Result<Vec<PathBuf>> {
     write_maps_of_width(dir, world, MAP_WIDTH_PX)
 }
@@ -337,16 +580,21 @@ pub fn write(dir: &Path, world: &World) -> io::Result<Vec<PathBuf>> {
 fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<Vec<PathBuf>> {
     check_fields(world)?;
     let json = world_json(world)?;
+    let metrics = elevation_metrics(world)?;
     std::fs::create_dir_all(dir).map_err(|e| with_path(dir, e))?;
-    // The metadata of an earlier world must not outlive a failed rewrite.
+    // The metadata and the metrics of an earlier world must not outlive a
+    // failed rewrite, nor a world without them.
     let metadata = dir.join(METADATA_FILE);
-    match std::fs::remove_file(&metadata) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(with_path(&metadata, e)),
-        _ => {}
+    for file in [METADATA_FILE, METRICS_FILE, HYPSOMETRY_FILE] {
+        let path = dir.join(file);
+        match std::fs::remove_file(&path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(with_path(&path, e)),
+            _ => {}
+        }
     }
 
     let cells = render::equirect_cells(&world.grid, width_px);
-    let mut written = Vec::with_capacity(2 * world.fields.len() + 1);
+    let mut written = Vec::with_capacity(2 * world.fields.len() + 3);
     for field in &world.fields {
         let path = dir.join(format!("{}.kfield", field.name));
         write_kfield(&path, field).map_err(|e| with_path(&path, e))?;
@@ -358,9 +606,37 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
         std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
         written.push(path);
     }
+    if let Some(metrics) = metrics {
+        let path = dir.join(METRICS_FILE);
+        std::fs::write(&path, metrics_txt(world, &metrics)).map_err(|e| with_path(&path, e))?;
+        written.push(path);
+        let path = dir.join(HYPSOMETRY_FILE);
+        let bytes = png::encode_rgb8(CHART_WIDTH_PX, CHART_HEIGHT_PX, &hypsometry_chart(&metrics));
+        std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
+        written.push(path);
+    }
     std::fs::write(&metadata, json).map_err(|e| with_path(&metadata, e))?;
     written.push(metadata);
     Ok(written)
+}
+
+/// The metrics of `world` ([`ElevationMetrics::of_world`]), `None` without
+/// a `surface_height`; the fields are checked already ([`check_fields`]) and
+/// the sea level is finite ([`world_json`]).
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidInput`] if a height is not finite.
+fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
+    if let Some(field) = world.field(SURFACE_HEIGHT) {
+        if let Some(cell) = field.values.iter().position(|h| !h.is_finite()) {
+            return Err(invalid_input(format!(
+                "field `{SURFACE_HEIGHT}` has the non-finite value {} at cell {cell}",
+                field.values[cell]
+            )));
+        }
+    }
+    Ok(ElevationMetrics::of_world(world))
 }
 
 /// Checks that every field has a valid, unique name and one value per cell,

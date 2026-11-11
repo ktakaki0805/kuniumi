@@ -9,6 +9,9 @@ publish.workspace = true
 
 [dependencies]
 kuniumi-math.workspace = true
+# The validation metrics of `metrics.txt` (D-06: kuniumi-io may depend on
+# kuniumi-sim, never the other way round).
+kuniumi-sim.workspace = true
 kuniumi-sphere.workspace = true
 kuniumi-world.workspace = true
 # Compressed PNG output (D-10). Not on the generation path: the golden tests

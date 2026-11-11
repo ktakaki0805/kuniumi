@@ -83,6 +83,7 @@ planned once the code they build on exists.
 | [M2-12](M2-12-ridgeless-ocean-floor.md) | Ocean floor of plates without a ridge | M2-11 |
 | [M2-13](M2-13-slow-ridge-seams.md) | Age steps around very slow ridge cells | M2-11 |
 | [M2-14](M2-14-elevation-maps.md) | Elevation maps of `surface_height` in world directories | M2-05 |
+| [M2-15](M2-15-chart-metrics-extremes.md) | Extreme inputs of the chart and the metrics | M2-06 |
 
 ### MV — Viewer
 
