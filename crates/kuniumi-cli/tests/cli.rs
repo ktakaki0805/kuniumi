@@ -87,7 +87,7 @@ fn grid_writes_maps_and_statistics() {
 
 /// The fields of a world stopped after the Tectonics stage, in the order
 /// `generate` writes them.
-const WORLD_FIELDS: [&str; 8] = [
+const WORLD_FIELDS: [&str; 12] = [
     "cell_area",
     "neighbor_count",
     "plate_id",
@@ -96,6 +96,10 @@ const WORLD_FIELDS: [&str; 8] = [
     "crust_type",
     "boundary_type",
     "convergence_rate",
+    "crust_thickness",
+    "crust_age",
+    "uplift_rate",
+    "trench",
 ];
 
 /// The files of a world stopped after the Tectonics stage, in the order
@@ -149,6 +153,12 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"name\": \"crust_type\",",
         "      \"name\": \"boundary_type\",",
         "      \"name\": \"convergence_rate\",",
+        "      \"name\": \"crust_thickness\",",
+        "      \"unit\": \"m\",",
+        "      \"name\": \"crust_age\",",
+        "      \"unit\": \"s\",",
+        "      \"name\": \"uplift_rate\",",
+        "      \"name\": \"trench\",",
     ] {
         assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
     }
@@ -215,6 +225,39 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         }
     }
     assert!(types.iter().all(|&t| t > 0), "{types:?}");
+    // Crust: oceanic 7 km, continental 35 to 70 km; ages up to 180 Myr;
+    // uplift up to 10 mm/yr, only on continental crust; trenches only on
+    // oceanic convergent cells, and some trench.
+    let thickness = read_kfield(&dir.join("crust_thickness.kfield"));
+    let age = read_kfield(&dir.join("crust_age.kfield"));
+    let uplift = read_kfield(&dir.join("uplift_rate.kfield"));
+    let trench = read_kfield(&dir.join("trench.kfield"));
+    assert_eq!(
+        [&thickness, &age, &uplift, &trench].map(|f| f.unit.as_str()),
+        ["m", "s", "m/s", ""]
+    );
+    let max_age_s = 180.0e6 * 31_557_600.0;
+    let max_uplift_m_s = 0.01 / 31_557_600.0;
+    let mut trenches = 0;
+    for i in 0..1_000 {
+        let continental = crust.values[i].to_bits() == land;
+        let (t, a, u) = (thickness.values[i], age.values[i], uplift.values[i]);
+        if continental {
+            assert!((35e3..=70e3).contains(&t), "cell {i}: {t}");
+        } else {
+            assert_eq!(t.to_bits(), 7e3_f64.to_bits(), "cell {i}");
+            assert_eq!(u.to_bits(), 0, "cell {i}");
+        }
+        assert!((0.0..=max_age_s).contains(&a), "cell {i}: {a}");
+        assert!((0.0..=max_uplift_m_s).contains(&u), "cell {i}: {u}");
+        if trench.values[i].to_bits() == 1.0_f64.to_bits() {
+            trenches += 1;
+            assert!(!continental && kinds.values[i].to_bits() == 1.0_f64.to_bits());
+        } else {
+            assert_eq!(trench.values[i].to_bits(), 0, "cell {i}");
+        }
+    }
+    assert!(trenches > 0);
 }
 
 #[test]
@@ -255,8 +298,11 @@ fn generate_writes_the_same_bytes_twice() {
 /// (`stages::tectonics::tests`) and the maps of `out/M2-02` were looked at;
 /// its last three (continents and boundaries) by ticket M2-03 after the
 /// tests of `stages::tectonics::continents` and `::boundaries` passed and
-/// the maps of `out/M2-03` were looked at.
-const GOLDEN_FIELDS: [(&str, u64); 8] = [
+/// the maps of `out/M2-03` were looked at; the crust (thickness, age,
+/// uplift and trenches) by ticket M2-04 after the tests of
+/// `stages::tectonics::crust` passed and the maps of `out/M2-04` were looked
+/// at.
+const GOLDEN_FIELDS: [(&str, u64); 12] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
@@ -265,6 +311,10 @@ const GOLDEN_FIELDS: [(&str, u64); 8] = [
     ("crust_type", 0x791F_6B17_52CF_D2B8),
     ("boundary_type", 0x5163_2C85_7C3F_C400),
     ("convergence_rate", 0x04BB_B545_5B56_84CC),
+    ("crust_thickness", 0xAB89_127D_E598_AF4E),
+    ("crust_age", 0x9B68_EB58_6AF8_700A),
+    ("uplift_rate", 0x6725_720D_C775_FE38),
+    ("trench", 0x0DC3_352B_B86C_E68A),
 ];
 
 #[test]

@@ -143,9 +143,10 @@ impl From<FieldError> for SimError {
 /// Implemented so far: the Grid stage ([`stages::grid`]), which starts the
 /// world: the grid, its fields `cell_area` and `neighbor_count`, sea level
 /// 0 m until the Crust stage; and the Tectonics stage
-/// ([`stages::tectonics`]), which adds the plates, continents and
-/// boundaries: `plate_id`, `plate_velocity_east`, `plate_velocity_north`,
-/// `crust_type`, `boundary_type` and `convergence_rate`. With
+/// ([`stages::tectonics`]), which adds the plates, continents, boundaries
+/// and crust: `plate_id`, `plate_velocity_east`, `plate_velocity_north`,
+/// `crust_type`, `boundary_type`, `convergence_rate`, `crust_thickness`,
+/// `crust_age`, `uplift_rate` and `trench`. With
 /// [`Settings::allow_partial`] that world is returned when the next stage
 /// turns out to be missing ([`next_stage`] names it); otherwise it is
 /// dropped and the error names the stage.
@@ -307,6 +308,10 @@ mod tests {
                 ("crust_type", "", FieldKind::Class),
                 ("boundary_type", "", FieldKind::Class),
                 ("convergence_rate", "m/s", FieldKind::Quantity),
+                ("crust_thickness", "m", FieldKind::Quantity),
+                ("crust_age", "s", FieldKind::Quantity),
+                ("uplift_rate", "m/s", FieldKind::Quantity),
+                ("trench", "", FieldKind::Class),
             ]
         );
         let plates = stages::tectonics::partition(&world.grid, 12, 7);

@@ -197,6 +197,20 @@ section: every change after which an existing seed produces a different world
   across. The stage adds the fields `crust_type` (class: 0 oceanic, 1
   continental), `boundary_type` (class: 0 none, 1 convergent, 2 divergent,
   3 transform) and `convergence_rate` (m/s) (M2-03).
+- The one-shot crust in the Tectonics stage
+  (`kuniumi_sim::stages::tectonics::crust`): `nearest_sources` (multi-source
+  Dijkstra inside each plate, edges of centre distance × radius, heap
+  ordered by distance, cell and source); ocean-floor age = distance to the
+  nearest divergent cell of the plate ÷ its half spreading rate, capped at
+  180 Myr (continental crust 180 Myr); oceanic crust 7 km; continental crust
+  35 km, thickened at collisions by up to 35 km (`min(1, c / 5 cm/yr)`,
+  full to 200 km from the front, cosine taper to 0 at 400 km, both plates)
+  and into arcs of up to 50 km peaking 200 km inland of subduction fronts;
+  rock uplift `0.1 c` (collisions) and `0.03 c` (arcs) times the same
+  profiles, at most 10 mm/yr, on continental crust only; trenches on the
+  oceanic side of subduction boundaries (the older floor where ocean meets
+  ocean). The stage adds the fields `crust_thickness` (m), `crust_age` (s),
+  `uplift_rate` (m/s) and `trench` (class) (M2-04).
 
 ### Changed
 

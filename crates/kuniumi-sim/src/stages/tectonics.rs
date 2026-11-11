@@ -10,8 +10,12 @@
 //! the surface ([`continents`]; about 40 % on Earth, design document,
 //! プレートテクトニクス / 初期条件の目安), and every boundary cell is classified
 //! as convergent, divergent or transform from the relative velocity of the
-//! two plates ([`boundaries`]; the boundary types of 境界ごとの処理). Crust
-//! thickness, age and uplift (M2-04) are to follow.
+//! two plates ([`boundaries`]; the boundary types of 境界ごとの処理). Each
+//! cell then gets its crust from its distance to the boundaries of its own
+//! plate ([`crust`]): ocean floor ages away from the divergent boundaries at
+//! their half spreading rate; continental crust thickens into plateaus at
+//! collisions and into arcs inland of subduction zones, where it also
+//! rises; the oceanic side of each subduction boundary is a trench.
 //!
 //! Milestone 6: kinematic simulation after Cortial et al. (2019). Rigid plates
 //! of crust samples rotate about Euler poles in 1–2 Myr steps for 300–500 Myr,
@@ -29,9 +33,9 @@
 //!
 //! Outputs so far ([`run`]): [`PLATE_ID`] (class), [`PLATE_VELOCITY_EAST`]
 //! and [`PLATE_VELOCITY_NORTH`] (m/s), [`CRUST_TYPE`] (class),
-//! [`BOUNDARY_TYPE`] (class) and [`CONVERGENCE_RATE`] (m/s). Planned:
-//! `crust_thickness` (m), `crust_age` (s), `orogeny_age` (s), `uplift_rate`
-//! (m/s).
+//! [`BOUNDARY_TYPE`] (class), [`CONVERGENCE_RATE`] (m/s),
+//! [`CRUST_THICKNESS`] (m), [`CRUST_AGE`] (s), [`UPLIFT_RATE`] (m/s) and
+//! [`TRENCH`] (class). Planned (M6): `orogeny_age` (s).
 //!
 //! [`Settings::plate_count`]: kuniumi_world::Settings::plate_count
 //! [`PlanetParams::continental_crust_fraction`]: kuniumi_world::PlanetParams::continental_crust_fraction
@@ -48,11 +52,18 @@ use crate::SimError;
 
 mod boundaries;
 mod continents;
+mod crust;
 
 pub use boundaries::{
     BOUNDARY_TYPE, Boundaries, BoundaryType, CONVERGENCE_RATE, NORMAL_WINDOW_RAD, boundaries,
 };
 pub use continents::{CONTINENT_PLATE_COVER, CONTINENTS_STREAM, CRUST_TYPE, continents};
+pub use crust::{
+    ARC_DISTANCE_M, ARC_HALF_WIDTH_M, ARC_THICKNESS_M, ARC_UPLIFT_RATIO, COLLISION_PLATEAU_M,
+    COLLISION_REFERENCE_RATE_M_S, COLLISION_TAPER_M, COLLISION_THICKNESS_M, COLLISION_UPLIFT_RATIO,
+    CONTINENTAL_THICKNESS_M, CRUST_AGE, CRUST_THICKNESS, Crust, MAX_CRUST_AGE_S,
+    MAX_UPLIFT_RATE_M_S, Nearest, OCEANIC_THICKNESS_M, TRENCH, UPLIFT_RATE, crust, nearest_sources,
+};
 
 /// The random stream of the partition: the seed cells, then the growth rate
 /// of each plate, then the slowness of each cell ([`partition`]).
@@ -394,12 +405,13 @@ fn velocities_m_s(
 /// Runs the Tectonics stage on `world` (a [`StageFn`](crate::pipeline::StageFn)):
 /// the plates of `world.settings.plate_count` ([`partition`]), their poles
 /// for `world.params.radius_m` ([`euler_poles`]), the continents of
-/// `world.params.continental_crust_fraction` ([`continents`]) and the
-/// boundaries ([`boundaries`]), all from `world.seed`, and adds the fields
-/// [`PLATE_ID`], [`PLATE_VELOCITY_EAST`], [`PLATE_VELOCITY_NORTH`],
-/// [`CRUST_TYPE`] (0 oceanic, 1 continental), [`BOUNDARY_TYPE`]
-/// ([`BoundaryType::class`]) and [`CONVERGENCE_RATE`], in that order. It
-/// reports no progress of its own.
+/// `world.params.continental_crust_fraction` ([`continents`]), the
+/// boundaries ([`boundaries`]) and the crust ([`crust`]), all from
+/// `world.seed`, and adds the fields [`PLATE_ID`], [`PLATE_VELOCITY_EAST`],
+/// [`PLATE_VELOCITY_NORTH`], [`CRUST_TYPE`] (0 oceanic, 1 continental),
+/// [`BOUNDARY_TYPE`] ([`BoundaryType::class`]), [`CONVERGENCE_RATE`],
+/// [`CRUST_THICKNESS`], [`CRUST_AGE`], [`UPLIFT_RATE`] and [`TRENCH`] (0, or
+/// 1 for a trench), in that order. It reports no progress of its own.
 ///
 /// The world's settings and parameters must be valid (`Settings::validate`:
 /// at least 1,000 cells and 2 to 64 plates; `PlanetParams::validate`: a
@@ -422,6 +434,7 @@ pub fn run(world: &mut World, _progress: &mut dyn FnMut(f64)) -> Result<(), SimE
         world.seed,
     );
     let bounds = boundaries(&world.grid, &plates, &poles, radius_m);
+    let crust = crust(&world.grid, &plates, &continental, &bounds, radius_m);
     world.add_class_field(PLATE_ID, plates.iter().map(|&p| f64::from(p)).collect())?;
     world.add_field(PLATE_VELOCITY_EAST, "m/s", east)?;
     world.add_field(PLATE_VELOCITY_NORTH, "m/s", north)?;
@@ -437,6 +450,17 @@ pub fn run(world: &mut World, _progress: &mut dyn FnMut(f64)) -> Result<(), SimE
         bounds.kind.iter().map(|k| k.class()).collect(),
     )?;
     world.add_field(CONVERGENCE_RATE, "m/s", bounds.convergence_rate_m_s)?;
+    world.add_field(CRUST_THICKNESS, "m", crust.thickness_m)?;
+    world.add_field(CRUST_AGE, "s", crust.age_s)?;
+    world.add_field(UPLIFT_RATE, "m/s", crust.uplift_rate_m_s)?;
+    world.add_class_field(
+        TRENCH,
+        crust
+            .trench
+            .iter()
+            .map(|&t| f64::from(u8::from(t)))
+            .collect(),
+    )?;
     Ok(())
 }
 

@@ -73,6 +73,7 @@ planned once the code they build on exists.
 | [M2-02](M2-02-plate-partition.md) | Plate partition and Euler poles | M2-01 |
 | [M2-03](M2-03-continents-boundaries.md) | Continents and boundary classification | M2-02 |
 | [M2-04](M2-04-one-shot-crust.md) | One-shot crust thickness, age and uplift | M2-03 |
+| [M2-11](M2-11-ocean-age-margins-sea-level.md) | Ocean-floor age, passive margins and sea level | M2-04 |
 | [M2-05](M2-05-isostasy-sea-level.md) | Elevation from crust and sea level | M2-04 |
 | [M2-06](M2-06-hypsometry-metrics.md) | Land fraction and hypsometry metrics | M2-05 |
 | [M2-07](M2-07-settings-files.md) | Planet and generation settings from TOML files | M2-01 |

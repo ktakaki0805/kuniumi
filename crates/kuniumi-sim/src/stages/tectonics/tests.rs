@@ -18,8 +18,8 @@
 //! - `the_stage_adds_its_fields`.
 //!
 //! The continents and boundaries of ticket M2-03 are tested in
-//! `continents/tests.rs` and `boundaries/tests.rs`, with the helpers
-//! shared here.
+//! `continents/tests.rs` and `boundaries/tests.rs`, the crust of ticket
+//! M2-04 in `crust/tests.rs`, with the helpers shared here.
 
 use std::sync::OnceLock;
 
@@ -471,6 +471,10 @@ fn the_stage_adds_its_fields() {
             (CRUST_TYPE, "", FieldKind::Class),
             (BOUNDARY_TYPE, "", FieldKind::Class),
             (CONVERGENCE_RATE, "m/s", FieldKind::Quantity),
+            (CRUST_THICKNESS, "m", FieldKind::Quantity),
+            (CRUST_AGE, "s", FieldKind::Quantity),
+            (UPLIFT_RATE, "m/s", FieldKind::Quantity),
+            (TRENCH, "", FieldKind::Class),
         ]
     );
     let plates = partition(&world.grid, 7, 4);
@@ -491,6 +495,16 @@ fn the_stage_adds_its_fields() {
     let kinds: Vec<f64> = bounds.kind.iter().map(|k| k.class()).collect();
     assert_eq!(world.fields[4].values, kinds);
     assert_eq!(world.fields[5].values, bounds.convergence_rate_m_s);
+    let layers = super::crust(&world.grid, &plates, &continental, &bounds, EARTH_RADIUS_M);
+    assert_eq!(world.fields[6].values, layers.thickness_m);
+    assert_eq!(world.fields[7].values, layers.age_s);
+    assert_eq!(world.fields[8].values, layers.uplift_rate_m_s);
+    let trench: Vec<f64> = layers
+        .trench
+        .iter()
+        .map(|&t| f64::from(u8::from(t)))
+        .collect();
+    assert_eq!(world.fields[9].values, trench);
     assert!(
         world.fields[1..]
             .iter()
