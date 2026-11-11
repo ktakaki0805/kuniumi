@@ -1,0 +1,24 @@
+[package]
+name = "kuniumi-config"
+description = "Settings files (TOML) for the kuniumi planet generator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+kuniumi-math.workspace = true
+kuniumi-world.workspace = true
+# Settings files (D-10, D-15), through raw structs in this crate, so that
+# toml and serde stay out of kuniumi-world and kuniumi-sim. Not pinned to an
+# exact version (the D-10 table): toml parses every float with core's
+# correctly rounded `str::parse::<f64>`, and the round-trip and conversion
+# tests of this crate compare the parsed values bit for bit, so an upgrade
+# that changed a value read from a file would fail them. Without the
+# `display` feature: `write` produces the text itself.
+serde = { version = "1.0.229", features = ["derive"] }
+toml = { version = "1.2.1", default-features = false, features = ["parse", "serde", "std"] }
+
+[lints]
+workspace = true

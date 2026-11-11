@@ -84,6 +84,7 @@ planned once the code they build on exists.
 | [M2-13](M2-13-slow-ridge-seams.md) | Age steps around very slow ridge cells | M2-11 |
 | [M2-14](M2-14-elevation-maps.md) | Elevation maps of `surface_height` in world directories | M2-05 |
 | [M2-15](M2-15-chart-metrics-extremes.md) | Extreme inputs of the chart and the metrics | M2-06 |
+| [M2-16](M2-16-workspace-lists.md) | Crate lists of the decisions and the design | M2-07 |
 
 ### MV — Viewer
 

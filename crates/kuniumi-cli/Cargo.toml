@@ -12,6 +12,7 @@ name = "kuniumi"
 path = "src/main.rs"
 
 [dependencies]
+kuniumi-config.workspace = true
 kuniumi-io.workspace = true
 kuniumi-math.workspace = true
 kuniumi-sim.workspace = true

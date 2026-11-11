@@ -44,14 +44,15 @@ release tests on Linux ARM64, macOS and Windows weekly (D-25).
 kuniumi-math    deterministic math (libm), Rng, Vec3, SI units
 kuniumi-sphere  spherical grid: points, Delaunay/Voronoi, CSR neighbours
 kuniumi-world   PlanetParams, Settings, World, Field
+kuniumi-config  TOML settings files: load and write PlanetParams, Settings
 kuniumi-sim     the pipeline and its stages (no I/O)
 kuniumi-io      .kfield files, world directories, PNG, fingerprints
 kuniumi-cli     the `kuniumi` binary
 ```
 
 Dependencies point downwards. `kuniumi-sim` never depends on `kuniumi-io` and
-never touches the file system, clock or environment. Planned: `kuniumi-config`
-(TOML settings), `kuniumi-viewer` (wgpu, native and web), `kuniumi-gpu`.
+never touches the file system, clock or environment. Planned: `kuniumi-viewer`
+(wgpu, native and web), `kuniumi-gpu`.
 
 ## Non-negotiable rules
 

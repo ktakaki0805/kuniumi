@@ -16,6 +16,7 @@ publish = false
 kuniumi-math = { path = "crates/kuniumi-math", version = "0.0.1" }
 kuniumi-sphere = { path = "crates/kuniumi-sphere", version = "0.0.1" }
 kuniumi-world = { path = "crates/kuniumi-world", version = "0.0.1" }
+kuniumi-config = { path = "crates/kuniumi-config", version = "0.0.1" }
 kuniumi-sim = { path = "crates/kuniumi-sim", version = "0.0.1" }
 kuniumi-io = { path = "crates/kuniumi-io", version = "0.0.1" }
 

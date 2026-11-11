@@ -506,7 +506,8 @@ fn old_commands_still_work() {
 
     let o = kuniumi(&["params"]);
     assert!(o.status.success(), "{o:?}");
-    assert!(stdout(&o).starts_with("radius_m                   = 6371000\n"));
+    assert!(stdout(&o).starts_with("# kuniumi settings file"));
+    assert!(stdout(&o).contains("\nradius_m = 6371000.0 "));
 
     let dir = scratch("old_commands_still_work");
     std::fs::create_dir_all(&dir).expect("scratch directory");
@@ -514,4 +515,144 @@ fn old_commands_still_work() {
     let o = kuniumi(&["test-image", file.to_str().expect("UTF-8 path")]);
     assert!(o.status.success(), "{o:?}");
     assert_eq!(png_size(&file), (360, 180));
+}
+
+#[test]
+fn params_prints_the_earth_settings_file() {
+    let o = kuniumi(&["params"]);
+    assert!(o.status.success(), "{o:?}");
+    assert_eq!(stderr(&o), "");
+    let (earth, default) = (
+        kuniumi_world::PlanetParams::earth(),
+        kuniumi_world::Settings::default(),
+    );
+    // The file of `kuniumi_config::write` (whose text its own tests compare
+    // with a hand-written one), which loads back as Earth.
+    assert_eq!(stdout(&o), kuniumi_config::write(&earth, &default));
+    assert_eq!(kuniumi_config::load(&stdout(&o)), Ok((earth, default)));
+}
+
+/// Writes `text` to `name` in a fresh scratch directory and returns the
+/// file's path.
+fn settings_file(name: &str, text: &str) -> PathBuf {
+    let dir = scratch(name);
+    std::fs::create_dir_all(&dir).expect("scratch directory");
+    let path = dir.join("planet.toml");
+    std::fs::write(&path, text).expect("settings file");
+    path
+}
+
+#[test]
+fn generate_with_the_earth_file_writes_the_world_without_a_file() {
+    let o = kuniumi(&["params"]);
+    let planet = settings_file("generate_earth_file", &stdout(&o));
+    let planet = planet.to_str().expect("UTF-8 path");
+    let (a, b) = (
+        scratch("generate_earth_file_a"),
+        scratch("generate_earth_file_b"),
+    );
+    let base = ["generate", "--seed", "3", "--cells", "1500", "--out"];
+    let with_file = [&base[..], &[a.to_str().expect("UTF-8"), "--planet", planet]].concat();
+    let without = [&base[..], &[b.to_str().expect("UTF-8")]].concat();
+    for args in [with_file, without] {
+        let o = kuniumi(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {o:?}");
+    }
+    for file in world_files() {
+        let bytes = |dir: &Path| std::fs::read(dir.join(&file)).expect("written");
+        assert!(bytes(&a) == bytes(&b), "{file} differs");
+    }
+}
+
+#[test]
+fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
+    // A Mars-sized planet in human units, with five plates; the file asks
+    // for `allow_partial = false`, which `generate` overrides.
+    let planet = settings_file(
+        "generate_planet_file",
+        "[planet]\nradius_km = 3389.5\nobliquity_deg = 25.19\n\
+         [generation]\ncells = 1000\nplate_count = 5\nallow_partial = false\n",
+    );
+    let planet = planet.to_str().expect("UTF-8 path");
+    for (cells, expected) in [(None, 1_000), (Some("1200"), 1_200)] {
+        let dir = scratch("generate_planet_file_out");
+        let out = dir.to_str().expect("UTF-8 path");
+        let mut args = vec!["generate", "--seed", "1", "--planet", planet, "--out", out];
+        if let Some(cells) = cells {
+            args.extend(["--cells", cells]);
+        }
+        let o = kuniumi(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {o:?}");
+        assert!(
+            stderr(&o).ends_with("error: stage `climate` is not implemented yet\n"),
+            "{}",
+            stderr(&o)
+        );
+        let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+        // 3,389.5 km = 3,389,500 m; 25.19° from Python,
+        // repr(25.19 * (math.pi / 180)).
+        for line in [
+            format!("    \"cells\": {expected},"),
+            "    \"plate_count\": 5,".into(),
+            "    \"allow_partial\": true".into(),
+            "    \"radius_m\": 3389500.0,".into(),
+            "    \"obliquity_rad\": 0.4396484385773716,".into(),
+            "    \"surface_gravity_m_s2\": 9.80665,".into(),
+        ] {
+            assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
+        }
+        let areas = read_kfield(&dir.join("cell_area.kfield"));
+        assert_eq!(areas.values.len(), expected);
+        let plates = read_kfield(&dir.join("plate_id.kfield"));
+        let mut sizes = [0usize; 5];
+        for &p in &plates.values {
+            sizes[p as usize] += 1;
+        }
+        assert!(sizes.iter().all(|&s| s > 0), "{sizes:?}");
+    }
+}
+
+#[test]
+fn generate_reports_a_bad_planet_file_and_writes_nothing() {
+    let missing = scratch("generate_missing_planet_file").join("missing.toml");
+    let range = settings_file("generate_bad_planet_range", "[planet]\nradius_km = -1\n");
+    let unknown = settings_file("generate_bad_planet_key", "[planet]\nradius = 1.0\n");
+    let both = settings_file(
+        "generate_bad_planet_both",
+        "[planet]\nradius_m = 1.0\nradius_km = 1.0\n",
+    );
+    // What follows `error: <path>: `: its start, and a part of it.
+    for (path, start, part) in [
+        // The message of the operating system (error 2 on Unix and Windows).
+        (&missing, "", "(os error 2)"),
+        (
+            &range,
+            "`planet.radius_km` = -1 is out of range (radius_m = -1000)\n",
+            "",
+        ),
+        (
+            &unknown,
+            "TOML parse error at line 2, column 1\n",
+            "unknown field `radius`",
+        ),
+        (
+            &both,
+            "`planet.radius_m` and `planet.radius_km` are the same quantity; give one of them\n",
+            "",
+        ),
+    ] {
+        let dir = scratch("generate_bad_planet_file_out");
+        let path = path.to_str().expect("UTF-8 path");
+        let out = dir.to_str().expect("UTF-8 path");
+        let o = kuniumi(&["generate", "--seed", "1", "--planet", path, "--out", out]);
+        assert_eq!(o.status.code(), Some(2), "{path}: {o:?}");
+        assert_eq!(stdout(&o), "", "{path}");
+        let text = stderr(&o);
+        let message = text
+            .strip_prefix(&format!("error: {path}: "))
+            .unwrap_or_else(|| panic!("{path}: {text}"));
+        assert!(message.starts_with(start), "{path}: {text}");
+        assert!(message.contains(part), "{path}: {text}");
+        assert!(!dir.exists(), "{path}: {} was created", dir.display());
+    }
 }

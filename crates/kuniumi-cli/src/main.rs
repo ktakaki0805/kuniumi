@@ -10,7 +10,7 @@ use std::time::Instant;
 use clap::{Args, CommandFactory, Parser, Subcommand};
 use kuniumi_io::colormap::{Colormap, Range};
 use kuniumi_io::{Rgb8, png, render, world_dir};
-use kuniumi_math::units::{self, deg_to_rad};
+use kuniumi_math::units::deg_to_rad;
 use kuniumi_sim::SimError;
 use kuniumi_world::{GENERATOR_VERSION, PlanetParams, Settings};
 
@@ -32,7 +32,8 @@ struct Cli {
 enum Command {
     /// Print the generator version
     Version,
-    /// Print the Earth-like default parameters (SI)
+    /// Print the settings file of Earth with the default settings (TOML,
+    /// SI keys), a template for `generate --planet`
     Params,
     /// Generate a world and write it to a directory (the stages that do not
     /// exist yet are missing: writes what exists, then exits with code 2)
@@ -58,10 +59,16 @@ struct GenerateArgs {
     /// run (created if missing)
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
-    /// Number of grid cells, 1000 to 715827884
-    #[arg(long, value_name = "N", default_value_t = Settings::DEFAULT_CELLS,
-          value_parser = cells_parser())]
-    cells: u32,
+    /// Settings file (TOML, as `kuniumi params` prints) with the planet's
+    /// parameters and the generation settings; without it, Earth and the
+    /// default settings. Its allow_partial is ignored: the stages that exist
+    /// are always written
+    #[arg(long, value_name = "FILE")]
+    planet: Option<PathBuf>,
+    /// Number of grid cells, 1000 to 715827884, in place of the settings
+    /// file's [default: the file's cells, or 650000]
+    #[arg(long, value_name = "N", value_parser = cells_parser())]
+    cells: Option<u32>,
 }
 
 /// The options of `kuniumi grid`.
@@ -120,7 +127,10 @@ fn run(command: Option<Command>) -> Result<(), String> {
             Ok(())
         }
         Some(Command::Params) => {
-            print_params(&PlanetParams::earth());
+            print!(
+                "{}",
+                kuniumi_config::write(&PlanetParams::earth(), &Settings::default())
+            );
             Ok(())
         }
         Some(Command::Generate(args)) => generate(&args),
@@ -129,38 +139,23 @@ fn run(command: Option<Command>) -> Result<(), String> {
     }
 }
 
-fn print_params(p: &PlanetParams) {
-    println!("radius_m                   = {}", p.radius_m);
-    println!("surface_gravity_m_s2       = {}", p.surface_gravity_m_s2);
-    println!("rotation_period_s          = {}", p.rotation_period_s);
-    println!(
-        "obliquity_rad              = {} ({} deg)",
-        p.obliquity_rad,
-        p.obliquity_rad / units::RADIANS_PER_DEGREE
-    );
-    println!("orbital_period_s           = {}", p.orbital_period_s);
-    println!("orbital_eccentricity       = {}", p.orbital_eccentricity);
-    println!("stellar_flux_w_m2          = {}", p.stellar_flux_w_m2);
-    println!("ocean_volume_m3            = {:e}", p.ocean_volume_m3);
-    println!("surface_pressure_pa        = {}", p.surface_pressure_pa);
-    println!(
-        "continental_crust_fraction = {}",
-        p.continental_crust_fraction
-    );
-    println!("rotation                   = {:?}", p.rotation);
-    println!("tectonics                  = {:?}", p.tectonics);
-}
-
-/// `kuniumi generate`: runs the pipeline as far as it exists, writes the
-/// world with [`world_dir::write`], and fails naming the first missing stage
-/// if there is one.
+/// `kuniumi generate`: reads the settings file, if there is one, runs the
+/// pipeline as far as it exists, writes the world with
+/// [`world_dir::write`], and fails naming the first missing stage if there
+/// is one.
+///
+/// `--cells` replaces the file's `cells`. `allow_partial` is always set,
+/// whatever the file says, so that the stages that exist are written.
 fn generate(args: &GenerateArgs) -> Result<(), String> {
-    let settings = Settings {
-        cells: args.cells,
-        allow_partial: true,
-        ..Settings::default()
+    let (params, mut settings) = match &args.planet {
+        Some(path) => read_settings(path)?,
+        None => (PlanetParams::earth(), Settings::default()),
     };
-    let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, args.seed, &mut |p| {
+    if let Some(cells) = args.cells {
+        settings.cells = cells;
+    }
+    settings.allow_partial = true;
+    let world = kuniumi_sim::generate(&params, &settings, args.seed, &mut |p| {
         eprintln!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0);
     })
     .map_err(|e| e.to_string())?;
@@ -171,6 +166,13 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
         Some(stage) => Err(SimError::NotImplemented { stage }.to_string()),
         None => Ok(()),
     }
+}
+
+/// Reads the settings file at `path` with [`kuniumi_config::load`]; an
+/// error names the file.
+fn read_settings(path: &Path) -> Result<(PlanetParams, Settings), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    kuniumi_config::load(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The view centre of `cell_area_globe.png`: 45° N, 180° E, so that the
@@ -289,7 +291,15 @@ mod tests {
     const EXPECTED: [(&str, &[&str]); 5] = [
         ("version", &[]),
         ("params", &[]),
-        ("generate", &["--seed <N>", "--out <DIR>", "--cells <N>"]),
+        (
+            "generate",
+            &[
+                "--seed <N>",
+                "--out <DIR>",
+                "--planet <FILE>",
+                "--cells <N>",
+            ],
+        ),
         (
             "grid",
             &["--seed <N>", "--out <DIR>", "--cells <N>", "--width <PX>"],
@@ -357,10 +367,16 @@ mod tests {
         // The bounds are written out in the doc comments of `--cells`.
         let bounds = format!("{} to {}", Settings::MIN_CELLS, Settings::MAX_CELLS);
         let default = format!("[default: {}]", Settings::DEFAULT_CELLS);
-        for command in ["generate", "grid"] {
+        // `generate` has no default of its own: the settings file's, else
+        // the default settings'.
+        let file_default = format!(
+            "[default: the file's cells, or {}]",
+            Settings::DEFAULT_CELLS
+        );
+        for (command, default) in [("generate", &file_default), ("grid", &default)] {
             let text = help(&["kuniumi", command, "--help"]);
             assert!(text.contains(&bounds), "{command}: {bounds}: {text}");
-            assert!(text.contains(&default), "{command}: {default}: {text}");
+            assert!(text.contains(default), "{command}: {default}: {text}");
         }
         let text = help(&["kuniumi", "grid", "--help"]);
         assert!(text.contains("[default: 2048]"), "{text}");
@@ -382,8 +398,17 @@ mod tests {
         ));
         match parse(&["kuniumi", "generate", "--seed", "3", "--out", "x"]) {
             Ok(Some(Command::Generate(a))) => {
-                assert_eq!((a.seed, a.cells), (3, 650_000));
+                assert_eq!((a.seed, a.cells, a.planet), (3, None, None));
                 assert_eq!(a.out, PathBuf::from("x"));
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse(&[
+            "kuniumi", "generate", "--seed", "3", "--out", "x", "--planet", "p.toml", "--cells",
+            "1000",
+        ]) {
+            Ok(Some(Command::Generate(a))) => {
+                assert_eq!((a.cells, a.planet), (Some(1_000), Some("p.toml".into())));
             }
             other => panic!("{other:?}"),
         }
@@ -437,6 +462,12 @@ mod tests {
         assert_eq!(
             kind(&["kuniumi", "generate", "--seed", "-1", "--out", "x"]),
             ErrorKind::UnknownArgument
+        );
+        assert_eq!(
+            kind(&[
+                "kuniumi", "generate", "--seed", "1", "--out", "x", "--planet"
+            ]),
+            ErrorKind::InvalidValue
         );
         for cells in ["999", "715827885", "0"] {
             for command in ["generate", "grid"] {

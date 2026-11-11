@@ -33,7 +33,18 @@ cargo run --release -p kuniumi-cli -- help
 cargo run --release -p kuniumi-cli -- params
 cargo run --release -p kuniumi-cli -- grid --cells 650000 --seed 1 --out out/grid
 cargo run --release -p kuniumi-cli -- generate --seed 1 --out out/world
+cargo run --release -p kuniumi-cli -- params > planet.toml
+cargo run --release -p kuniumi-cli -- generate --planet planet.toml --seed 1 --out out/planet
 ```
+
+`params` prints the settings file of Earth with the default settings (TOML):
+the planet's parameters under `[planet]` and the generation settings under
+`[generation]`. Keys spell their SI unit (`radius_m`); some quantities may be
+given in a human unit instead (`radius_km`, `obliquity_deg`,
+`rotation_period_h`, `orbital_period_days`, `ocean_volume_km3`,
+`surface_pressure_bar`), and missing keys take Earth's values. `generate
+--planet FILE` reads such a file; `--cells` on the command line replaces the
+file's.
 
 `generate` runs the stages that exist so far and writes the world into the
 output directory: a `.kfield` file and a PNG map per field; once the Crust
@@ -57,6 +68,7 @@ mise run ci     # formatting, lints, tests, MSRV build and licence checks
 | `kuniumi-math` | Deterministic math, random numbers, vectors, SI units |
 | `kuniumi-sphere` | The spherical cell grid |
 | `kuniumi-world` | Planet parameters, settings and the world data model |
+| `kuniumi-config` | Settings files (TOML) |
 | `kuniumi-sim` | The generation pipeline (no I/O) |
 | `kuniumi-io` | File formats and images |
 | `kuniumi-cli` | The `kuniumi` command |

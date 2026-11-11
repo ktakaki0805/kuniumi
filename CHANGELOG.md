@@ -245,6 +245,20 @@ section: every change after which an existing seed produces a different world
   without text, with grid lines, axes and vertical markers (M2-06).
 - `tools/hypsometry_reference.py`: the metrics of a world directory with
   exact rational arithmetic, for the tests of `metrics.txt` (M2-06).
+- `kuniumi-config`: settings files in TOML (D-15), through `toml` 1.2.1 and
+  `serde` (not pinned). `load` reads `[planet]` (`PlanetParams`) and
+  `[generation]` (`Settings`): each quantity under its SI key or one
+  human-unit key (`radius_km`, `rotation_period_h`, `obliquity_deg`,
+  `orbital_period_days`, `ocean_volume_km3`, `surface_pressure_bar`), not
+  both; missing keys take Earth's values and the default settings; values
+  are checked by `validate`. `ConfigError` names the key and the number as
+  written, or the line and column for malformed TOML, unknown tables and
+  keys and wrong types. `write` writes every field with its SI key, and
+  `load` reads it back bit for bit (M2-07).
+- `kuniumi_math::units`: `hours_to_s`, `days_to_s`, `km_to_m`, `km3_to_m3`,
+  `bar_to_pa` and their constants (M2-07).
+- `kuniumi generate --planet FILE` reads a settings file; `--cells` replaces
+  the file's `cells` and no longer has a default of its own (M2-07).
 
 ### Changed
 
@@ -335,6 +349,8 @@ section: every change after which an existing seed produces a different world
   the first field is written. A non-finite `surface_height` is rejected
   before anything is written. `kuniumi-io` now depends on `kuniumi-sim`
   (M2-06).
+- `kuniumi params` prints the settings file of Earth with the default
+  settings (TOML, SI keys) in place of its aligned listing (M2-07).
 
 ### Removed
 
