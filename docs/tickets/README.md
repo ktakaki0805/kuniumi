@@ -78,6 +78,7 @@ planned once the code they build on exists.
 | [M2-07](M2-07-settings-files.md) | Planet and generation settings from TOML files | M2-01 |
 | [M2-08](M2-08-planet-param-bounds.md) | Physical bounds for the planet parameters | — |
 | [M2-09](M2-09-rustdoc-warnings.md) | Rustdoc warnings | — |
+| [M2-10](M2-10-enclosed-ocean-pockets.md) | Oceanic pockets enclosed by continents | M2-03 |
 
 ### MV — Viewer
 

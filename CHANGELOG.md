@@ -182,6 +182,21 @@ section: every change after which an existing seed produces a different world
   (m/s) (M2-02).
 - `Settings::plate_count` (default 12, valid 2 to 64, rejected by name
   otherwise), recorded in `world.json` as `settings.plate_count` (M2-02).
+- Continents and plate boundaries in the Tectonics stage
+  (`kuniumi_sim::stages::tectonics`): `continents` grows one continental
+  blob per plate (random seed cell, growth rate uniform in [1, 3), slowness
+  per cell `exp(3 (u − ½))`, confined to its plate; stream
+  `tectonics/continents`) on plates taken in random order until they cover
+  twice the continental area, and stops when the area reaches
+  `PlanetParams::continental_crust_fraction` (within one cell);
+  `boundaries` classifies every cell next to another plate as convergent,
+  divergent or transform (`BoundaryType`) from the relative velocity of the
+  two plates across a boundary normal summed along the boundary within
+  0.08 rad (`NORMAL_WINDOW_RAD`), with a 45° threshold, and gives its
+  convergence rate (m/s, positive when the plates approach) and the plate
+  across. The stage adds the fields `crust_type` (class: 0 oceanic, 1
+  continental), `boundary_type` (class: 0 none, 1 convergent, 2 divergent,
+  3 transform) and `convergence_rate` (m/s) (M2-03).
 
 ### Changed
 
@@ -239,6 +254,9 @@ section: every change after which an existing seed produces a different world
   after the Grid stage and now stop at the Crust stage
   (``stage `crust` is not implemented yet``); the world they write has the
   three plate fields too (M2-02).
+- The world written by `kuniumi generate` has the three fields of the
+  continents and boundaries after the plate fields; the plate fields and
+  their golden values are unchanged (M2-03).
 
 ### Removed
 

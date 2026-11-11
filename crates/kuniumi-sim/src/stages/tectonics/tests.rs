@@ -16,6 +16,10 @@
 //!   `euler_poles_rejects_a_partition_of_another_grid`;
 //! - `the_same_seed_gives_the_same_plates`;
 //! - `the_stage_adds_its_fields`.
+//!
+//! The continents and boundaries of ticket M2-03 are tested in
+//! `continents/tests.rs` and `boundaries/tests.rs`, with the helpers
+//! shared here.
 
 use std::sync::OnceLock;
 
@@ -28,11 +32,11 @@ use super::*;
 use crate::StageId;
 
 /// Earth's mean radius (m), as in `PlanetParams::earth()`.
-const EARTH_RADIUS_M: f64 = 6_371_000.0;
+pub(super) const EARTH_RADIUS_M: f64 = 6_371_000.0;
 
 /// The grids and partitions of seeds 1–20 at 10,000 cells with the default
 /// 12 plates, built once for the tests that share them.
-fn ten_thousand() -> &'static [(SphereGrid, Vec<u32>)] {
+pub(super) fn ten_thousand() -> &'static [(SphereGrid, Vec<u32>)] {
     static CASES: OnceLock<Vec<(SphereGrid, Vec<u32>)>> = OnceLock::new();
     CASES.get_or_init(|| {
         (1..=20)
@@ -46,7 +50,7 @@ fn ten_thousand() -> &'static [(SphereGrid, Vec<u32>)] {
 }
 
 /// The cells of each plate, in index order.
-fn members(plates: &[u32], plate_count: u32) -> Vec<Vec<u32>> {
+pub(super) fn members(plates: &[u32], plate_count: u32) -> Vec<Vec<u32>> {
     let mut members = vec![Vec::new(); plate_count as usize];
     for (cell, &plate) in plates.iter().enumerate() {
         members[plate as usize].push(cell as u32);
@@ -55,7 +59,7 @@ fn members(plates: &[u32], plate_count: u32) -> Vec<Vec<u32>> {
 }
 
 /// The area of each plate on the unit sphere (sr).
-fn plate_areas_sr(grid: &SphereGrid, plates: &[u32], plate_count: u32) -> Vec<f64> {
+pub(super) fn plate_areas_sr(grid: &SphereGrid, plates: &[u32], plate_count: u32) -> Vec<f64> {
     let mut areas = vec![0.0; plate_count as usize];
     for (cell, &plate) in plates.iter().enumerate() {
         areas[plate as usize] += grid.area_sr(cell as u32);
@@ -105,6 +109,7 @@ fn streams_are_under_the_stage_name() {
     assert_eq!(prefix, "tectonics/");
     assert_eq!(PARTITION_STREAM, "tectonics/partition");
     assert_eq!(POLES_STREAM, "tectonics/poles");
+    assert_eq!(CONTINENTS_STREAM, "tectonics/continents");
 }
 
 #[test]
@@ -436,8 +441,12 @@ fn the_stage_adds_its_fields() {
         ..Settings::default()
     };
     let grid = crate::stages::grid::run(&settings, 4).expect("valid settings");
+    let params = PlanetParams {
+        continental_crust_fraction: 0.3,
+        ..PlanetParams::earth()
+    };
     let mut world = World {
-        params: PlanetParams::earth(),
+        params,
         settings,
         seed: 4,
         grid,
@@ -459,6 +468,9 @@ fn the_stage_adds_its_fields() {
             (PLATE_ID, "", FieldKind::Class),
             (PLATE_VELOCITY_EAST, "m/s", FieldKind::Quantity),
             (PLATE_VELOCITY_NORTH, "m/s", FieldKind::Quantity),
+            (CRUST_TYPE, "", FieldKind::Class),
+            (BOUNDARY_TYPE, "", FieldKind::Class),
+            (CONVERGENCE_RATE, "m/s", FieldKind::Quantity),
         ]
     );
     let plates = partition(&world.grid, 7, 4);
@@ -468,6 +480,17 @@ fn the_stage_adds_its_fields() {
     let (east, north) = velocities_m_s(&world.grid, &plates, &poles, EARTH_RADIUS_M);
     assert_eq!(world.fields[1].values, east);
     assert_eq!(world.fields[2].values, north);
+    let continental = continents(&world.grid, &plates, 7, 0.3, 4);
+    let crust: Vec<f64> = continental
+        .iter()
+        .map(|&c| f64::from(u8::from(c)))
+        .collect();
+    assert_eq!(world.fields[3].values, crust);
+    assert!(continental.contains(&true) && continental.contains(&false));
+    let bounds = boundaries(&world.grid, &plates, &poles, EARTH_RADIUS_M);
+    let kinds: Vec<f64> = bounds.kind.iter().map(|k| k.class()).collect();
+    assert_eq!(world.fields[4].values, kinds);
+    assert_eq!(world.fields[5].values, bounds.convergence_rate_m_s);
     assert!(
         world.fields[1..]
             .iter()

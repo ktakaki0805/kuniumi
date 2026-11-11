@@ -87,12 +87,15 @@ fn grid_writes_maps_and_statistics() {
 
 /// The fields of a world stopped after the Tectonics stage, in the order
 /// `generate` writes them.
-const WORLD_FIELDS: [&str; 5] = [
+const WORLD_FIELDS: [&str; 8] = [
     "cell_area",
     "neighbor_count",
     "plate_id",
     "plate_velocity_east",
     "plate_velocity_north",
+    "crust_type",
+    "boundary_type",
+    "convergence_rate",
 ];
 
 /// The files of a world stopped after the Tectonics stage, in the order
@@ -143,6 +146,9 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"name\": \"plate_id\",",
         "      \"name\": \"plate_velocity_east\",",
         "      \"unit\": \"m/s\",",
+        "      \"name\": \"crust_type\",",
+        "      \"name\": \"boundary_type\",",
+        "      \"name\": \"convergence_rate\",",
     ] {
         assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
     }
@@ -177,6 +183,38 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         let speed = (e * e + n * n).sqrt();
         assert!(speed <= 0.1 / 31_557_600.0 * (1.0 + 1e-12), "{speed}");
     }
+    // Continental crust on 40 % of the area, within one percentage point
+    // (Earth's `continental_crust_fraction`).
+    let crust = read_kfield(&dir.join("crust_type.kfield"));
+    assert_eq!(crust.unit, "");
+    let (ocean, land) = (0.0_f64.to_bits(), 1.0_f64.to_bits());
+    assert!(
+        crust
+            .values
+            .iter()
+            .all(|c| [ocean, land].contains(&c.to_bits()))
+    );
+    let land_sr: f64 = crust
+        .values
+        .iter()
+        .zip(&areas.values)
+        .map(|(c, a)| c * a)
+        .sum();
+    let fraction = land_sr / sum;
+    assert!((fraction - 0.4).abs() <= 0.01, "{fraction}");
+    // Boundary types 0 to 3, each present; no rate away from boundaries.
+    let kinds = read_kfield(&dir.join("boundary_type.kfield"));
+    let rates = read_kfield(&dir.join("convergence_rate.kfield"));
+    assert_eq!((kinds.unit.as_str(), rates.unit.as_str()), ("", "m/s"));
+    let mut types = [0usize; 4];
+    for (&k, &r) in kinds.values.iter().zip(&rates.values) {
+        types[k as usize] += 1;
+        assert!(r.is_finite());
+        if k.to_bits() == 0 {
+            assert_eq!(r.to_bits(), 0);
+        }
+    }
+    assert!(types.iter().all(|&t| t > 0), "{types:?}");
 }
 
 #[test]
@@ -212,15 +250,21 @@ fn generate_writes_the_same_bytes_twice() {
 /// generate` writes them. The Grid stage's two were recorded by ticket M2-01
 /// after the invariant tests passed and the maps of `out/M2-01` were looked
 /// at; both are exact copies of the grid, whose fingerprints M1-06 recorded
-/// (`stages::grid::tests::golden_fingerprints`). The Tectonics stage's three
-/// were recorded by ticket M2-02 after its invariant tests passed
-/// (`stages::tectonics::tests`) and the maps of `out/M2-02` were looked at.
-const GOLDEN_FIELDS: [(&str, u64); 5] = [
+/// (`stages::grid::tests::golden_fingerprints`). The Tectonics stage's first
+/// three were recorded by ticket M2-02 after its invariant tests passed
+/// (`stages::tectonics::tests`) and the maps of `out/M2-02` were looked at;
+/// its last three (continents and boundaries) by ticket M2-03 after the
+/// tests of `stages::tectonics::continents` and `::boundaries` passed and
+/// the maps of `out/M2-03` were looked at.
+const GOLDEN_FIELDS: [(&str, u64); 8] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
     ("plate_velocity_east", 0x8FFF_DF16_93AF_9B25),
     ("plate_velocity_north", 0x1A26_5DF6_79D2_2BB9),
+    ("crust_type", 0x791F_6B17_52CF_D2B8),
+    ("boundary_type", 0x5163_2C85_7C3F_C400),
+    ("convergence_rate", 0x04BB_B545_5B56_84CC),
 ];
 
 #[test]

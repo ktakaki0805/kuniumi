@@ -5,8 +5,13 @@
 //! cells ([`partition`]), and each plate turns as a rigid cap about its own
 //! Euler pole, at a speed chosen so that its fastest cell moves at 1 to
 //! 10 cm/yr ([`euler_poles`]), the range of Earth's plates (design document,
-//! プレートテクトニクス / プレート速度と分裂). Continents and boundary types
-//! (M2-03) and crust thickness, age and uplift (M2-04) are to follow.
+//! プレートテクトニクス / プレート速度と分裂). Continental blobs grow inside
+//! plates until they cover [`PlanetParams::continental_crust_fraction`] of
+//! the surface ([`continents`]; about 40 % on Earth, design document,
+//! プレートテクトニクス / 初期条件の目安), and every boundary cell is classified
+//! as convergent, divergent or transform from the relative velocity of the
+//! two plates ([`boundaries`]; the boundary types of 境界ごとの処理). Crust
+//! thickness, age and uplift (M2-04) are to follow.
 //!
 //! Milestone 6: kinematic simulation after Cortial et al. (2019). Rigid plates
 //! of crust samples rotate about Euler poles in 1–2 Myr steps for 300–500 Myr,
@@ -17,15 +22,19 @@
 //! the erosion stage.
 //!
 //! Random streams: [`PARTITION_STREAM`] (seed cells, growth rates and the
-//! slowness of each cell) and [`POLES_STREAM`] (axes and speeds), both under
-//! the stage's name `"tectonics"` ([`StageId::name`](crate::StageId::name)).
+//! slowness of each cell), [`POLES_STREAM`] (axes and speeds) and
+//! [`CONTINENTS_STREAM`] (the slowness of each cell, the order of the
+//! plates, the seed and rate of each blob), all under the stage's name
+//! `"tectonics"` ([`StageId::name`](crate::StageId::name)).
 //!
 //! Outputs so far ([`run`]): [`PLATE_ID`] (class), [`PLATE_VELOCITY_EAST`]
-//! and [`PLATE_VELOCITY_NORTH`] (m/s). Planned: `crust_type`,
+//! and [`PLATE_VELOCITY_NORTH`] (m/s), [`CRUST_TYPE`] (class),
+//! [`BOUNDARY_TYPE`] (class) and [`CONVERGENCE_RATE`] (m/s). Planned:
 //! `crust_thickness` (m), `crust_age` (s), `orogeny_age` (s), `uplift_rate`
 //! (m/s).
 //!
 //! [`Settings::plate_count`]: kuniumi_world::Settings::plate_count
+//! [`PlanetParams::continental_crust_fraction`]: kuniumi_world::PlanetParams::continental_crust_fraction
 
 use core::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -36,6 +45,14 @@ use kuniumi_sphere::{SphereGrid, coords};
 use kuniumi_world::World;
 
 use crate::SimError;
+
+mod boundaries;
+mod continents;
+
+pub use boundaries::{
+    BOUNDARY_TYPE, Boundaries, BoundaryType, CONVERGENCE_RATE, NORMAL_WINDOW_RAD, boundaries,
+};
+pub use continents::{CONTINENT_PLATE_COVER, CONTINENTS_STREAM, CRUST_TYPE, continents};
 
 /// The random stream of the partition: the seed cells, then the growth rate
 /// of each plate, then the slowness of each cell ([`partition`]).
@@ -112,15 +129,16 @@ impl EulerPole {
     }
 }
 
-/// The heap entry of the growth: a cell that `plate` can reach at cost
+/// The heap entry of a growth: a cell that `source` (a plate in
+/// [`partition`], a continental blob in [`continents`]) can reach at cost
 /// `priority`. Ordered by the priority ([`f64::total_cmp`]), then the cell,
-/// then the plate, so that no two different entries compare equal and the
+/// then the source, so that no two different entries compare equal and the
 /// heap pops entries in one order whatever its internals.
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     priority: f64,
     cell: u32,
-    plate: u32,
+    source: u32,
 }
 
 impl Ord for Entry {
@@ -128,7 +146,7 @@ impl Ord for Entry {
         self.priority
             .total_cmp(&other.priority)
             .then(self.cell.cmp(&other.cell))
-            .then(self.plate.cmp(&other.plate))
+            .then(self.source.cmp(&other.source))
     }
 }
 
@@ -203,13 +221,13 @@ pub fn partition(grid: &SphereGrid, plate_count: u32, seed: u64) -> Vec<u32> {
         heap.push(Reverse(Entry {
             priority: 0.0,
             cell,
-            plate,
+            source: plate,
         }));
     }
     while let Some(Reverse(Entry {
         priority,
         cell,
-        plate,
+        source: plate,
     })) = heap.pop()
     {
         if plates[cell as usize] != NONE {
@@ -224,7 +242,7 @@ pub fn partition(grid: &SphereGrid, plate_count: u32, seed: u64) -> Vec<u32> {
                 heap.push(Reverse(Entry {
                     priority: priority + step,
                     cell: j,
-                    plate,
+                    source: plate,
                 }));
             }
         }
@@ -375,13 +393,17 @@ fn velocities_m_s(
 
 /// Runs the Tectonics stage on `world` (a [`StageFn`](crate::pipeline::StageFn)):
 /// the plates of `world.settings.plate_count` ([`partition`]), their poles
-/// for `world.params.radius_m` ([`euler_poles`]), both from `world.seed`,
-/// and adds the fields [`PLATE_ID`], [`PLATE_VELOCITY_EAST`] and
-/// [`PLATE_VELOCITY_NORTH`], in that order. It reports no progress of its
-/// own.
+/// for `world.params.radius_m` ([`euler_poles`]), the continents of
+/// `world.params.continental_crust_fraction` ([`continents`]) and the
+/// boundaries ([`boundaries`]), all from `world.seed`, and adds the fields
+/// [`PLATE_ID`], [`PLATE_VELOCITY_EAST`], [`PLATE_VELOCITY_NORTH`],
+/// [`CRUST_TYPE`] (0 oceanic, 1 continental), [`BOUNDARY_TYPE`]
+/// ([`BoundaryType::class`]) and [`CONVERGENCE_RATE`], in that order. It
+/// reports no progress of its own.
 ///
-/// The world's settings must be valid (`Settings::validate`: at least 1,000
-/// cells and 2 to 64 plates), as the runner ensures.
+/// The world's settings and parameters must be valid (`Settings::validate`:
+/// at least 1,000 cells and 2 to 64 plates; `PlanetParams::validate`: a
+/// continental fraction in `[0, 1]`), as the runner ensures.
 ///
 /// # Errors
 ///
@@ -392,9 +414,29 @@ pub fn run(world: &mut World, _progress: &mut dyn FnMut(f64)) -> Result<(), SimE
     let plates = partition(&world.grid, plate_count, world.seed);
     let poles = euler_poles(&world.grid, &plates, plate_count, radius_m, world.seed);
     let (east, north) = velocities_m_s(&world.grid, &plates, &poles, radius_m);
+    let continental = continents(
+        &world.grid,
+        &plates,
+        plate_count,
+        world.params.continental_crust_fraction,
+        world.seed,
+    );
+    let bounds = boundaries(&world.grid, &plates, &poles, radius_m);
     world.add_class_field(PLATE_ID, plates.iter().map(|&p| f64::from(p)).collect())?;
     world.add_field(PLATE_VELOCITY_EAST, "m/s", east)?;
     world.add_field(PLATE_VELOCITY_NORTH, "m/s", north)?;
+    world.add_class_field(
+        CRUST_TYPE,
+        continental
+            .iter()
+            .map(|&c| f64::from(u8::from(c)))
+            .collect(),
+    )?;
+    world.add_class_field(
+        BOUNDARY_TYPE,
+        bounds.kind.iter().map(|k| k.class()).collect(),
+    )?;
+    world.add_field(CONVERGENCE_RATE, "m/s", bounds.convergence_rate_m_s)?;
     Ok(())
 }
 
