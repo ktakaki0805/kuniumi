@@ -19,6 +19,7 @@ tools/.venv/bin/pip install -r tools/requirements.txt
 | --- | --- | --- |
 | `det_reference.py` | `crates/kuniumi-math/src/det/golden.rs`: correctly rounded values of the `det` functions (mpmath) | M1-01 |
 | `det_error.py` | Table of the error of the `det` functions against the exact value (mpmath), quoted in the `det` documentation | M1-01 |
+| `crust_reference.py` | The age at which the two depth curves of Parsons & Sclater (1977) meet, depths at a few ages and heights by Airy isostasy (mpmath), quoted in the tests of `kuniumi_sim::stages::crust` | M2-05 |
 | `colormap_tables.py` | The viridis, RdBu and Paired tables of `kuniumi_io::colormap` from their sources (downloaded at pinned commits, SHA-256 checked), the viridis reference colours of its tests and the smallest colour difference in Paired; standard library only | M1-08 |
 
 Regenerate and compare with the committed file:
@@ -40,4 +41,10 @@ network access; the standard library is enough) and compare them with
 
 ```sh
 mise exec -- python tools/colormap_tables.py
+```
+
+Print the reference values of the Crust stage's tests:
+
+```sh
+tools/.venv/bin/python tools/crust_reference.py
 ```

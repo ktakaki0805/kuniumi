@@ -28,13 +28,14 @@ pub type StageFn = fn(&mut World, &mut dyn FnMut(f64)) -> Result<(), SimError>;
 /// The implementation of `stage`, or `None` while it does not exist.
 ///
 /// The Grid stage, which builds the world instead of extending it, is run by
-/// [`run`] itself and has no [`StageFn`]. So far only the Tectonics stage
-/// ([`stages::tectonics::run`]) follows it.
+/// [`run`] itself and has no [`StageFn`]. So far the Tectonics stage
+/// ([`stages::tectonics::run`]) and the Crust stage
+/// ([`stages::crust::run`]) follow it.
 pub fn implementation(stage: StageId) -> Option<StageFn> {
     match stage {
         StageId::Tectonics => Some(stages::tectonics::run),
+        StageId::Crust => Some(stages::crust::run),
         StageId::Grid
-        | StageId::Crust
         | StageId::Climate
         | StageId::Erosion
         | StageId::Hydrology

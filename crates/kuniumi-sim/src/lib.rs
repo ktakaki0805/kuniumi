@@ -25,7 +25,8 @@ pub enum StageId {
     Grid,
     /// Plate tectonics (milestone 2 one-shot, milestone 6 time evolution).
     Tectonics,
-    /// Crust to elevation: ocean-floor age, isostasy, sea level (milestone 2).
+    /// Crust to elevation: ocean depth from age, isostasy, sea level
+    /// (milestone 2).
     Crust,
     /// Climate (milestone 4).
     Climate,
@@ -142,11 +143,13 @@ impl From<FieldError> for SimError {
 ///
 /// Implemented so far: the Grid stage ([`stages::grid`]), which starts the
 /// world: the grid, its fields `cell_area` and `neighbor_count`, sea level
-/// 0 m until the Crust stage; and the Tectonics stage
-/// ([`stages::tectonics`]), which adds the plates, continents, boundaries
-/// and crust: `plate_id`, `plate_velocity_east`, `plate_velocity_north`,
-/// `crust_type`, `boundary_type`, `convergence_rate`, `crust_thickness`,
-/// `crust_age`, `uplift_rate` and `trench`. With
+/// 0 m until the Crust stage; the Tectonics stage ([`stages::tectonics`]),
+/// which adds the plates, continents, boundaries and crust: `plate_id`,
+/// `plate_velocity_east`, `plate_velocity_north`, `crust_type`,
+/// `boundary_type`, `convergence_rate`, `crust_thickness`, `crust_age`,
+/// `uplift_rate` and `trench`; and the Crust stage ([`stages::crust`]),
+/// which turns the crust into relief, `surface_height`, and sets the sea
+/// level that holds the planet's water. With
 /// [`Settings::allow_partial`] that world is returned when the next stage
 /// turns out to be missing ([`next_stage`] names it); otherwise it is
 /// dropped and the error names the stage.
@@ -157,7 +160,7 @@ impl From<FieldError> for SimError {
 /// progress is reported; [`SimError::Grid`] if the grid cannot be built
 /// (not expected); without [`Settings::allow_partial`],
 /// [`SimError::NotImplemented`] naming the first stage that does not exist
-/// yet, now always [`StageId::Crust`].
+/// yet, now always [`StageId::Climate`].
 pub fn generate(
     params: &PlanetParams,
     settings: &Settings,
@@ -246,7 +249,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_runs_grid_and_tectonics_then_stops_at_crust() {
+    fn generate_runs_grid_tectonics_and_crust_then_stops_at_climate() {
         let mut reports = Vec::new();
         let result = generate(&PlanetParams::earth(), &settings(1_000), 1, &mut |p| {
             reports.push(p)
@@ -255,13 +258,13 @@ mod tests {
             matches!(
                 result,
                 Err(SimError::NotImplemented {
-                    stage: StageId::Crust
+                    stage: StageId::Climate
                 })
             ),
             "{:?}",
             result.err()
         );
-        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics]
+        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics, StageId::Crust]
             .into_iter()
             .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
             .collect();
@@ -280,16 +283,11 @@ mod tests {
             reports.push(p)
         })
         .expect("a partial world");
-        assert_eq!(world.stages, ["grid", "tectonics"]);
-        assert_eq!(next_stage(&world), Some(StageId::Crust));
+        assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
+        assert_eq!(next_stage(&world), Some(StageId::Climate));
         assert_eq!(
-            (
-                world.seed,
-                &world.settings,
-                &world.params,
-                world.sea_level_m
-            ),
-            (7, &settings, &PlanetParams::earth(), 0.0)
+            (world.seed, &world.settings, &world.params),
+            (7, &settings, &PlanetParams::earth())
         );
         assert_eq!(world.grid, stages::grid::run(&settings, 7).unwrap());
         let fields: Vec<_> = world
@@ -312,12 +310,18 @@ mod tests {
                 ("crust_age", "s", FieldKind::Quantity),
                 ("uplift_rate", "m/s", FieldKind::Quantity),
                 ("trench", "", FieldKind::Class),
+                ("surface_height", "m", FieldKind::Quantity),
             ]
         );
         let plates = stages::tectonics::partition(&world.grid, 12, 7);
         let ids: Vec<f64> = plates.iter().map(|&p| f64::from(p)).collect();
         assert_eq!(world.fields[2].values, ids);
-        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics]
+        // The sea level holds Earth's water over the surface.
+        let heights = &world.fields[12].values;
+        let sea_level = stages::crust::sea_level_m(&world.grid, heights, 6_371_000.0, 1.335e18);
+        assert_eq!(world.sea_level_m.to_bits(), sea_level.to_bits());
+        assert!(heights.iter().any(|&h| h > sea_level) && heights.iter().any(|&h| h < sea_level));
+        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics, StageId::Crust]
             .into_iter()
             .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
             .collect();

@@ -211,6 +211,23 @@ section: every change after which an existing seed produces a different world
   oceanic side of subduction boundaries (the older floor where ocean meets
   ocean). The stage adds the fields `crust_thickness` (m), `crust_age` (s),
   `uplift_rate` (m/s) and `trench` (class) (M2-04).
+- The Crust stage (`kuniumi_sim::stages::crust`), the first relief: ocean
+  floor at the depth of its age after Parsons & Sclater (1977),
+  `2500 + 350 √t` and `6400 − 3200 e^(−t/62.8)` m (`t` in Myr), switched
+  where the two curves meet (26.27 Myr, 4,294 m; `OceanDepth`, found by
+  bisection); trench cells at 8 km below the datum (`TRENCH_DEPTH_M`);
+  continental crust by Airy isostasy, `(T − 35 km)(ρ_m − ρ_c)/ρ_m + 300 m`
+  with 2,800 and 3,300 kg/m³ (`continental_height_m`; gravity cancels, so
+  the surface gravity is not used); the sea level that holds
+  `ocean_volume_m3` (`sea_level_m`, bisection on the volume
+  `water_volume_m3`; with no water the lowest height, with more water
+  than the basins hold a layer over the whole planet). The stage adds the
+  field `surface_height` (m) and sets `World::sea_level_m`. With Earth's
+  parameters the land fraction is 28.2–30.1 % at 10,000 cells (seeds
+  1–10) and 28.7–31.4 % at 650,000 cells; it takes 0.03 s at 650,000
+  cells (M2-05).
+- `tools/crust_reference.py`: mpmath reference values of the depth curve
+  and Airy isostasy for the tests of the Crust stage (M2-05).
 
 ### Changed
 
@@ -284,9 +301,15 @@ section: every change after which an existing seed produces a different world
   `MARGIN_WIDTH_M`), from every coast on an ocean of at least 0.5 % of the
   surface (`MARGIN_MIN_OCEAN_FRACTION`) except at convergent fronts, and
   from continental rifts; continental crust is now 15–70 km thick. With
-  the formulas of M2-05 the land fraction for Earth's parameters is
-  27.9–29.7 % at 10,000 cells (seeds 1–10) and 28.7–31.4 % at 650,000
-  cells, instead of 40.0 %.
+  the formulas of M2-05, without its deepened trenches, the land fraction
+  for Earth's parameters is 27.9–29.7 % at 10,000 cells (seeds 1–10) and
+  28.7–31.4 % at 650,000 cells, instead of 40.0 % (with the trenches:
+  M2-05).
+- `kuniumi_sim::generate` and `kuniumi generate` run the Crust stage after
+  the Tectonics stage and now stop at the Climate stage
+  (``stage `climate` is not implemented yet``); the world they write has
+  the field `surface_height`, and `world.json` the solved sea level instead
+  of 0 m. The earlier fields and their golden values are unchanged (M2-05).
 
 ### Removed
 

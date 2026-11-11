@@ -85,9 +85,9 @@ fn grid_writes_maps_and_statistics() {
     }
 }
 
-/// The fields of a world stopped after the Tectonics stage, in the order
+/// The fields of a world stopped after the Crust stage, in the order
 /// `generate` writes them.
-const WORLD_FIELDS: [&str; 12] = [
+const WORLD_FIELDS: [&str; 13] = [
     "cell_area",
     "neighbor_count",
     "plate_id",
@@ -100,9 +100,10 @@ const WORLD_FIELDS: [&str; 12] = [
     "crust_age",
     "uplift_rate",
     "trench",
+    "surface_height",
 ];
 
-/// The files of a world stopped after the Tectonics stage, in the order
+/// The files of a world stopped after the Crust stage, in the order
 /// `generate` writes them: `<name>.kfield` and `<name>.png` of each field,
 /// then `world.json`.
 fn world_files() -> Vec<String> {
@@ -123,7 +124,8 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     assert_eq!(
         stderr(&o),
         "[grid] 0%\n[grid] 100%\n[tectonics] 0%\n[tectonics] 100%\n\
-         error: stage `crust` is not implemented yet\n"
+         [crust] 0%\n[crust] 100%\n\
+         error: stage `climate` is not implemented yet\n"
     );
     let expected: String = world_files()
         .iter()
@@ -141,9 +143,9 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "    \"plate_count\": 12,",
         "    \"allow_partial\": true",
         "    \"radius_m\": 6371000.0,",
-        "  \"sea_level_m\": 0.0,",
         "    \"grid\",",
-        "    \"tectonics\"",
+        "    \"tectonics\",",
+        "    \"crust\"",
         "      \"name\": \"cell_area\",",
         "      \"unit\": \"sr\",",
         "      \"kind\": \"class\"",
@@ -159,6 +161,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"unit\": \"s\",",
         "      \"name\": \"uplift_rate\",",
         "      \"name\": \"trench\",",
+        "      \"name\": \"surface_height\",",
     ] {
         assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
     }
@@ -259,6 +262,39 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         }
     }
     assert!(trenches > 0);
+    // Surface heights (ticket M2-05): continental crust 15–70 km thick
+    // stands at −2,730 m to +5,603 m (Airy isostasy), the ocean floor at
+    // 2,500 m to 6,400 m deep (Parsons & Sclater), trenches at −8 km; the sea
+    // level lies between the lowest and the highest cell, with both land
+    // and sea.
+    let height = read_kfield(&dir.join("surface_height.kfield"));
+    assert_eq!(height.unit, "m");
+    for i in 0..1_000 {
+        let h = height.values[i];
+        if crust.values[i].to_bits() == land {
+            assert!((-2_730.31..=5_603.04).contains(&h), "cell {i}: {h}");
+        } else if trench.values[i].to_bits() == 1.0_f64.to_bits() {
+            assert_eq!(h.to_bits(), (-8_000.0_f64).to_bits(), "cell {i}");
+        } else {
+            assert!((-6_400.0..=-2_500.0).contains(&h), "cell {i}: {h}");
+        }
+    }
+    let sea_level = sea_level_m(&json);
+    assert!(height.values.iter().any(|&h| h > sea_level), "{sea_level}");
+    assert!(height.values.iter().any(|&h| h < sea_level), "{sea_level}");
+}
+
+/// The sea level (m) in the text of `world.json`: the number on the line of
+/// `sea_level_m`, written in the shortest form that parses back to the same
+/// bits.
+fn sea_level_m(json: &str) -> f64 {
+    let line = json
+        .lines()
+        .find_map(|l| l.strip_prefix("  \"sea_level_m\": "))
+        .unwrap_or_else(|| panic!("no sea level in\n{json}"));
+    line.trim_end_matches(',')
+        .parse()
+        .unwrap_or_else(|e| panic!("{line}: {e}"))
 }
 
 #[test]
@@ -305,8 +341,10 @@ fn generate_writes_the_same_bytes_twice() {
 /// ticket M2-11 (margins, Earth's area–age distribution and the
 /// time-nearest ridge, world-breaking) after the tests of
 /// `stages::tectonics::crust` (`tests.rs`, `age_tests.rs`,
-/// `margin_tests.rs`) passed and the maps of `out/M2-11` were looked at.
-const GOLDEN_FIELDS: [(&str, u64); 12] = [
+/// `margin_tests.rs`) passed and the maps of `out/M2-11` were looked at;
+/// the surface height by ticket M2-05 after the tests of `stages::crust`
+/// passed and the maps of `out/M2-05` were looked at.
+const GOLDEN_FIELDS: [(&str, u64); 13] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
@@ -319,7 +357,13 @@ const GOLDEN_FIELDS: [(&str, u64); 12] = [
     ("crust_age", 0x4293_1D66_883A_3DF9),
     ("uplift_rate", 0x6725_720D_C775_FE38),
     ("trench", 0xA2D4_773C_1D13_3C93),
+    ("surface_height", 0xE587_6747_8054_1DE7),
 ];
+
+/// The sea level (m) of the same world, as `world.json` writes it (the
+/// shortest decimal that parses back to the same bits), recorded by ticket
+/// M2-05 with `surface_height` (see [`GOLDEN_FIELDS`]).
+const GOLDEN_SEA_LEVEL_M: f64 = -781.763_767_817_906_6;
 
 #[test]
 fn generate_golden_fingerprints() {
@@ -332,6 +376,13 @@ fn generate_golden_fingerprints() {
         let fingerprint = kuniumi_io::field_file::fingerprint(&field);
         assert_eq!(fingerprint, golden, "{name}: {fingerprint:#018X}");
     }
+    let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+    let sea_level = sea_level_m(&json);
+    assert_eq!(
+        sea_level.to_bits(),
+        GOLDEN_SEA_LEVEL_M.to_bits(),
+        "sea level {sea_level}"
+    );
 }
 
 #[test]

@@ -74,7 +74,7 @@ planned once the code they build on exists.
 | [M2-03](M2-03-continents-boundaries.md) | Continents and boundary classification | M2-02 |
 | [M2-04](M2-04-one-shot-crust.md) | One-shot crust thickness, age and uplift | M2-03 |
 | [M2-11](M2-11-ocean-age-margins-sea-level.md) | Ocean-floor age, passive margins and sea level | M2-04 |
-| [M2-05](M2-05-isostasy-sea-level.md) | Elevation from crust and sea level | M2-04 |
+| [M2-05](M2-05-isostasy-sea-level.md) | Elevation from crust and sea level | M2-04, M2-11 |
 | [M2-06](M2-06-hypsometry-metrics.md) | Land fraction and hypsometry metrics | M2-05 |
 | [M2-07](M2-07-settings-files.md) | Planet and generation settings from TOML files | M2-01 |
 | [M2-08](M2-08-planet-param-bounds.md) | Physical bounds for the planet parameters | — |
@@ -82,6 +82,7 @@ planned once the code they build on exists.
 | [M2-10](M2-10-enclosed-ocean-pockets.md) | Oceanic pockets enclosed by continents | M2-03 |
 | [M2-12](M2-12-ridgeless-ocean-floor.md) | Ocean floor of plates without a ridge | M2-11 |
 | [M2-13](M2-13-slow-ridge-seams.md) | Age steps around very slow ridge cells | M2-11 |
+| [M2-14](M2-14-elevation-maps.md) | Elevation maps of `surface_height` in world directories | M2-05 |
 
 ### MV — Viewer
 

@@ -8,7 +8,7 @@
 //! - `rejects_a_non_finite_stage_output`, `rejects_a_non_finite_sea_level`
 //!   and `rejects_a_class_value_that_is_not_a_class` (debug builds);
 //! - `rejects_progress_outside_0_1` (debug builds);
-//! - `the_real_table_has_the_tectonics_stage_only`.
+//! - `the_real_table_has_the_tectonics_and_crust_stages`.
 
 use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, World};
 
@@ -367,11 +367,11 @@ fn rejects_progress_outside_0_1() {
 /// `stages::tectonics::run` is checked through its outputs by the tests of
 /// `generate` (`lib.rs`).
 #[test]
-fn the_real_table_has_the_tectonics_stage_only() {
+fn the_real_table_has_the_tectonics_and_crust_stages() {
     for stage in StageId::PIPELINE {
         assert_eq!(
             implementation(stage).is_some(),
-            stage == StageId::Tectonics,
+            [StageId::Tectonics, StageId::Crust].contains(&stage),
             "{stage:?}"
         );
     }
