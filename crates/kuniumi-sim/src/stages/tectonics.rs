@@ -70,9 +70,9 @@ pub use crust::{
     ARC_DISTANCE_M, ARC_HALF_WIDTH_M, ARC_THICKNESS_M, ARC_UPLIFT_RATIO, COLLISION_PLATEAU_M,
     COLLISION_REFERENCE_RATE_M_S, COLLISION_TAPER_M, COLLISION_THICKNESS_M, COLLISION_UPLIFT_RATIO,
     CONTINENTAL_THICKNESS_M, CRUST_AGE, CRUST_THICKNESS, Crust, MARGIN_COAST_THICKNESS_M,
-    MARGIN_MIN_OCEAN_FRACTION, MARGIN_WIDTH_M, MAX_CRUST_AGE_S, MAX_UPLIFT_RATE_M_S, Nearest,
-    OCEANIC_THICKNESS_M, RidgeTimes, TRENCH, UPLIFT_RATE, crust, earth_area_age, margin_distances,
-    nearest_sources, ridge_times, ridgeless_distances,
+    MARGIN_MIN_OCEAN_FRACTION, MARGIN_WIDTH_M, MAX_CRUST_AGE_S, MAX_UPLIFT_RATE_M_S,
+    MIN_SPREADING_RATE_M_S, Nearest, OCEANIC_THICKNESS_M, RidgeTimes, TRENCH, UPLIFT_RATE, crust,
+    earth_area_age, margin_distances, nearest_sources, ridge_times, ridgeless_distances,
 };
 
 /// The random stream of the partition: the seed cells, then the growth rate

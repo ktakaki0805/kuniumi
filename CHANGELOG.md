@@ -396,6 +396,18 @@ section: every change after which an existing seed produces a different world
   falls from 72–78 Myr to 60.0 Myr, the sea level rises from between −819
   and −892 m to between −689 and −726 m, and the land fraction falls from
   29.4–31.4 % to 28.5–30.8 % (M2-12).
+- The fronts of `ridge_times` grow at least at the new
+  `MIN_SPREADING_RATE_M_S`, 1 cm/yr of full spreading (0.5 cm/yr half
+  rate), about the rate of Earth's ultraslow ridges: a ridge cell that
+  spreads more slowly, as near the relative pole of its plates, no longer
+  leaves a step of up to about 100 Myr in age (kilometres in the sea floor)
+  next to it. At 100,000 cells, seed 1, the pairs of neighbouring oceanic
+  cells of one plate more than 20 Myr apart fall from 81 to 0 and the
+  largest step next to a ridge cell from 105.9 to 11.5 Myr; at 650,000
+  cells (seeds 1–10) from 0–110 pairs to none, and from 1.7–57.1 Myr to
+  1.6–4.9 Myr. The convergence rates and boundary types are unchanged; the
+  land fraction changes by less than 0.01 points and the sea level by less
+  than 1 m (M2-13).
 
 ### Removed
 
@@ -410,6 +422,17 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M2-13: `crust_age` changes in every world where a ridge cell spreading
+  more slowly than 1 cm/yr is the first to reach one of its neighbours
+  (seeds 1–8 at 650,000 cells; not seed 9, which has no such ridge cell,
+  nor seed 10, where faster fronts reach every neighbour of its slow ridge
+  cells first; the golden world, 9 of whose 413 ridge cells are below the
+  floor), and with it `surface_height`, the sea level and, in some worlds,
+  `trench` (the side that sinks where ocean meets ocean follows the times:
+  for example 112, 72 and 66 cells in seeds 3, 5 and 6 at 650,000 cells,
+  12, 15 and 2 cells in seeds 1, 3 and 5 at 100,000 cells; none in the
+  golden world); the plates, continents, boundaries, thickness and uplift
+  are unchanged.
 - M2-12: `crust_age` changes in every world with a plate without a
   divergent cell (4 of seeds 1–10 at 650,000 cells, 4 at 10,000 cells, the
   golden world among them), and with it `surface_height` and the sea

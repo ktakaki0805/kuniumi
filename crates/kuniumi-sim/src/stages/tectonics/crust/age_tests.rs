@@ -1,14 +1,18 @@
-//! Tests of the ocean-floor age of tickets M2-11 and M2-12: the first
-//! arrival of the ridges' fronts (`ridge_times`), the distance of the
-//! floor of plates without a ridge from their boundaries
-//! (`ridgeless_distances`), and the ranking of both onto Earth's area–age
-//! distribution (`earth_area_age`).
+//! Tests of the ocean-floor age of tickets M2-11, M2-12 and M2-13: the
+//! first arrival of the ridges' fronts (`ridge_times`), each growing at
+//! its ridge cell's spreading rate but at least `MIN_SPREADING_RATE_M_S`,
+//! the distance of the floor of plates without a ridge from their
+//! boundaries (`ridgeless_distances`), and the ranking of both onto
+//! Earth's area–age distribution (`earth_area_age`).
 //!
-//! - `ridge_times_on_the_octahedron` (worked out by hand);
+//! - `ridge_times_on_the_octahedron` (worked out by hand, the floor of
+//!   M2-13 included);
 //! - `ridge_times_match_a_reference_search`: the two-plate cases of
 //!   `tests.rs` and real worlds (seeds 1–3 at 10,000 cells, seed 1 at
 //!   100,000) against `reference_times`, a search written independently
 //!   (fixed-point sweeps that recompute every label from its neighbours);
+//! - `slow_ridges_reach_their_neighbours_within_a_step` (the floor of
+//!   M2-13 on the same worlds);
 //! - `one_spreading_rate_gives_the_nearest_ridge`: with one rate the first
 //!   arrival is the nearest ridge of `reference_nearest`;
 //! - `ridgeless_distances_on_the_octahedron` (worked out by hand) and
@@ -18,7 +22,7 @@
 //! - `earth_area_age_by_hand` (worked out by hand);
 //! - `ages_follow_the_area_age_distribution` and
 //!   `crust_ages_are_the_ranked_ridge_times` on real worlds;
-//! - `seams_almost_vanish` (100,000 cells, seed 1).
+//! - `no_seams_at_100000_cells` (100,000 cells, seed 1).
 #![allow(clippy::disallowed_methods)]
 
 use core::f64::consts::FRAC_PI_2;
@@ -27,8 +31,8 @@ use kuniumi_math::units::SECONDS_PER_MYR;
 use kuniumi_sphere::SphereGrid;
 
 use super::tests::{
-    CM_PER_YR, best_offer, bits, cells_of, crust_inputs, hundred_thousand, reference_from,
-    reference_nearest, reference_times, two_plate_cases,
+    CM_PER_YR, SPREADING_FLOOR_M_S, best_offer, bits, cells_of, crust_inputs, front_rate_m_s,
+    hundred_thousand, reference_from, reference_nearest, reference_times, two_plate_cases,
 };
 use super::*;
 use crate::stages::tectonics::tests::{EARTH_RADIUS_M, ten_thousand};
@@ -58,7 +62,14 @@ fn octahedron_ridges(ridges: &[(u32, f64)]) -> Boundaries {
 /// - one ridge at +X: −X is reached through a neighbour, at `2 · 2q / 2 cm/yr`
 ///   along a path of `2q`;
 /// - two ridges at the same rate: the lower ridge wins the ties;
-/// - −Z on a plate of its own without a ridge: not reached.
+/// - −Z on a plate of its own without a ridge: not reached;
+/// - the floor of ticket M2-13: one ridge at +X spreading at 0.2 cm/yr or
+///   at exactly 1 cm/yr grows at 1 cm/yr, so the times are those of the
+///   second case at 1 cm/yr; +X at 0.2 cm/yr against −X at 1.5 cm/yr: −X
+///   keeps its own rate and wins the four others at `2q / 1.5 cm/yr`; +X
+///   at 0.2 cm/yr against −X at 0.5 cm/yr: both grow at 1 cm/yr, and +X,
+///   the lower ridge, wins the ties at `2q / 1 cm/yr` (−X would win them
+///   at its own rate).
 #[test]
 fn ridge_times_on_the_octahedron() {
     let grid = SphereGrid::octahedron();
@@ -106,17 +117,51 @@ fn ridge_times_on_the_octahedron() {
     assert_eq!(got.time_s[5].to_bits(), f64::INFINITY.to_bits());
     assert_eq!(got.path_m[5].to_bits(), f64::INFINITY.to_bits());
     assert_eq!(got.time_s[1].to_bits(), t2.to_bits());
+
+    // The floor of ticket M2-13, 1 cm/yr.
+    let floor = 1.0 * CM_PER_YR;
+    let (t1, t2) = (2.0 * q / floor, 2.0 * (q + q) / floor);
+    for c in [-0.2 * CM_PER_YR, -floor] {
+        let got = ridge_times(&grid, &[0; 6], r, &octahedron_ridges(&[(0, c)]));
+        assert_eq!(bits(&got.time_s), bits(&[0.0, t2, t1, t1, t1, t1]), "{c}");
+        assert_eq!(bits(&got.path_m), bits(&[0.0, q + q, q, q, q, q]), "{c}");
+        assert_eq!(got.ridge, [Some(0); 6], "{c}");
+    }
+    let got = ridge_times(
+        &grid,
+        &[0; 6],
+        r,
+        &octahedron_ridges(&[(0, -0.2 * CM_PER_YR), (1, -1.5 * CM_PER_YR)]),
+    );
+    let t = 2.0 * q / (1.5 * CM_PER_YR);
+    assert_eq!(bits(&got.time_s), bits(&[0.0, 0.0, t, t, t, t]));
+    assert_eq!(
+        got.ridge,
+        [Some(0), Some(1), Some(1), Some(1), Some(1), Some(1)]
+    );
+    let got = ridge_times(
+        &grid,
+        &[0; 6],
+        r,
+        &octahedron_ridges(&[(0, -0.2 * CM_PER_YR), (1, -0.5 * CM_PER_YR)]),
+    );
+    assert_eq!(bits(&got.time_s), bits(&[0.0, 0.0, t1, t1, t1, t1]));
+    assert_eq!(
+        got.ridge,
+        [Some(0), Some(1), Some(0), Some(0), Some(0), Some(0)]
+    );
 }
 
 /// On the two-plate cases and on real worlds (seeds 1–3 at 10,000 cells
 /// and seed 1 at 100,000 cells):
 /// `ridge_times` gives the times, path lengths and ridges of
-/// [`reference_times`] bit for bit; every time is `2ℓ/(−c_s)` of its own
-/// path and ridge; ridge cells are `(0, 0, itself)`; every other reached
+/// [`reference_times`] bit for bit; every time is `2ℓ/v_s` of its own
+/// path and ridge, with `v_s = max(−c_s, 1 cm/yr)` ([`front_rate_m_s`],
+/// ticket M2-13); ridge cells are `(0, 0, itself)`; every other reached
 /// cell holds exactly the least offer of its neighbours' own labels
 /// ([`best_offer`], the equations whose unique solution is the growth of
 /// the ticket), so no neighbour on the same plate could be reached
-/// earlier through a cell (`t_j ≤ 2(ℓ_i + d_ij R)/(−c_{s_i})`); the cells
+/// earlier through a cell (`t_j ≤ 2(ℓ_i + d_ij R)/v_{s_i}`); the cells
 /// not reached are exactly those of plates without a divergent cell.
 #[test]
 fn ridge_times_match_a_reference_search() {
@@ -154,7 +199,7 @@ fn ridge_times_match_a_reference_search() {
                     assert_eq!(got.time_s[i].to_bits(), t.to_bits(), "{cell}");
                     assert_eq!(got.path_m[i].to_bits(), l.to_bits(), "{cell}");
                     assert_eq!(got.ridge[i], Some(s), "{cell}");
-                    let spreading = -bounds.convergence_rate_m_s[s as usize];
+                    let spreading = front_rate_m_s(bounds, s);
                     assert_eq!(t.to_bits(), (2.0 * l / spreading).to_bits(), "{cell}");
                     if bounds.kind[i] == BoundaryType::Divergent {
                         assert_eq!((t.to_bits(), l.to_bits(), s), (0, 0, i as u32), "{cell}");
@@ -192,6 +237,65 @@ fn ridge_times_match_a_reference_search() {
         }
     }
     eprintln!("cells without a ridge on their plate: {unreached}");
+}
+
+/// Ticket M2-13: on the two-plate cases (whose ridges slow down to zero at
+/// the relative pole on the circle) and on real worlds (seeds 1–3 at
+/// 10,000 cells, seed 1 at 100,000), every cell `j` next to a ridge cell
+/// `s` on its plate is reached by `2 d_sj R / max(−c_s, 1 cm/yr)`, one
+/// step of the front at the floor's rate where the ridge cell spreads more
+/// slowly (1e-12 relative). Without the floor this fails: a ridge cell
+/// slower than the floor is the first to reach some of its neighbours, and
+/// later than one step at the floor's rate. Some ridge cells of these
+/// worlds spread more slowly than the floor (counted).
+#[test]
+fn slow_ridges_reach_their_neighbours_within_a_step() {
+    let mut worlds: Vec<(&SphereGrid, &[u32], Boundaries, String)> = two_plate_cases()
+        .iter()
+        .map(|c| {
+            (
+                c.grid,
+                c.plates.as_slice(),
+                c.bounds.clone(),
+                c.label.clone(),
+            )
+        })
+        .collect();
+    for ((grid, plates), seed) in ten_thousand().iter().zip(1..).take(3) {
+        let (_, bounds) = crust_inputs(grid, plates, seed);
+        worlds.push((grid, plates, bounds, format!("seed {seed}")));
+    }
+    let (grid, plates) = hundred_thousand();
+    let (_, bounds) = crust_inputs(grid, plates, 1);
+    worlds.push((grid, plates, bounds, "100,000 cells, seed 1".into()));
+    let (mut slow, mut ridges) = (0, 0);
+    for (grid, plates, bounds, label) in &worlds {
+        let times = ridge_times(grid, plates, EARTH_RADIUS_M, bounds).time_s;
+        for s in cells_of(bounds, BoundaryType::Divergent) {
+            ridges += 1;
+            let spreading = -bounds.convergence_rate_m_s[s as usize];
+            if spreading < SPREADING_FLOOR_M_S {
+                slow += 1;
+            }
+            let rate = spreading.max(SPREADING_FLOOR_M_S);
+            for (&j, &d_rad) in grid.neighbors(s).iter().zip(grid.centre_distances_rad(s)) {
+                if plates[j as usize] == plates[s as usize] {
+                    let bound = 2.0 * d_rad * EARTH_RADIUS_M / rate;
+                    let t = times[j as usize];
+                    assert!(
+                        t <= bound * (1.0 + 1e-12),
+                        "{label}: ridge cell {s} ({:.3} cm/yr) reaches {j} at {:.1} Myr, \
+                         after {:.1} Myr",
+                        spreading / CM_PER_YR,
+                        t / SECONDS_PER_MYR,
+                        bound / SECONDS_PER_MYR
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("ridge cells slower than the floor: {slow} of {ridges}");
+    assert!(slow > 0);
 }
 
 /// The two-plate cases with every divergent cell spreading at 4 cm/yr: the
@@ -600,28 +704,39 @@ fn crust_ages_are_the_ranked_ridge_times() {
     }
 }
 
-/// At 100,000 cells, seed 1, fewer than 200 pairs of neighbouring oceanic
-/// cells of the same plate differ in age by more than 20 Myr (1,955 with
-/// the ages of ticket M2-04, measured in its review).
+/// At 100,000 cells, seed 1, no two neighbouring oceanic cells of the same
+/// plate differ in age by more than 20 Myr (1,955 pairs with the ages of
+/// ticket M2-04, measured in its review; 81 with the time-nearest ages of
+/// M2-11 before the floor of M2-13), and every such pair next to a ridge
+/// cell differs by less than 15 Myr (105.9 Myr next to ridge cell 39194,
+/// which spreads at 0.096 cm/yr, before the floor; ticket M2-13, whose
+/// criterion is 20 Myr: 11.5 Myr is measured, and 15 Myr guards it).
 #[test]
-fn seams_almost_vanish() {
+fn no_seams_at_100000_cells() {
     let (grid, plates) = hundred_thousand();
     let (continental, bounds) = crust_inputs(grid, plates, 1);
     let got = crust(grid, plates, &continental, &bounds, EARTH_RADIUS_M);
-    let mut seams = 0;
+    let ridge = |i: usize| bounds.kind[i] == BoundaryType::Divergent;
+    let (mut seams, mut largest_myr, mut at_ridge_myr) = (0, 0.0_f64, 0.0_f64);
     for i in 0..grid.len() as u32 {
         for &j in grid.neighbors(i) {
             let (a, b) = (i as usize, j as usize);
-            if j > i
-                && !continental[a]
-                && !continental[b]
-                && plates[a] == plates[b]
-                && (got.age_s[a] - got.age_s[b]).abs() > 20.0 * SECONDS_PER_MYR
-            {
-                seams += 1;
+            if j > i && !continental[a] && !continental[b] && plates[a] == plates[b] {
+                let step_myr = (got.age_s[a] - got.age_s[b]).abs() / SECONDS_PER_MYR;
+                if step_myr > 20.0 {
+                    seams += 1;
+                }
+                largest_myr = largest_myr.max(step_myr);
+                if ridge(a) || ridge(b) {
+                    at_ridge_myr = at_ridge_myr.max(step_myr);
+                }
             }
         }
     }
-    eprintln!("pairs of neighbours more than 20 Myr apart: {seams}");
-    assert!(seams < 200, "{seams}");
+    eprintln!(
+        "pairs of neighbours more than 20 Myr apart: {seams}; largest step \
+         {largest_myr:.1} Myr, {at_ridge_myr:.1} Myr next to a ridge cell"
+    );
+    assert_eq!(seams, 0);
+    assert!(at_ridge_myr < 15.0, "{at_ridge_myr}");
 }

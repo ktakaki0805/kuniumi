@@ -1,12 +1,13 @@
 //! Crust thickness, ocean-floor age, uplift rate and trenches for the
-//! one-shot tectonics (tickets M2-04, M2-11 and M2-12; design:
+//! one-shot tectonics (tickets M2-04, M2-11, M2-12 and M2-13; design:
 //! プレートテクトニクス / 境界ごとの処理, 地殻から標高へ).
 //!
 //! Without time evolution, each cell gets its crust from its distance to the
 //! boundaries and coasts of its own plate: ocean floor ages away from the
-//! divergent boundaries at their half spreading rate, with Earth's
-//! distribution of area by age, and the floor of a plate without a ridge is
-//! the oldest, older away from its plate's boundary; continental crust
+//! divergent boundaries at their half spreading rate (no slower than
+//! Earth's ultraslow ridges), with Earth's distribution of area by age, and
+//! the floor of a plate without a ridge is the oldest, older away from its
+//! plate's boundary; continental crust
 //! thins towards the open ocean and continental rifts (margins, mostly
 //! under the sea), thickens near collisions and inland of subduction zones,
 //! and rises there. M6 replaces this with the history of the plates.
@@ -143,13 +144,35 @@ pub const MARGIN_WIDTH_M: f64 = 600_000.0;
 /// of the surface up, ticket M2-10), thin no crust around them.
 pub const MARGIN_MIN_OCEAN_FRACTION: f64 = 0.005;
 
+/// The least full spreading rate (m/s) at which the front of a ridge cell
+/// grows in [`ridge_times`]: 1 cm/yr (3.17 × 10⁻¹⁰ m/s), a half rate of
+/// 0.5 cm/yr. A ridge's rate falls to zero at the relative pole of its two
+/// plates, and the front of a ridge cell spreading at 0.1 cm/yr takes about
+/// 150 Myr to cross a cell of 77 km (100,000 cells on Earth): where no
+/// faster front gets there first, the floor beside the ridge would be about
+/// 100 Myr old on Earth's area–age distribution, kilometres deeper than the
+/// ridge next to it (ticket M2-13). Earth's slowest ridges spread far
+/// faster: the ultraslow ridges, such as the Gakkel and Southwest Indian
+/// ridges, at full rates below about 12 mm/yr (Dick, Lin & Schouten 2003,
+/// "An ultraslow-spreading class of ocean ridge", Nature 426, 405–412), the
+/// Gakkel Ridge from about 13 mm/yr in the west to about 6 mm/yr in the
+/// east (O'Connor et al. 2021, "Thermochemical anomalies in the upper
+/// mantle control Gakkel Ridge accretion", Nature Communications 12, 6962).
+/// An order-of-magnitude choice made with the owner (ticket M2-13): a ridge
+/// cell spreading more slowly, as near the relative pole of its plates,
+/// grows its front as if it spread at this rate. The convergence rates of
+/// [`Boundaries`] and the boundary types keep the plates' own motion.
+pub const MIN_SPREADING_RATE_M_S: f64 = 0.01 / SECONDS_PER_YEAR;
+
 /// The first arrival of the ridges' fronts at every cell
 /// ([`ridge_times`]).
 #[derive(Clone, Debug, PartialEq)]
 pub struct RidgeTimes {
-    /// The time (s) at which the first front arrives, `2ℓ / (−c)` for the
-    /// path length `ℓ` and the convergence rate `c` of its ridge cell;
-    /// `+∞` where no ridge of the plate reaches (or if a rate underflows).
+    /// The time (s) at which the first front arrives,
+    /// `2ℓ / max(−c, v_min)` for the path length `ℓ` and the convergence
+    /// rate `c` of its ridge cell, `v_min` =
+    /// [`MIN_SPREADING_RATE_M_S`]; `+∞` where no ridge of the plate
+    /// reaches.
     pub time_s: Vec<f64>,
     /// The length (m) of the path of the first front, `+∞` where none
     /// reaches.
@@ -197,10 +220,12 @@ impl PartialEq for Front {
 impl Eq for Front {}
 
 /// The time at which the ocean floor of every cell of `grid` left its
-/// ridge, if every ridge cell had been spreading at its own rate: the first
+/// ridge, if every ridge cell had been spreading at its own rate, or at the
+/// rate of Earth's ultraslow ridges where it spreads more slowly: the first
 /// arrival of fronts that grow from the divergent cells of each plate
-/// (`plates`, `bounds`) at their half spreading rates, on a planet of
-/// radius `radius_m` (ticket M2-11, the "time-nearest" ridge).
+/// (`plates`, `bounds`) at their half spreading rates, at least half of
+/// [`MIN_SPREADING_RATE_M_S`], on a planet of radius `radius_m` (ticket
+/// M2-11, the "time-nearest" ridge, with the floor of ticket M2-13).
 ///
 /// Multi-source Dijkstra on time: every divergent cell `s` enters a
 /// priority queue at time 0 with a path of length 0; the entry of least
@@ -208,23 +233,27 @@ impl Eq for Front {}
 /// with the entry's time, path length and ridge, and every neighbour `j`
 /// on the same plate that is not settled enters the queue with the path
 /// length `ℓ' = ℓ + d_ij R` (`d_ij` the distance between the centres, rad)
-/// and the time `2ℓ' / (−c_s)`, `−c_s/2 > 0` the half spreading rate of
-/// the ridge cell ([`Boundaries::convergence_rate_m_s`] is negative on
-/// divergent cells). Entries are ordered by time ([`f64::total_cmp`]),
-/// cell, ridge and path length. A front so passes only through cells that
-/// it reached first, as the growth of [`partition`](super::partition), and
-/// a slow ridge cell next to fast ones holds only the cells it reaches
-/// first. Between neighbours the time then changes by at most the time of
-/// one step of the front that reached the later of them, which removes
-/// most of the seams that the nearest ridge by distance leaves where
-/// neighbouring ridge cells spread at very different rates (a ridge's rate
-/// falls to zero at the relative pole of its plates); steps remain only
-/// next to ridge cells so slow that their own front is the first to reach
-/// their neighbours, as in clusters of slow cells near a relative pole
-/// (ticket M2-11 measures them; M2-13). Paths pass through any cell of the
-/// plate, continental cells included, as in ticket M2-04; cells of a plate
-/// without a divergent cell are not reached (their age comes from
-/// [`ridgeless_distances`], ticket M2-12).
+/// and the time `2ℓ' / v_s`, with `v_s = max(−c_s, v_min)`: `−c_s/2 > 0`
+/// is the half spreading rate of the ridge cell
+/// ([`Boundaries::convergence_rate_m_s`] is negative on divergent cells)
+/// and `v_min` = [`MIN_SPREADING_RATE_M_S`]. Entries are ordered by time
+/// ([`f64::total_cmp`]), cell, ridge and path length. A front so passes
+/// only through cells that it reached first, as the growth of
+/// [`partition`](super::partition), and a slow ridge cell next to fast ones
+/// holds only the cells it reaches first. Between neighbours the time then
+/// changes by at most the time of one step of the front that reached the
+/// later of them, which removes most of the seams that the nearest ridge by
+/// distance leaves where neighbouring ridge cells spread at very different
+/// rates (a ridge's rate falls to zero at the relative pole of its plates).
+/// Next to a ridge cell so slow that its own front is the first to reach
+/// its neighbours, as in clusters of slow cells near a relative pole, the
+/// floor `v_min` bounds the step: every neighbour of a ridge cell is
+/// reached within `2 d_ij R / v_min` (ticket M2-13: at 100,000 cells, seed
+/// 1, it removes the last 81 pairs of neighbours more than 20 Myr apart in
+/// age, and steps of up to 106 Myr next to ridge cells). Paths pass through
+/// any cell of the plate, continental cells included, as in ticket M2-04;
+/// cells of a plate without a divergent cell are not reached (their age
+/// comes from [`ridgeless_distances`], ticket M2-12).
 ///
 /// # Panics
 ///
@@ -272,8 +301,12 @@ pub fn ridge_times(
         result.time_s[cell] = front.time_s;
         result.path_m[cell] = front.path_m;
         result.ridge[cell] = Some(front.ridge);
-        // Positive: the cell is divergent.
-        let spreading_m_s = -bounds.convergence_rate_m_s[front.ridge as usize];
+        // Positive: the ridge cell is divergent, and no slower than the
+        // floor.
+        let spreading_m_s = larger(
+            -bounds.convergence_rate_m_s[front.ridge as usize],
+            MIN_SPREADING_RATE_M_S,
+        );
         let distances_rad = grid.centre_distances_rad(front.cell);
         for (&j, &d_rad) in grid.neighbors(front.cell).iter().zip(distances_rad) {
             if result.ridge[j as usize].is_none() && plates[j as usize] == plates[cell] {
@@ -317,8 +350,7 @@ pub fn ridge_times(
 /// the cumulative distribution `F(t) = 1 − (1 − t/t_max)²` there:
 /// `t_max (1 − √(1 − G_i))`. Ridge cells (time 0) are `+0`, at the front of
 /// the order. Continental cells, and oceanic cells with neither a finite
-/// time nor a finite distance (none from [`crust`], unless a spreading
-/// rate underflows), are `t_max` old.
+/// time nor a finite distance (none from [`crust`]), are `t_max` old.
 ///
 /// # Panics
 ///
@@ -706,12 +738,13 @@ pub struct Crust {
 /// boundaries of the partition (`bounds`, from
 /// [`boundaries`](super::boundaries)), on a planet of radius `radius_m`.
 ///
-/// The method (tickets M2-04, M2-11 and M2-12, chosen with the owner), with
-/// every distance measured inside the cell's own plate:
+/// The method (tickets M2-04, M2-11, M2-12 and M2-13, chosen with the
+/// owner), with every distance measured inside the cell's own plate:
 ///
 /// 1. Ocean-floor age: the time `t` at which the first front from the
 ///    divergent cells of the plate, each growing at its own half spreading
-///    rate, reaches the cell ([`ridge_times`]), ranked onto Earth's
+///    rate but no slower than half of [`MIN_SPREADING_RATE_M_S`], reaches
+///    the cell ([`ridge_times`]), ranked onto Earth's
 ///    area–age distribution ([`earth_area_age`]): 0 at ridge cells, at most
 ///    [`MAX_CRUST_AGE_S`], mean 60 Myr. The floor of a plate without a
 ///    divergent cell comes last in the ranking, by its distance from the

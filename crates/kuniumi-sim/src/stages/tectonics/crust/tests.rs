@@ -1,6 +1,7 @@
 //! Tests of the crust of the one-shot tectonics (tickets M2-04 and M2-11;
-//! the ages of M2-11 are tested in `age_tests.rs`, its margins and the land
-//! fraction in `margin_tests.rs`, with the helpers shared here):
+//! the ages of M2-11, M2-12 and M2-13 are tested in `age_tests.rs`, the
+//! margins and the land fraction in `margin_tests.rs`, with the helpers
+//! shared here):
 //!
 //! - `the_field_names_and_constants`;
 //! - `profiles_worked_out_by_hand`;
@@ -53,6 +54,18 @@ const OMEGA_RAD_S: f64 = 1e-15;
 pub(super) const KM: f64 = 1_000.0;
 pub(super) const MM_PER_YR: f64 = 0.001 / SECONDS_PER_YEAR;
 pub(super) const CM_PER_YR: f64 = 0.01 / SECONDS_PER_YEAR;
+
+/// The floor of ticket M2-13 on the spreading rate at which a ridge cell's
+/// front grows: 1 cm/yr, written here independently of
+/// `MIN_SPREADING_RATE_M_S`.
+pub(super) const SPREADING_FLOOR_M_S: f64 = 1.0 * CM_PER_YR;
+
+/// The full rate (m/s) at which the front of divergent cell `s` grows by
+/// the rule of ticket M2-13: its spreading rate `−c_s`, at least
+/// [`SPREADING_FLOOR_M_S`].
+pub(super) fn front_rate_m_s(bounds: &Boundaries, s: u32) -> f64 {
+    (-bounds.convergence_rate_m_s[s as usize]).max(SPREADING_FLOOR_M_S)
+}
 
 /// The pole of the angular velocity `omega` (rad/s); at rest for zero.
 pub(super) fn pole(omega: Vec3) -> EulerPole {
@@ -214,10 +227,11 @@ pub(super) fn reference_from(
 }
 
 /// The first arrival of the ridges' fronts, by a search independent of
-/// `ridge_times` (ticket M2-11): every divergent cell `s` holds
+/// `ridge_times` (tickets M2-11 and M2-13): every divergent cell `s` holds
 /// `(0, s, 0)` (time, ridge, path length); every other cell holds the
 /// least, in the lexicographic order of `(time, ridge, path)`, of the
-/// offers `(2ℓ'/(−c_s), s, ℓ')` with `ℓ' = ℓ + d_ij R` from the current
+/// offers `(2ℓ'/v_s, s, ℓ')` with `ℓ' = ℓ + d_ij R` and
+/// `v_s = max(−c_s, 1 cm/yr)` ([`front_rate_m_s`]) from the current
 /// labels `(·, s, ℓ)` of its neighbours on the same plate, recomputed from
 /// scratch at every visit (so a front passes only through cells whose
 /// label it holds now, and a label left by a front that lost its cell goes
@@ -270,8 +284,9 @@ pub(super) fn reference_times(
     panic!("the reference search did not settle");
 }
 
-/// The least offer `(2ℓ'/(−c_s), s, ℓ')`, `ℓ' = ℓ + d_ij R`, that the
-/// labels `(·, s, ℓ)` of `j`'s neighbours on its plate make to `j`, in the
+/// The least offer `(2ℓ'/v_s, s, ℓ')`, `ℓ' = ℓ + d_ij R` and
+/// `v_s = max(−c_s, 1 cm/yr)` ([`front_rate_m_s`]), that the labels
+/// `(·, s, ℓ)` of `j`'s neighbours on its plate make to `j`, in the
 /// lexicographic order of `(time, ridge, path)`; `None` without a labelled
 /// neighbour.
 pub(super) fn best_offer(
@@ -291,11 +306,7 @@ pub(super) fn best_offer(
             continue;
         };
         let path = l + grid_distance_m_at(grid, i, j, radius_m);
-        let offer = (
-            2.0 * path / -bounds.convergence_rate_m_s[s as usize],
-            s,
-            path,
-        );
+        let offer = (2.0 * path / front_rate_m_s(bounds, s), s, path);
         let better = best.is_none_or(|b| {
             offer
                 .0
@@ -519,6 +530,8 @@ fn the_field_names_and_constants() {
         .map(f64::to_bits),
         [15e3, 600e3, 0.005].map(f64::to_bits)
     );
+    // The floor of ticket M2-13: 1 cm/yr = 3.1688e-10 m/s.
+    assert!((MIN_SPREADING_RATE_M_S - 3.168_808_781_402_895e-10).abs() < 1e-24);
 }
 
 #[test]
