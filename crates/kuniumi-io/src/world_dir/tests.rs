@@ -11,7 +11,12 @@
 //! - `rejects_bad_fields_before_writing_anything`;
 //! - `writes_every_field_and_world_json_last`;
 //! - `file_system_errors_name_the_path`;
-//! - `maps_use_the_categorical_palette_for_classes`;
+//! - `maps_use_the_categorical_palette_for_classes` (and viridis for
+//!   quantities, also beside a surface height);
+//! - `surface_height_takes_the_elevation_map`,
+//!   `land_and_sea_split_at_the_sea_level`,
+//!   `an_elevation_has_one_colour_in_every_earth_like_world` and
+//!   `the_range_falls_back_to_the_field_s_own` (ticket M2-14);
 //! - `writes_maps_of_2048_by_1024`;
 //! - `metrics_txt_by_hand` and `metrics_txt_without_land_or_peaks`;
 //! - `chart_axes` and `hypsometry_chart_draws_the_bins_and_the_markers`;
@@ -545,28 +550,290 @@ fn file_system_errors_name_the_path() {
 
 #[test]
 fn maps_use_the_categorical_palette_for_classes() {
-    let world = world();
-    assert_eq!(colormap(&world.fields[0]), Colormap::Viridis);
-    assert_eq!(colormap(&world.fields[1]), Colormap::Categorical);
-    let dir = scratch("palettes");
-    write_maps_of_width(&dir, &world, 64).unwrap();
-    for (field, expected) in [
-        (&world.fields[0], Colormap::Viridis),
-        (&world.fields[1], Colormap::Categorical),
-    ] {
-        let (width, height, pixels) = decode_png(&dir.join(format!("{}.png", field.name)));
-        assert_eq!((width, height), (64, 32));
-        let reference = render::equirect(&world.grid, &field.values, expected, Range::Auto, 64);
-        assert_eq!(pixels, reference, "{}", field.name);
+    // Other fields keep their maps, with or without a surface height.
+    for world in [world(), world_with_relief()] {
+        let metrics = ElevationMetrics::of_world(&world);
+        let expected = [
+            (&world.fields[0], Colormap::Viridis),
+            (&world.fields[1], Colormap::Categorical),
+        ];
+        for (field, colormap) in expected {
+            assert_eq!(
+                map_colours(field, &world, metrics.as_ref()),
+                (colormap, Range::Auto),
+                "{}",
+                field.name
+            );
+        }
+        let dir = scratch("palettes");
+        write_maps_of_width(&dir, &world, 64).unwrap();
+        for (field, colormap) in expected {
+            let (width, height, pixels) = decode_png(&dir.join(format!("{}.png", field.name)));
+            assert_eq!((width, height), (64, 32));
+            let reference = render::equirect(&world.grid, &field.values, colormap, Range::Auto, 64);
+            assert_eq!(pixels, reference, "{}", field.name);
+        }
+        // Class ids 0 to 4 take the first five colours of the palette.
+        let (_, _, pixels) = decode_png(&dir.join("zone.png"));
+        let mut seen: Vec<Rgb8> = pixels.clone();
+        seen.sort_unstable();
+        seen.dedup();
+        let mut first_five = crate::colormap::CATEGORICAL[..5].to_vec();
+        first_five.sort_unstable();
+        assert_eq!(seen, first_five);
+        remove(&dir);
     }
-    // Class ids 0 to 4 take the first five colours of the palette.
-    let (_, _, pixels) = decode_png(&dir.join("zone.png"));
-    let mut seen: Vec<Rgb8> = pixels.clone();
+    // A class field is categorical whatever its name.
+    let mut world = world();
+    world.fields.clear();
+    let classes = (0..world.grid.len()).map(|i| (i % 3) as f64).collect();
+    world.add_class_field(SURFACE_HEIGHT, classes).unwrap();
+    let metrics = ElevationMetrics::of_world(&world);
+    assert_eq!(
+        map_colours(&world.fields[0], &world, metrics.as_ref()),
+        (Colormap::Categorical, Range::Auto)
+    );
+}
+
+/// The colours of the six cells of [`octahedron_world`] (sea level
+/// −500 m) on the elevation map over −11.5 km to +8.5 km (the chart's
+/// axis, −11 km to +9 km above the sea level), by hand from the palettes
+/// of `colormap` (each channel `a + f (b − a)`, rounded half away from
+/// zero):
+///
+/// - +700 m (cells 0 and 5): land, `t = 700/9,000`, `4t = 0.3111` on the
+///   first segment, green `[46, 120, 56]` to `[138, 172, 82]`:
+///   74.62, 136.18, 64.09;
+/// - −4,500 m (cell 1): ocean, `t = 6,500/11,000`, `3t = 1.7727`, `f =
+///   0.7727` from `[22, 70, 140]` to `[58, 128, 196]`: 49.82, 114.82,
+///   183.27;
+/// - +1,500 m (cell 2): `4t = 2/3` on the first segment: 107.33, 154.67,
+///   73.33;
+/// - −3,500 m (cell 3): `t = 7,500/11,000`, `3t = 2.0455`, `f = 0.0455`
+///   from `[58, 128, 196]` to `[150, 200, 235]`: 62.18, 131.27, 197.77;
+/// - +3,000 m (cell 4): `4t = 4/3`, `f = 1/3` from `[138, 172, 82]` to
+///   `[212, 190, 122]`: 162.67, 178, 95.33.
+const OCTAHEDRON_COLOURS: [Rgb8; 6] = [
+    [75, 136, 64],
+    [50, 115, 183],
+    [107, 155, 73],
+    [62, 131, 198],
+    [163, 178, 95],
+    [75, 136, 64],
+];
+
+#[test]
+fn surface_height_takes_the_elevation_map() {
+    let world = octahedron_world();
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    // The chart's axis, −11 km to +9 km, shifted by the sea level, −500 m.
+    let expected = (
+        Colormap::Elevation { sea_level: -500.0 },
+        Range::Fixed {
+            min: -11_500.0,
+            max: 8_500.0,
+        },
+    );
+    assert_eq!(
+        map_colours(&world.fields[0], &world, Some(&metrics)),
+        expected
+    );
+    let dir = scratch("elevation_map");
+    write_maps_of_width(&dir, &world, 64).unwrap();
+    let (width, height, pixels) = decode_png(&dir.join("surface_height.png"));
+    assert_eq!((width, height), (64, 32));
+    let reference = render::equirect(
+        &world.grid,
+        &world.fields[0].values,
+        expected.0,
+        expected.1,
+        64,
+    );
+    assert_eq!(pixels, reference);
+    // The five colours of the six elevations, and each cell's colour at its
+    // vertex: +X at (32, 16), −X at (63, 16), +Y at (48, 16), −Y at
+    // (16, 16), +Z in the top row and −Z in the bottom row (pixel centres
+    // 2.8° from the vertices; `render`'s layout).
+    let mut seen = pixels.clone();
     seen.sort_unstable();
     seen.dedup();
-    let mut first_five = crate::colormap::CATEGORICAL[..5].to_vec();
-    first_five.sort_unstable();
-    assert_eq!(seen, first_five);
+    let mut colours = OCTAHEDRON_COLOURS.to_vec();
+    colours.sort_unstable();
+    colours.dedup();
+    assert_eq!(seen, colours);
+    let at = |x: usize, y: usize| pixels[y * 64 + x];
+    let vertices = [(32, 16), (63, 16), (48, 16), (16, 16), (0, 0), (0, 31)];
+    for (cell, (x, y)) in vertices.into_iter().enumerate() {
+        assert_eq!(at(x, y), OCTAHEDRON_COLOURS[cell], "cell {cell}");
+    }
+    remove(&dir);
+}
+
+/// Whether `colour` is one of the ocean colours of the elevation map: all
+/// have blue above green (by at least 35 at the control points), all land
+/// colours blue below green (by at least 12).
+fn is_ocean_colour(colour: Rgb8) -> bool {
+    colour[2] > colour[1]
+}
+
+#[test]
+fn land_and_sea_split_at_the_sea_level() {
+    let relief = world_with_relief();
+    // No water: the sea level at the lowest height, which every cell below
+    // −2 km takes, so many cells lie exactly at the sea level.
+    let mut dry = world_with_relief();
+    for h in &mut dry.fields[2].values {
+        if *h < -2_000.0 {
+            *h = -2_000.0;
+        }
+    }
+    dry.sea_level_m = -2_000.0;
+    // A water world: the sea level 1 km above the highest height.
+    let mut wet = world_with_relief();
+    wet.sea_level_m = 5_400.0;
+    let cells = render::equirect_cells(&relief.grid, 64);
+    let mut counts = Vec::new();
+    for world in [relief, dry, wet] {
+        let dir = scratch("land_and_sea");
+        write_maps_of_width(&dir, &world, 64).unwrap();
+        let (_, _, pixels) = decode_png(&dir.join("surface_height.png"));
+        let heights = &world.fields[2].values;
+        let z = world.sea_level_m;
+        for (p, (&cell, &colour)) in cells.iter().zip(&pixels).enumerate() {
+            let h = heights[cell as usize];
+            assert_eq!(
+                is_ocean_colour(colour),
+                h < z,
+                "pixel {p}: cell {cell} at {h} m, sea level {z} m, {colour:?}"
+            );
+        }
+        let at_sea_level = cells
+            .iter()
+            .filter(|&&c| heights[c as usize].to_bits() == z.to_bits())
+            .count();
+        let ocean = pixels.iter().filter(|&&c| is_ocean_colour(c)).count();
+        counts.push((ocean, at_sea_level));
+        remove(&dir);
+    }
+    // Land and sea in the first world, cells at the sea level drawn as land
+    // in the second, only sea in the third.
+    assert!(counts[0].0 > 0 && counts[0].0 < cells.len(), "{counts:?}");
+    assert!(counts[1].0 == 0 && counts[1].1 > 100, "{counts:?}");
+    assert_eq!(counts[2].0, cells.len(), "{counts:?}");
+}
+
+#[test]
+fn an_elevation_has_one_colour_in_every_earth_like_world() {
+    let world = world_with_relief();
+    let z = world.sea_level_m;
+    // The same world with one cell 10 km below the sea level and one 8 km
+    // above it: new extremes, still inside Earth's range.
+    let mut other = world.clone();
+    other.fields[2].values[10] = z - 10_000.0;
+    other.fields[2].values[20] = z + 8_000.0;
+    let colours = |world: &World| {
+        let metrics = ElevationMetrics::of_world(world).unwrap();
+        let (colormap, range) = map_colours(&world.fields[2], world, Some(&metrics));
+        (
+            colormap.colours(&world.fields[2].values, range),
+            colormap.colours(&world.fields[2].values, Range::Auto),
+        )
+    };
+    let ((fixed, auto), (other_fixed, other_auto)) = (colours(&world), colours(&other));
+    let others = |c: &[Rgb8]| -> Vec<Rgb8> {
+        c.iter()
+            .enumerate()
+            .filter(|&(cell, _)| cell != 10 && cell != 20)
+            .map(|(_, &colour)| colour)
+            .collect()
+    };
+    assert_eq!(others(&fixed), others(&other_fixed));
+    // On each world's own range most colours would change.
+    let changed = others(&auto)
+        .iter()
+        .zip(&others(&other_auto))
+        .filter(|(a, b)| a != b)
+        .count();
+    assert!(changed > 900, "{changed}");
+    // And so in the written maps.
+    let (a, b) = (scratch("one_colour_a"), scratch("one_colour_b"));
+    write_maps_of_width(&a, &world, 64).unwrap();
+    write_maps_of_width(&b, &other, 64).unwrap();
+    let (_, _, pixels) = decode_png(&a.join("surface_height.png"));
+    let (_, _, other_pixels) = decode_png(&b.join("surface_height.png"));
+    let cells = render::equirect_cells(&world.grid, 64);
+    for (p, &cell) in cells.iter().enumerate() {
+        if cell != 10 && cell != 20 {
+            assert_eq!(pixels[p], other_pixels[p], "pixel {p}, cell {cell}");
+        }
+    }
+    remove(&a);
+    remove(&b);
+}
+
+#[test]
+fn the_range_falls_back_to_the_field_s_own() {
+    let world = world_with_relief();
+    let elevation = Colormap::Elevation { sea_level: -700.0 };
+    assert_eq!(
+        map_colours(&world.fields[2], &world, None),
+        (elevation, Range::Auto)
+    );
+    // A sea level of 1.7e308 m: the chart's axis ends at +1e307 m above
+    // it, beyond the largest double.
+    let mut far = world_with_relief();
+    far.sea_level_m = 1.7e308;
+    let metrics = ElevationMetrics::of_world(&far).unwrap();
+    let axes = hypsometry_axes(&metrics);
+    assert!((far.sea_level_m + axes.x_max).is_infinite(), "{axes:?}");
+    assert_eq!(
+        map_colours(&far.fields[2], &far, Some(&metrics)),
+        (Colormap::Elevation { sea_level: 1.7e308 }, Range::Auto)
+    );
+    let dir = scratch("far_sea_level");
+    write_maps_of_width(&dir, &far, 64).unwrap();
+    let (_, _, pixels) = decode_png(&dir.join("surface_height.png"));
+    let reference = render::equirect(
+        &far.grid,
+        &far.fields[2].values,
+        Colormap::Elevation { sea_level: 1.7e308 },
+        Range::Auto,
+        64,
+    );
+    assert_eq!(pixels, reference);
+    assert!(pixels.iter().all(|&c| is_ocean_colour(c)));
+    remove(&dir);
+    // A sea level of −1.7e308 m: the chart's axis starts at −1e307 m below
+    // it, beyond the most negative double.
+    let mut deep = world_with_relief();
+    deep.sea_level_m = -1.7e308;
+    let metrics = ElevationMetrics::of_world(&deep).unwrap();
+    let axes = hypsometry_axes(&metrics);
+    assert!((deep.sea_level_m + axes.x_min).is_infinite(), "{axes:?}");
+    assert!((deep.sea_level_m + axes.x_max).is_finite(), "{axes:?}");
+    assert_eq!(
+        map_colours(&deep.fields[2], &deep, Some(&metrics)),
+        (
+            Colormap::Elevation {
+                sea_level: -1.7e308
+            },
+            Range::Auto
+        )
+    );
+    let dir = scratch("deep_sea_level");
+    write_maps_of_width(&dir, &deep, 64).unwrap();
+    let (_, _, pixels) = decode_png(&dir.join("surface_height.png"));
+    let reference = render::equirect(
+        &deep.grid,
+        &deep.fields[2].values,
+        Colormap::Elevation {
+            sea_level: -1.7e308,
+        },
+        Range::Auto,
+        64,
+    );
+    assert_eq!(pixels, reference);
+    assert!(pixels.iter().all(|&c| !is_ocean_colour(c)));
     remove(&dir);
 }
 

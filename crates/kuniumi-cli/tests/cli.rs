@@ -291,6 +291,27 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     let sea_level = sea_level_m(&json);
     assert!(height.values.iter().any(|&h| h > sea_level), "{sea_level}");
     assert!(height.values.iter().any(|&h| h < sea_level), "{sea_level}");
+    // The map of the surface height (ticket M2-14): the elevation map at
+    // the sea level over the chart's x axis, −11 km to +9 km above the sea
+    // level for this world, the bounds written here.
+    assert_eq!(metric(&metrics, "chart_x_min_m"), "-11000");
+    assert_eq!(metric(&metrics, "chart_x_max_m"), "9000");
+    let grid = kuniumi_sphere::SphereGrid::fibonacci(1_000, 1).expect("the grid");
+    let pixels = kuniumi_io::render::equirect(
+        &grid,
+        &height.values,
+        kuniumi_io::colormap::Colormap::Elevation { sea_level },
+        kuniumi_io::colormap::Range::Fixed {
+            min: sea_level - 11_000.0,
+            max: sea_level + 9_000.0,
+        },
+        2048,
+    );
+    let map = std::fs::read(dir.join("surface_height.png")).expect("the map");
+    assert!(
+        map == kuniumi_io::png::encode_rgb8(2048, 1024, &pixels),
+        "surface_height.png"
+    );
 }
 
 /// The sea level (m) in the text of `world.json`: the number on the line of

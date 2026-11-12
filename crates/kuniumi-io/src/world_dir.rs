@@ -4,9 +4,11 @@
 //!
 //! - `<name>.kfield`: the values, bit for bit ([`field_file`]);
 //! - `<name>.png`: an equirectangular map, [`MAP_WIDTH_PX`] × 1024 pixels
-//!   ([`render::equirect_cells`]), coloured by [`colormap`]: class fields with
-//!   the categorical palette, quantities with viridis over the field's own
-//!   range;
+//!   ([`render::equirect_cells`]), coloured as [`map_colours`] chooses:
+//!   class fields with the categorical palette, `surface_height` with the
+//!   elevation map at the sea level (blue below it, green to brown above
+//!   it) over the x axis of `hypsometry.png`, other quantities with viridis
+//!   over the field's own range;
 //!
 //! then, for a world with the field `surface_height` (the Crust stage has
 //! run), the validation metrics of `kuniumi_sim::metrics` (ticket M2-06):
@@ -341,12 +343,49 @@ pub fn world_json(world: &World) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// The colour map of `field`'s map: [`Colormap::Categorical`] for a class
-/// field, [`Colormap::Viridis`] for a quantity, both over [`Range::Auto`].
-pub fn colormap(field: &Field) -> Colormap {
+/// The colour map of `field`'s map in `world`, and the range it spans;
+/// `metrics` are the world's ([`ElevationMetrics::of_world`], as
+/// [`write()`] computes them):
+///
+/// - a class field: [`Colormap::Categorical`] over [`Range::Auto`],
+///   whatever its name;
+/// - the quantity `surface_height` ([`SURFACE_HEIGHT`]):
+///   [`Colormap::Elevation`] at the world's sea level `z`, blue below it and
+///   green to brown above it, over the x axis of [`HYPSOMETRY_FILE`]
+///   ([`hypsometry_axes`] of `metrics`, `x_min` to `x_max` above the sea
+///   level) shifted by the sea level, `Range::Fixed { min: z + x_min, max:
+///   z + x_max }`: −11 km to +9 km above the sea level for Earth-like
+///   worlds (ticket M2-14). A cell then takes the colour of the chart's bar
+///   at its elevation, so the chart is the map's legend, and an elevation
+///   the same colour in every world whose relief lies within Earth's range.
+///   [`Range::Auto`] (the field's own range) without `metrics`, or if a
+///   bound is not finite (`z + x` overflows, for a sea level of magnitude
+///   beyond about 1e307 m);
+/// - every other quantity: [`Colormap::Viridis`] over [`Range::Auto`].
+///
+/// The elevation map needs a finite sea level ([`Colormap::colour`] panics
+/// otherwise), which [`write()`] checks before drawing ([`world_json`]).
+pub fn map_colours(
+    field: &Field,
+    world: &World,
+    metrics: Option<&ElevationMetrics>,
+) -> (Colormap, Range) {
     match field.kind {
-        FieldKind::Class => Colormap::Categorical,
-        FieldKind::Quantity => Colormap::Viridis,
+        FieldKind::Class => (Colormap::Categorical, Range::Auto),
+        FieldKind::Quantity if field.name == SURFACE_HEIGHT => {
+            let sea_level = world.sea_level_m;
+            let range = metrics.map_or(Range::Auto, |metrics| {
+                let axes = hypsometry_axes(metrics);
+                let (min, max) = (sea_level + axes.x_min, sea_level + axes.x_max);
+                if min.is_finite() && max.is_finite() {
+                    Range::Fixed { min, max }
+                } else {
+                    Range::Auto
+                }
+            });
+            (Colormap::Elevation { sea_level }, range)
+        }
+        FieldKind::Quantity => (Colormap::Viridis, Range::Auto),
     }
 }
 
@@ -417,7 +456,8 @@ pub fn hypsometry_axes(metrics: &ElevationMetrics) -> Axes {
 /// [`CHART_HEIGHT_PX`] ([`chart::histogram`]): a bar per bin of the
 /// histogram, as high as its share of the surface and coloured by
 /// [`Colormap::Elevation`] at sea level 0 over the x axis (blue below the
-/// sea level, green to brown above it), on the axes of [`hypsometry_axes`];
+/// sea level, green to brown above it; the colours of the map of
+/// `surface_height`, [`map_colours`]), on the axes of [`hypsometry_axes`];
 /// markers at the sea level ([`SEA_LEVEL_MARKER`]) and at Earth's two modes,
 /// [`earth::OCEAN_MODE_M`] and [`earth::LAND_MODE_M`] ([`EARTH_MARKER`]).
 pub fn hypsometry_chart(metrics: &ElevationMetrics) -> Vec<Rgb8> {
@@ -601,7 +641,7 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
         written.push(path);
 
         let path = dir.join(format!("{}.png", field.name));
-        let pixels = map_pixels(&cells, field);
+        let pixels = map_pixels(&cells, field, world, metrics.as_ref());
         let bytes = png::encode_rgb8(width_px, width_px / 2, &pixels);
         std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
         written.push(path);
@@ -682,9 +722,16 @@ fn write_kfield(path: &Path, field: &Field) -> io::Result<()> {
     file.flush()
 }
 
-/// The pixels of `field`'s map, given the cell under each pixel.
-fn map_pixels(cells: &[u32], field: &Field) -> Vec<Rgb8> {
-    let colours = colormap(field).colours(&field.values, Range::Auto);
+/// The pixels of `field`'s map in `world`, whose metrics are `metrics`,
+/// given the cell under each pixel ([`map_colours`]).
+fn map_pixels(
+    cells: &[u32],
+    field: &Field,
+    world: &World,
+    metrics: Option<&ElevationMetrics>,
+) -> Vec<Rgb8> {
+    let (colormap, range) = map_colours(field, world, metrics);
+    let colours = colormap.colours(&field.values, range);
     cells.iter().map(|&cell| colours[cell as usize]).collect()
 }
 

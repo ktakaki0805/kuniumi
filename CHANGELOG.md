@@ -408,6 +408,16 @@ section: every change after which an existing seed produces a different world
   1.6–4.9 Myr. The convergence rates and boundary types are unchanged; the
   land fraction changes by less than 0.01 points and the sea level by less
   than 1 m (M2-13).
+- `surface_height.png` of a world directory shows land and sea: drawn with
+  the elevation map at the world's sea level (blue below it, green to
+  brown above it, a hard break at the coast) instead of viridis, over the
+  x axis of `hypsometry.png` shifted by the sea level (−11 km to +9 km
+  above it for Earth-like worlds; the field's own range only if a bound
+  overflows), so the chart is the map's legend and an elevation has the
+  same colour in every such world. `world_dir::colormap(field)` becomes
+  `world_dir::map_colours(field, world, metrics)`, which returns the range
+  too; the maps of the other fields, the fields themselves, `world.json`
+  and `metrics.txt` are unchanged (M2-14).
 
 ### Removed
 
