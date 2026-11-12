@@ -260,8 +260,9 @@ pub fn surface_heights_m(
 /// summed in cell order.
 ///
 /// A bathtub model: every cell below the level holds water, whether it is
-/// connected to the open ocean or not (enclosed basins, such as the oceanic
-/// pockets that continents enclose, fill too; lakes are milestone 5).
+/// connected to the open ocean or not (enclosed basins, such as the seas
+/// that continents enclose and continental rifts below the level, fill
+/// too; lakes are milestone 5).
 ///
 /// # Panics
 ///

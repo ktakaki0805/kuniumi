@@ -352,27 +352,32 @@ fn generate_writes_the_same_bytes_twice() {
 /// `stages::tectonics::crust` (`tests.rs`, `age_tests.rs`,
 /// `margin_tests.rs`) passed and the maps of `out/M2-11` were looked at;
 /// the surface height by ticket M2-05 after the tests of `stages::crust`
-/// passed and the maps of `out/M2-05` were looked at.
+/// passed and the maps of `out/M2-05` were looked at; the crust type,
+/// thickness, age, uplift and surface height again by ticket M2-10 (the
+/// oceanic pockets filled and the coast trimmed, world-breaking) after the
+/// tests of `stages::tectonics::continents` passed and the maps of
+/// `out/M2-10` were looked at.
 const GOLDEN_FIELDS: [(&str, u64); 13] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
     ("plate_velocity_east", 0x8FFF_DF16_93AF_9B25),
     ("plate_velocity_north", 0x1A26_5DF6_79D2_2BB9),
-    ("crust_type", 0x791F_6B17_52CF_D2B8),
+    ("crust_type", 0x4C68_F0C4_A729_DBF8),
     ("boundary_type", 0x5163_2C85_7C3F_C400),
     ("convergence_rate", 0x04BB_B545_5B56_84CC),
-    ("crust_thickness", 0x9118_E6AA_2F43_6389),
-    ("crust_age", 0x4293_1D66_883A_3DF9),
-    ("uplift_rate", 0x6725_720D_C775_FE38),
+    ("crust_thickness", 0x865C_5974_07DF_8E7B),
+    ("crust_age", 0x545C_D2DE_8C05_8A50),
+    ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
-    ("surface_height", 0xE587_6747_8054_1DE7),
+    ("surface_height", 0xA8F4_75C8_1AF3_AAD5),
 ];
 
 /// The sea level (m) of the same world, as `world.json` writes it (the
 /// shortest decimal that parses back to the same bits), recorded by ticket
-/// M2-05 with `surface_height` (see [`GOLDEN_FIELDS`]).
-const GOLDEN_SEA_LEVEL_M: f64 = -781.763_767_817_906_6;
+/// M2-05 with `surface_height` and again by ticket M2-10 (see
+/// [`GOLDEN_FIELDS`]).
+const GOLDEN_SEA_LEVEL_M: f64 = -782.657_063_913_653_2;
 
 #[test]
 fn generate_golden_fingerprints() {
@@ -404,32 +409,33 @@ fn metric(text: &str, key: &str) -> String {
 }
 
 /// The numbers of `metrics.txt` of the golden world (10,000 cells, seed 1),
-/// from `tools/hypsometry_reference.py out/M2-06/10k` (ticket M2-06): exact
+/// from `tools/hypsometry_reference.py out/M2-10/10k` (tickets M2-06 and
+/// M2-10, run again on the world of the new golden values): exact
 /// rational sums and bins over the `.kfield` files of the world, which
 /// [`GOLDEN_FIELDS`] fixes. Shares are printed with 6 decimals, metres with
 /// 1, so each agrees within half the last digit (and a rounding error).
 const REFERENCE_METRICS: [(&str, f64, f64); 21] = [
-    ("land_fraction", 0.296_053_819_165_441, 5e-7),
-    ("mean_land_elevation_m", 1_061.460_292_780_781, 0.05),
-    ("mean_ocean_depth_m", 3_718.062_915_493_437_2, 0.05),
-    ("highest_m", 6_384.794_070_848_209, 0.05),
-    ("lowest_m", -7_218.236_232_182_094, 0.05),
-    ("percentile_1_m", -7_218.236_232_182_094, 0.05),
-    ("percentile_5_m", -5_322.235_678_982_984, 0.05),
-    ("percentile_10_m", -5_122.144_186_468_786, 0.05),
-    ("percentile_25_m", -4_524.030_165_973_157, 0.05),
-    ("percentile_50_m", -3_133.760_124_026_571, 0.05),
-    ("percentile_75_m", 1_077.949_929_428_346_9, 0.05),
-    ("percentile_90_m", 1_081.763_767_817_906_7, 0.05),
-    ("percentile_95_m", 1_081.763_767_817_906_7, 0.05),
-    ("percentile_99_m", 1_081.763_767_817_906_7, 0.05),
+    ("land_fraction", 0.293_998_708_328_403_14, 5e-7),
+    ("mean_land_elevation_m", 1_057.761_035_725_564_9, 0.05),
+    ("mean_ocean_depth_m", 3_707.239_944_656_737_4, 0.05),
+    ("highest_m", 6_385.687_366_943_956_5, 0.05),
+    ("lowest_m", -7_217.342_936_086_346_5, 0.05),
+    ("percentile_1_m", -7_217.342_936_086_346_5, 0.05),
+    ("percentile_5_m", -5_321.346_088_174_379_5, 0.05),
+    ("percentile_10_m", -5_121.300_478_123_51, 0.05),
+    ("percentile_25_m", -4_523.108_835_178_071, 0.05),
+    ("percentile_50_m", -3_132.817_330_630_055, 0.05),
+    ("percentile_75_m", 1_027.647_150_447_367, 0.05),
+    ("percentile_90_m", 1_082.657_063_913_653_2, 0.05),
+    ("percentile_95_m", 1_082.657_063_913_653_2, 0.05),
+    ("percentile_99_m", 1_082.657_063_913_653_2, 0.05),
     ("ocean_mode_m", -1_750.0, 0.0),
-    ("ocean_mode_fraction", 0.028_606_005_230_792_698, 5e-7),
+    ("ocean_mode_fraction", 0.028_501_844_596_283_202, 5e-7),
     ("land_mode_m", 1_050.0, 0.0),
-    ("land_mode_fraction", 0.245_278_992_164_091_3, 5e-7),
-    ("valley_m", -850.0, 0.0),
-    ("valley_fraction", 0.000_314_532_086_759_371_95, 5e-7),
-    ("sea_level_m", -781.763_767_817_906_6, 5e-4),
+    ("land_mode_fraction", 0.242_714_770_079_407_4, 5e-7),
+    ("valley_m", -950.0, 0.0),
+    ("valley_fraction", 0.000_405_040_996_876_315_6, 5e-7),
+    ("sea_level_m", -782.657_063_913_653_2, 5e-4),
 ];
 
 #[test]

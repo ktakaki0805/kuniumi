@@ -8,7 +8,9 @@
 //! プレートテクトニクス / プレート速度と分裂). Continental blobs grow inside
 //! plates until they cover [`PlanetParams::continental_crust_fraction`] of
 //! the surface ([`continents`]; about 40 % on Earth, design document,
-//! プレートテクトニクス / 初期条件の目安), and every boundary cell is classified
+//! プレートテクトニクス / 初期条件の目安); the small oceanic pockets they
+//! enclose become continental and as much area is trimmed from their coasts
+//! ([`MIN_ENCLOSED_OCEAN_FRACTION`]). Every boundary cell is classified
 //! as convergent, divergent or transform from the relative velocity of the
 //! two plates ([`boundaries`]; the boundary types of 境界ごとの処理). Each
 //! cell then gets its crust from its distance to the boundaries and coasts
@@ -60,7 +62,9 @@ mod crust;
 pub use boundaries::{
     BOUNDARY_TYPE, Boundaries, BoundaryType, CONVERGENCE_RATE, NORMAL_WINDOW_RAD, boundaries,
 };
-pub use continents::{CONTINENT_PLATE_COVER, CONTINENTS_STREAM, CRUST_TYPE, continents};
+pub use continents::{
+    CONTINENT_PLATE_COVER, CONTINENTS_STREAM, CRUST_TYPE, MIN_ENCLOSED_OCEAN_FRACTION, continents,
+};
 pub use crust::{
     ARC_DISTANCE_M, ARC_HALF_WIDTH_M, ARC_THICKNESS_M, ARC_UPLIFT_RATIO, COLLISION_PLATEAU_M,
     COLLISION_REFERENCE_RATE_M_S, COLLISION_TAPER_M, COLLISION_THICKNESS_M, COLLISION_UPLIFT_RATIO,

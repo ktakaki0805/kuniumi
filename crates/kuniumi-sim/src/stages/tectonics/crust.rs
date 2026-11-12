@@ -17,6 +17,7 @@ use kuniumi_math::det;
 use kuniumi_math::units::{SECONDS_PER_MYR, SECONDS_PER_YEAR};
 use kuniumi_sphere::SphereGrid;
 
+use super::continents::ocean_regions;
 use super::{Boundaries, BoundaryType, Entry};
 
 /// The field of crust thickness (m) ([`Crust::thickness_m`]).
@@ -136,8 +137,9 @@ pub const MARGIN_WIDTH_M: f64 = 600_000.0;
 /// The least area of an ocean region, as a fraction of the planet's
 /// surface, whose coasts are margins: 0.5 % (ticket M2-11). An ocean
 /// region is a set of oceanic cells connected through neighbours of any
-/// plate; smaller regions, such as the oceanic pockets that continents
-/// enclose (ticket M2-10), thin no crust around them.
+/// plate; smaller regions, the enclosed seas that the continents keep
+/// (from [`MIN_ENCLOSED_OCEAN_FRACTION`](super::MIN_ENCLOSED_OCEAN_FRACTION)
+/// of the surface up, ticket M2-10), thin no crust around them.
 pub const MARGIN_MIN_OCEAN_FRACTION: f64 = 0.005;
 
 /// The first arrival of the ridges' fronts at every cell
@@ -406,38 +408,12 @@ pub fn margin_distances(
         "a boundary for each of the {n} cells, got {}",
         bounds.kind.len()
     );
-    // Ocean regions, numbered in the index order of their first cell.
-    const NONE: u32 = u32::MAX;
-    let mut region = vec![NONE; n];
-    let mut region_count = 0;
-    let mut stack = Vec::new();
-    for first in 0..n as u32 {
-        if continental[first as usize] || region[first as usize] != NONE {
-            continue;
-        }
-        region[first as usize] = region_count;
-        stack.push(first);
-        while let Some(k) = stack.pop() {
-            for &j in grid.neighbors(k) {
-                if !continental[j as usize] && region[j as usize] == NONE {
-                    region[j as usize] = region_count;
-                    stack.push(j);
-                }
-            }
-        }
-        region_count += 1;
-    }
-    let mut region_sr = vec![0.0; region_count as usize];
-    let mut total_sr = 0.0;
-    for i in 0..n as u32 {
-        total_sr += grid.area_sr(i);
-        if !continental[i as usize] {
-            region_sr[region[i as usize] as usize] += grid.area_sr(i);
-        }
-    }
+    let regions = ocean_regions(grid, continental);
+    let total_sr: f64 = (0..n as u32).map(|i| grid.area_sr(i)).sum();
     let min_sr = MARGIN_MIN_OCEAN_FRACTION * total_sr;
-    let open_ocean =
-        |j: u32| !continental[j as usize] && region_sr[region[j as usize] as usize] >= min_sr;
+    let open_ocean = |j: u32| {
+        !continental[j as usize] && regions.area_sr[regions.region[j as usize] as usize] >= min_sr
+    };
     let mut starts = Vec::new();
     for i in 0..n as u32 {
         let kind = bounds.kind[i as usize];

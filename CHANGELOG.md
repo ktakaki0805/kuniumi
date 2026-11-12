@@ -371,6 +371,18 @@ section: every change after which an existing seed produces a different world
   keeps every planet within the bounds slower than break-up. New
   `kuniumi_math::constants::GRAVITATIONAL_CONSTANT_M3_KG_S2` (CODATA 2018)
   (M2-08).
+- `continents` fills the oceanic pockets that its growth leaves inside the
+  continents: every enclosed oceanic region smaller than 0.1 % of the
+  surface (`MIN_ENCLOSED_OCEAN_FRACTION`), except the largest ocean, becomes
+  continental, and as much area is trimmed from the coast that grew last
+  (cells on a coast whose continental neighbours on their plate form one
+  run), so the continental fraction stays within one cell above the
+  target, each plate's continent stays connected and no two kept seas are
+  joined (a trimmed cell's oceanic neighbours lie in one region). Mostly
+  holes of one to a few cells, at ocean depth in M2-05: 12–42 cells at
+  10,000 cells and 43–205 at 100,000 for Earth's 40 %. Larger enclosed seas
+  are kept. The ocean regions of `margin_distances` come from the same
+  helper, unchanged (M2-10).
 
 ### Removed
 
@@ -389,3 +401,10 @@ section: every change after which an existing seed produces a different world
   (thinned margins, the time-nearest ridge and Earth's area–age
   distribution); the plates, continents, boundaries and `uplift_rate` are
   unchanged.
+- M2-10: `crust_type` changes for nearly every seed (the oceanic pockets
+  filled, the coast that grew last trimmed), and with it `crust_thickness`,
+  `crust_age`, `uplift_rate`, `surface_height` and the sea level, and
+  `trench` for some seeds (12 of seeds 1–20 at 10,000 cells, up to 13
+  cells); the plates, poles and boundaries are unchanged. For Earth's
+  water the land fraction falls by up to 0.2 percentage points and the sea
+  level moves by a few metres.
