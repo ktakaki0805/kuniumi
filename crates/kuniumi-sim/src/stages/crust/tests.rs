@@ -549,18 +549,22 @@ fn the_stage_adds_surface_height_and_sets_the_sea_level() {
     assert_eq!(world.sea_level_m.to_bits(), z.to_bits());
     assert!(world.sea_level_m < 0.0, "{}", world.sea_level_m);
 
-    // The surface gravity cancels in Airy isostasy: Mars's gives the same
-    // world.
-    let mut mars = start(PlanetParams {
-        surface_gravity_m_s2: 3.721,
+    // The surface gravity cancels in Airy isostasy: twice Earth's (a bulk
+    // density of 11,000 kg/m³, within the bounds of `PlanetParams`) gives
+    // the same world.
+    let heavy_params = PlanetParams {
+        surface_gravity_m_s2: 2.0 * 9.806_65,
         ..PlanetParams::earth()
-    });
-    run(&mut mars, &mut |_| {}).expect("the stage runs");
-    assert_eq!(bits(values(&mars, SURFACE_HEIGHT)), bits(&want));
-    assert_eq!(mars.sea_level_m.to_bits(), z.to_bits());
+    };
+    assert_eq!(heavy_params.validate(), Ok(()));
+    let mut heavy = start(heavy_params);
+    run(&mut heavy, &mut |_| {}).expect("the stage runs");
+    assert_eq!(bits(values(&heavy, SURFACE_HEIGHT)), bits(&want));
+    assert_eq!(heavy.sea_level_m.to_bits(), z.to_bits());
 
     // The stage takes the radius and the volume of water from the world:
-    // no water (the lowest height), a water world, Mars's radius with
+    // no water (the lowest height), a water world (the most water
+    // `PlanetParams::validate` allows), Mars's radius with
     // Earth's water (a water world too: a layer 9 km deep on average) and
     // with that water scaled to Mars's area.
     let mars_radius_m = 3.39e6;
@@ -576,7 +580,7 @@ fn the_stage_adds_surface_height_and_sets_the_sea_level() {
         ),
         (
             PlanetParams {
-                ocean_volume_m3: 1e21,
+                ocean_volume_m3: PlanetParams::MAX_OCEAN_VOLUME_M3,
                 ..PlanetParams::earth()
             },
             flooded,
@@ -597,6 +601,7 @@ fn the_stage_adds_surface_height_and_sets_the_sea_level() {
             partly,
         ),
     ] {
+        assert_eq!(params.validate(), Ok(()), "{params:?}");
         let mut other = start(params.clone());
         run(&mut other, &mut |_| {}).expect("the stage runs");
         let heights = values(&other, SURFACE_HEIGHT);

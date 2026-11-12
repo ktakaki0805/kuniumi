@@ -303,8 +303,8 @@ pub fn water_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, leve
 /// - `V ≥ C`, a water world: every cell lies under water, and the rest of
 ///   the water, `V − C`, covers the whole planet as a layer:
 ///   `z = h_max + (V − C) / (Σ a_i R²)`, in closed form. Finite for every
-///   finite volume on a planet of radius 1 m or more (bounds on the radius:
-///   ticket M2-08).
+///   finite volume on a planet of radius 1 m or more, far below the
+///   smallest radius that `PlanetParams::validate` accepts (1,500 km).
 ///
 /// # Panics
 ///

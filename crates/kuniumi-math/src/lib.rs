@@ -9,11 +9,13 @@
 //! - [`vec3`]: a small `f64` 3-vector.
 //! - [`det`]: deterministic replacements for libm functions.
 //! - [`units`]: SI conversion constants for the input/output boundary.
+//! - [`constants`]: physical constants.
 //!
 //! This crate depends on no other kuniumi crate. Its only external dependency
 //! (from ticket M1-01) is the pure-Rust `libm` crate, pinned to an exact
 //! version.
 
+pub mod constants;
 pub mod det;
 pub mod rng;
 pub mod units;

@@ -110,6 +110,14 @@ gravity, rotation, obliquity, orbit and ocean volume. Tidally locked rotation
 and stagnant-lid tectonics are planned for v2: their parameters exist from v1
 and are rejected with `ParamError::Unsupported`. The climate model must not
 hard-code three circulation cells; their number scales with the rotation rate.
+`PlanetParams::validate` bounds the planet (chosen with the owner in M2-08;
+the reasons are with the constants of `PlanetParams`): radius 1,500 to
+13,000 km, surface gravity 1 to 40 m/s², rotation period 8 to 240 h, orbital
+period 90 to 3,650 days, stellar flux 400 to 2,500 W/m², ocean volume 0 to
+10¹¹ km³, surface pressure 0.1 to 10 bar, and a bulk density `3g / (4πGR)`
+of 3,000 to 16,000 kg/m³ (`ParamError::Inconsistent` otherwise). Within these
+bounds every planet rotates slower than break-up, which a compile-time
+assertion over the bounds keeps true instead of a run-time check.
 
 **D-13 Out of scope.** Human geography (civilisations, borders, cities) is not
 part of v1.

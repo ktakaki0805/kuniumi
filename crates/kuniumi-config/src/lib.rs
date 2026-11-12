@@ -38,7 +38,8 @@
 //! the file: `kuniumi_sim::generate` takes it separately.
 //!
 //! [`load`] reads a file and checks it with [`PlanetParams::validate`] and
-//! [`Settings::validate`]; every error names the key, or the line and column
+//! [`Settings::validate`]; every error names the key (both keys for a
+//! radius and gravity that do not fit together), or the line and column
 //! ([`ConfigError`]). [`write()`] writes a file with the SI keys only, and
 //! `load(&write(p, s))` returns `p` and `s` bit for bit.
 //!
@@ -61,7 +62,9 @@ use serde::Deserialize;
 /// not in the format, or a value of the wrong type (including an unknown
 /// regime name); [`ConfigError::BothKeys`] if a quantity is given under both
 /// of its keys; [`ConfigError::Invalid`] if [`PlanetParams::validate`] or,
-/// after it, [`Settings::validate`] rejects a value.
+/// after it, [`Settings::validate`] rejects a value;
+/// [`ConfigError::Inconsistent`] if [`PlanetParams::validate`] rejects a
+/// combination of values.
 pub fn load(text: &str) -> Result<(PlanetParams, Settings), ConfigError> {
     let file: RawFile = toml::from_str(text).map_err(|e| ConfigError::Toml {
         message: e.to_string().trim_end().to_owned(),
@@ -246,6 +249,17 @@ pub enum ConfigError {
         /// above).
         error: ParamError,
     },
+    /// Values, each in range, that do not fit together: a radius and a
+    /// surface gravity whose bulk density is out of range.
+    Inconsistent {
+        /// The keys of the values, with their table, as written in the file
+        /// (the SI key for a value left at Earth's), in field order
+        /// (`["planet.radius_km", "planet.surface_gravity_m_s2"]`).
+        keys: [&'static str; 2],
+        /// What [`PlanetParams::validate`] reported
+        /// ([`ParamError::Inconsistent`], in SI units).
+        error: ParamError,
+    },
 }
 
 impl fmt::Display for ConfigError {
@@ -269,6 +283,18 @@ impl fmt::Display for ConfigError {
                 Ok(())
             }
             Self::Invalid { key, error, .. } => write!(f, "`{key}`: {error}"),
+            Self::Inconsistent {
+                keys: [first, second],
+                error: ParamError::Inconsistent { name, value, .. },
+            } => write!(
+                f,
+                "`{first}` and `{second}` do not fit together: {name} = {} is out of range",
+                number(*value)
+            ),
+            Self::Inconsistent {
+                keys: [first, second],
+                error,
+            } => write!(f, "`{first}` and `{second}`: {error}"),
         }
     }
 }
@@ -491,12 +517,21 @@ fn planet(raw: &RawPlanet) -> Result<PlanetParams, ConfigError> {
             Some(RawTectonics::StagnantLid) => TectonicRegime::StagnantLid,
         },
     };
+    // The value of the field `name`, as read.
+    let field = |name: &str| {
+        picked
+            .iter()
+            .find(|p| p.si_key.strip_prefix("planet.") == Some(name))
+    };
     params.validate().map_err(|error| {
         let (key, written) = match &error {
-            ParamError::OutOfRange { name, value } => picked
-                .iter()
-                .find(|p| p.si_key.strip_prefix("planet.") == Some(*name))
-                .map_or(("planet", Some(*value)), |p| (p.key, Some(p.written))),
+            ParamError::OutOfRange { name, value } => {
+                field(name).map_or(("planet", Some(*value)), |p| (p.key, Some(p.written)))
+            }
+            ParamError::Inconsistent { fields, .. } => {
+                let keys = fields.map(|name| field(name).map_or("planet", |p| p.key));
+                return ConfigError::Inconsistent { keys, error };
+            }
             // `validate` checks the rotation before the tectonics.
             ParamError::Unsupported { .. } => {
                 if params.rotation == RotationRegime::TidallyLocked {
@@ -536,7 +571,7 @@ fn generation(raw: &RawGeneration) -> Result<Settings, ConfigError> {
         // written.
         let written = match &error {
             ParamError::OutOfRange { value, .. } => Some(*value),
-            ParamError::Unsupported { .. } => None,
+            ParamError::Inconsistent { .. } | ParamError::Unsupported { .. } => None,
         };
         ConfigError::Invalid {
             key,

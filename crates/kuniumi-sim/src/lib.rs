@@ -332,6 +332,89 @@ mod tests {
     }
 
     #[test]
+    fn the_bounds_of_the_planet_parameters_generate_finite_worlds() {
+        // Earth, and each of the 2⁷ corners of the box of the bounded fields
+        // (each at its lower or upper bound, the others Earth's), with the
+        // gravity moved just inside the bulk density range where the
+        // corner's radius and gravity do not fit together (ticket M2-08):
+        // at 13,000 km, 1 m/s² becomes 10.9 m/s² (3,000 kg/m³); at
+        // 1,500 km, 1 m/s² becomes 1.26 and 40 m/s² 6.71 (3,000 and
+        // 16,000 kg/m³).
+        let earth = PlanetParams::earth();
+        let bounds = [
+            (PlanetParams::MIN_RADIUS_M, PlanetParams::MAX_RADIUS_M),
+            (
+                PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
+                PlanetParams::MAX_SURFACE_GRAVITY_M_S2,
+            ),
+            (
+                PlanetParams::MIN_ROTATION_PERIOD_S,
+                PlanetParams::MAX_ROTATION_PERIOD_S,
+            ),
+            (
+                PlanetParams::MIN_ORBITAL_PERIOD_S,
+                PlanetParams::MAX_ORBITAL_PERIOD_S,
+            ),
+            (
+                PlanetParams::MIN_STELLAR_FLUX_W_M2,
+                PlanetParams::MAX_STELLAR_FLUX_W_M2,
+            ),
+            (0.0, PlanetParams::MAX_OCEAN_VOLUME_M3),
+            (
+                PlanetParams::MIN_SURFACE_PRESSURE_PA,
+                PlanetParams::MAX_SURFACE_PRESSURE_PA,
+            ),
+        ];
+        let mut planets = vec![earth.clone()];
+        for corner in 0..1_u32 << bounds.len() {
+            let [r, g, rotation, orbit, flux, ocean, pressure] = core::array::from_fn(|k| {
+                let (lo, hi) = bounds[k];
+                if corner >> k & 1 == 0 { lo } else { hi }
+            });
+            let mut p = PlanetParams {
+                radius_m: r,
+                surface_gravity_m_s2: g,
+                rotation_period_s: rotation,
+                orbital_period_s: orbit,
+                stellar_flux_w_m2: flux,
+                ocean_volume_m3: ocean,
+                surface_pressure_pa: pressure,
+                ..earth.clone()
+            };
+            // The density is proportional to the gravity at a fixed radius.
+            let density = p.bulk_density_kg_m3();
+            if density < PlanetParams::MIN_BULK_DENSITY_KG_M3 {
+                p.surface_gravity_m_s2 *=
+                    PlanetParams::MIN_BULK_DENSITY_KG_M3 / density * (1.0 + 1e-12);
+            } else if density > PlanetParams::MAX_BULK_DENSITY_KG_M3 {
+                p.surface_gravity_m_s2 *=
+                    PlanetParams::MAX_BULK_DENSITY_KG_M3 / density * (1.0 - 1e-12);
+            }
+            assert_eq!(p.validate(), Ok(()), "{p:?}");
+            planets.push(p);
+        }
+        let settings = Settings {
+            cells: 1_000,
+            allow_partial: true,
+            ..Settings::default()
+        };
+        for p in &planets {
+            let world = generate(p, &settings, 3, &mut |_| {}).expect("a partial world");
+            assert_eq!(world.stages, ["grid", "tectonics", "crust"], "{p:?}");
+            // Checked here as well as by the runner's debug assertion, so
+            // that release builds check it too.
+            assert!(world.sea_level_m.is_finite(), "{p:?}");
+            for field in &world.fields {
+                assert!(
+                    field.values.iter().all(|v| v.is_finite()),
+                    "{}: {p:?}",
+                    field.name
+                );
+            }
+        }
+    }
+
+    #[test]
     fn next_stage_is_the_first_stage_not_run() {
         let mut world = generate(
             &PlanetParams::earth(),

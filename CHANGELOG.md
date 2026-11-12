@@ -351,6 +351,22 @@ section: every change after which an existing seed produces a different world
   (M2-06).
 - `kuniumi params` prints the settings file of Earth with the default
   settings (TOML, SI keys) in place of its aligned listing (M2-07).
+- `PlanetParams::validate` bounds the planet to the Earth-like range of
+  D-12 instead of accepting any positive finite value (any non-negative
+  ocean volume): radius 1,500 to 13,000 km, surface gravity 1 to 40 m/s²,
+  rotation period 8 to 240 h, orbital period 90 to 3,650 days, stellar flux
+  400 to 2,500 W/m², ocean volume 0 to 10¹¹ km³, surface pressure 0.1 to
+  10 bar (the `MIN_` and `MAX_` constants of `PlanetParams`), and the bulk
+  density of the radius and gravity (`PlanetParams::bulk_density_kg_m3`,
+  `3g / (4πGR)`) 3,000 to 16,000 kg/m³, reported as the new
+  `ParamError::Inconsistent` and, from settings files, the new
+  `ConfigError::Inconsistent` naming both keys as written. Parameters
+  outside these bounds that were accepted before, such as Mars's surface
+  pressure (0.006 bar) or a 13,000 km planet with Earth's gravity, are now
+  rejected; worlds within them are unchanged. A compile-time assertion
+  keeps every planet within the bounds slower than break-up. New
+  `kuniumi_math::constants::GRAVITATIONAL_CONSTANT_M3_KG_S2` (CODATA 2018)
+  (M2-08).
 
 ### Removed
 

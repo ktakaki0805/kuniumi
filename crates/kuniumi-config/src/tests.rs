@@ -110,9 +110,20 @@ fn earth_round_trips_bit_exactly() {
     assert_same(&ok(EARTH), &p, &s, EARTH);
 }
 
+/// The next double above the positive finite `v`.
+fn next_up(v: f64) -> f64 {
+    f64::from_bits(v.to_bits() + 1)
+}
+
+/// The next double below the positive finite `v`.
+fn next_down(v: f64) -> f64 {
+    f64::from_bits(v.to_bits() - 1)
+}
+
 /// Planets of awkward numbers, each valid: the extremes of every range,
-/// subnormals, −0 where zero is allowed, 17-digit values and numbers whose
-/// shortest decimal needs an exponent.
+/// subnormals and −0 where zero is allowed (the ocean volume, the
+/// obliquity, the eccentricity and the continental fraction), 17-digit
+/// values and numbers whose shortest decimal needs an exponent.
 fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
     let earth = PlanetParams::earth();
     let tiny = f64::from_bits(1); // 5e-324
@@ -120,15 +131,16 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
     vec![
         (
             PlanetParams {
-                radius_m: tiny,
-                surface_gravity_m_s2: f64::MAX,
-                rotation_period_s: f64::MIN_POSITIVE,
+                radius_m: PlanetParams::MIN_RADIUS_M,
+                // 3.0000000000000004: 7,154 kg/m³ at 1,500 km.
+                surface_gravity_m_s2: (0.1 + 0.2) * 10.0,
+                rotation_period_s: PlanetParams::MIN_ROTATION_PERIOD_S,
                 obliquity_rad: -0.0,
-                orbital_period_s: 1e23,
+                orbital_period_s: PlanetParams::MIN_ORBITAL_PERIOD_S,
                 orbital_eccentricity: -0.0,
-                stellar_flux_w_m2: 1.0 / 3.0,
+                stellar_flux_w_m2: 4_000.0 / 3.0,
                 ocean_volume_m3: -0.0,
-                surface_pressure_pa: largest_subnormal,
+                surface_pressure_pa: PlanetParams::MIN_SURFACE_PRESSURE_PA,
                 continental_crust_fraction: -0.0,
                 ..earth.clone()
             },
@@ -140,15 +152,16 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
         ),
         (
             PlanetParams {
-                radius_m: f64::MAX,
-                surface_gravity_m_s2: tiny,
-                rotation_period_s: 1e16,
+                radius_m: PlanetParams::MAX_RADIUS_M,
+                // 11,006 kg/m³ at 13,000 km.
+                surface_gravity_m_s2: PlanetParams::MAX_SURFACE_GRAVITY_M_S2,
+                rotation_period_s: PlanetParams::MAX_ROTATION_PERIOD_S,
                 obliquity_rad: core::f64::consts::PI,
-                orbital_period_s: 1e-5,
+                orbital_period_s: PlanetParams::MAX_ORBITAL_PERIOD_S,
                 orbital_eccentricity: 0.99,
-                stellar_flux_w_m2: 9_007_199_254_740_992.0, // 2^53
-                ocean_volume_m3: f64::MAX,
-                surface_pressure_pa: 0.1 + 0.2,
+                stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
+                ocean_volume_m3: PlanetParams::MAX_OCEAN_VOLUME_M3, // 1e20
+                surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
                 continental_crust_fraction: 1.0,
                 ..earth.clone()
             },
@@ -160,16 +173,16 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
         ),
         (
             PlanetParams {
-                radius_m: 9_999_999_999_999_998.0, // just below 1e16
-                surface_gravity_m_s2: 1.000_000_000_000_000_2,
-                rotation_period_s: 9.999_999_999_999_999e-6,
+                radius_m: next_up(earth.radius_m),
+                surface_gravity_m_s2: next_up(earth.surface_gravity_m_s2),
+                rotation_period_s: next_down(earth.rotation_period_s),
                 obliquity_rad: tiny,
-                orbital_period_s: 123_456_789_012_345_680.0,
+                orbital_period_s: 123_456_789.012_345_68,
                 orbital_eccentricity: tiny,
-                stellar_flux_w_m2: 2.225_073_858_507_201e-308,
-                ocean_volume_m3: 0.0,
-                surface_pressure_pa: 1e-300,
-                continental_crust_fraction: 0.0,
+                stellar_flux_w_m2: next_down(PlanetParams::MAX_STELLAR_FLUX_W_M2),
+                ocean_volume_m3: tiny,
+                surface_pressure_pa: next_up(PlanetParams::MIN_SURFACE_PRESSURE_PA),
+                continental_crust_fraction: largest_subnormal,
                 ..earth
             },
             Settings {
@@ -196,29 +209,50 @@ fn within(rng: &mut Rng, lo: f64, hi: f64) -> f64 {
     }
 }
 
-/// A random valid planet with random settings.
+/// A random valid planet with random settings: every float within its
+/// bounds, and a radius and gravity whose bulk density is in range.
 fn random_planet(rng: &mut Rng) -> (PlanetParams, Settings) {
-    fn positive(rng: &mut Rng) -> f64 {
-        loop {
-            let v = within(rng, 0.0, f64::MAX);
-            if v > 0.0 {
-                return v;
-            }
+    let p = loop {
+        let p = PlanetParams {
+            radius_m: within(rng, PlanetParams::MIN_RADIUS_M, PlanetParams::MAX_RADIUS_M),
+            surface_gravity_m_s2: within(
+                rng,
+                PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
+                PlanetParams::MAX_SURFACE_GRAVITY_M_S2,
+            ),
+            rotation_period_s: within(
+                rng,
+                PlanetParams::MIN_ROTATION_PERIOD_S,
+                PlanetParams::MAX_ROTATION_PERIOD_S,
+            ),
+            obliquity_rad: within(rng, 0.0, core::f64::consts::PI),
+            orbital_period_s: within(
+                rng,
+                PlanetParams::MIN_ORBITAL_PERIOD_S,
+                PlanetParams::MAX_ORBITAL_PERIOD_S,
+            ),
+            orbital_eccentricity: within(rng, 0.0, 0.99),
+            stellar_flux_w_m2: within(
+                rng,
+                PlanetParams::MIN_STELLAR_FLUX_W_M2,
+                PlanetParams::MAX_STELLAR_FLUX_W_M2,
+            ),
+            ocean_volume_m3: within(rng, 0.0, PlanetParams::MAX_OCEAN_VOLUME_M3),
+            surface_pressure_pa: within(
+                rng,
+                PlanetParams::MIN_SURFACE_PRESSURE_PA,
+                PlanetParams::MAX_SURFACE_PRESSURE_PA,
+            ),
+            continental_crust_fraction: within(rng, 0.0, 1.0),
+            rotation: RotationRegime::Free,
+            tectonics: TectonicRegime::PlateTectonics,
+        };
+        let rho = p.bulk_density_kg_m3();
+        if (PlanetParams::MIN_BULK_DENSITY_KG_M3..=PlanetParams::MAX_BULK_DENSITY_KG_M3)
+            .contains(&rho)
+        {
+            break p;
         }
-    }
-    let p = PlanetParams {
-        radius_m: positive(rng),
-        surface_gravity_m_s2: positive(rng),
-        rotation_period_s: positive(rng),
-        obliquity_rad: within(rng, 0.0, core::f64::consts::PI),
-        orbital_period_s: positive(rng),
-        orbital_eccentricity: within(rng, 0.0, 0.99),
-        stellar_flux_w_m2: positive(rng),
-        ocean_volume_m3: within(rng, 0.0, f64::MAX),
-        surface_pressure_pa: positive(rng),
-        continental_crust_fraction: within(rng, 0.0, 1.0),
-        rotation: RotationRegime::Free,
-        tectonics: TectonicRegime::PlateTectonics,
     };
     let span = |lo: u32, hi: u32| u64::from(hi - lo) + 1;
     let s = Settings {
@@ -371,26 +405,281 @@ surface_pressure_bar = 1.01325
     assert_eq!(p.obliquity_rad.to_bits(), core::f64::consts::PI.to_bits());
     assert_eq!(p.ocean_volume_m3.to_bits(), 0.0_f64.to_bits());
 
-    // Mars-like values: 3,389.5 km = 3,389,500 m exactly; from Python,
+    // Mars-like values, with a thicker air than Mars's 0.006 bar, which
+    // is below the bounds: 3,389.5 km = 3,389,500 m exactly; from Python,
     // repr(24.6229 * 3600.0), repr(25.19 * (math.pi / 180)),
-    // repr(686.98 * 86400.0), repr(0.006 * 1e5).
+    // repr(686.98 * 86400.0), repr(0.7 * 1e5).
     let (p, _) = ok("\
 [planet]
 radius_km = 3389.5
+surface_gravity_m_s2 = 3.721
 rotation_period_h = 24.6229
 obliquity_deg = 25.19
 orbital_period_days = 686.98
-surface_pressure_bar = 0.006
+surface_pressure_bar = 0.7
 ");
     let expected = PlanetParams {
         radius_m: 3_389_500.0,
+        surface_gravity_m_s2: 3.721,
         rotation_period_s: 88_642.44,
         obliquity_rad: 0.439_648_438_577_371_6,
         orbital_period_s: 59_355_072.0,
-        surface_pressure_pa: 600.0,
+        surface_pressure_pa: 70_000.0,
         ..PlanetParams::earth()
     };
     assert_eq!(bits(&p), bits(&expected));
+}
+
+#[test]
+fn the_bounds_in_human_units_load_to_the_si_bounds() {
+    // Each bound, written as a round number under its human-unit key,
+    // loads to the constant bit for bit. The radius and gravity keep a
+    // bulk density in range: 2.5 m/s² at 1,500 km is 5,962 kg/m³, 20 m/s²
+    // at 13,000 km 5,503 kg/m³ (hand calculation, 3g / (4πGR)).
+    let get = |p: &PlanetParams, key: &str| match key {
+        "radius_km" => p.radius_m,
+        "rotation_period_h" => p.rotation_period_s,
+        "orbital_period_days" => p.orbital_period_s,
+        "ocean_volume_km3" => p.ocean_volume_m3,
+        "surface_pressure_bar" => p.surface_pressure_pa,
+        "surface_gravity_m_s2" => p.surface_gravity_m_s2,
+        "stellar_flux_w_m2" => p.stellar_flux_w_m2,
+        _ => unreachable!("{key}"),
+    };
+    for (line, key, bound) in [
+        (
+            "radius_km = 1500\nsurface_gravity_m_s2 = 2.5",
+            "radius_km",
+            PlanetParams::MIN_RADIUS_M,
+        ),
+        (
+            "radius_km = 13000\nsurface_gravity_m_s2 = 20",
+            "radius_km",
+            PlanetParams::MAX_RADIUS_M,
+        ),
+        (
+            "radius_km = 13000\nsurface_gravity_m_s2 = 40",
+            "surface_gravity_m_s2",
+            PlanetParams::MAX_SURFACE_GRAVITY_M_S2,
+        ),
+        (
+            "rotation_period_h = 8",
+            "rotation_period_h",
+            PlanetParams::MIN_ROTATION_PERIOD_S,
+        ),
+        (
+            "rotation_period_h = 240",
+            "rotation_period_h",
+            PlanetParams::MAX_ROTATION_PERIOD_S,
+        ),
+        (
+            "orbital_period_days = 90",
+            "orbital_period_days",
+            PlanetParams::MIN_ORBITAL_PERIOD_S,
+        ),
+        (
+            "orbital_period_days = 3650",
+            "orbital_period_days",
+            PlanetParams::MAX_ORBITAL_PERIOD_S,
+        ),
+        (
+            "stellar_flux_w_m2 = 400",
+            "stellar_flux_w_m2",
+            PlanetParams::MIN_STELLAR_FLUX_W_M2,
+        ),
+        (
+            "stellar_flux_w_m2 = 2500",
+            "stellar_flux_w_m2",
+            PlanetParams::MAX_STELLAR_FLUX_W_M2,
+        ),
+        (
+            "ocean_volume_km3 = 1e11",
+            "ocean_volume_km3",
+            PlanetParams::MAX_OCEAN_VOLUME_M3,
+        ),
+        (
+            "surface_pressure_bar = 0.1",
+            "surface_pressure_bar",
+            PlanetParams::MIN_SURFACE_PRESSURE_PA,
+        ),
+        (
+            "surface_pressure_bar = 10",
+            "surface_pressure_bar",
+            PlanetParams::MAX_SURFACE_PRESSURE_PA,
+        ),
+    ] {
+        let text = format!("[planet]\n{line}\n");
+        let (p, _) = ok(&text);
+        assert_eq!(get(&p, key).to_bits(), bound.to_bits(), "{text}");
+    }
+    // Just beyond a bound, the error names the key as written; the SI
+    // value is the written number times the unit (`kuniumi_math::units`).
+    for (line, key, written, name, factor) in [
+        (
+            "radius_km = 1499.999\nsurface_gravity_m_s2 = 2.5",
+            "planet.radius_km",
+            1_499.999,
+            "radius_m",
+            1e3,
+        ),
+        (
+            "radius_km = 13000.001\nsurface_gravity_m_s2 = 20",
+            "planet.radius_km",
+            13_000.001,
+            "radius_m",
+            1e3,
+        ),
+        (
+            "surface_gravity_m_s2 = 0.999",
+            "planet.surface_gravity_m_s2",
+            0.999,
+            "surface_gravity_m_s2",
+            1.0,
+        ),
+        (
+            "surface_gravity_m_s2 = 40.001",
+            "planet.surface_gravity_m_s2",
+            40.001,
+            "surface_gravity_m_s2",
+            1.0,
+        ),
+        (
+            "rotation_period_h = 7.999",
+            "planet.rotation_period_h",
+            7.999,
+            "rotation_period_s",
+            3_600.0,
+        ),
+        (
+            "rotation_period_h = 240.001",
+            "planet.rotation_period_h",
+            240.001,
+            "rotation_period_s",
+            3_600.0,
+        ),
+        (
+            "orbital_period_days = 89.999",
+            "planet.orbital_period_days",
+            89.999,
+            "orbital_period_s",
+            86_400.0,
+        ),
+        (
+            "orbital_period_days = 3650.001",
+            "planet.orbital_period_days",
+            3_650.001,
+            "orbital_period_s",
+            86_400.0,
+        ),
+        (
+            "stellar_flux_w_m2 = 399.999",
+            "planet.stellar_flux_w_m2",
+            399.999,
+            "stellar_flux_w_m2",
+            1.0,
+        ),
+        (
+            "stellar_flux_w_m2 = 2500.001",
+            "planet.stellar_flux_w_m2",
+            2_500.001,
+            "stellar_flux_w_m2",
+            1.0,
+        ),
+        (
+            "ocean_volume_km3 = 1.000001e11",
+            "planet.ocean_volume_km3",
+            1.000_001e11,
+            "ocean_volume_m3",
+            1e9,
+        ),
+        (
+            "surface_pressure_bar = 0.0999",
+            "planet.surface_pressure_bar",
+            0.0999,
+            "surface_pressure_pa",
+            1e5,
+        ),
+        (
+            "surface_pressure_bar = 10.001",
+            "planet.surface_pressure_bar",
+            10.001,
+            "surface_pressure_pa",
+            1e5,
+        ),
+    ] {
+        let text = format!("[planet]\n{line}\n");
+        assert_eq!(
+            err(&text),
+            ConfigError::Invalid {
+                key,
+                written: Some(written),
+                error: ParamError::OutOfRange {
+                    name,
+                    value: written * factor,
+                },
+            },
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_radius_and_gravity_that_do_not_fit_name_both_keys() {
+    // The keys as written, in field order, with Earth's gravity when the
+    // file leaves it out. Densities from Python,
+    // repr(3 * g / (4 * math.pi * 6.6743e-11 * r)).
+    for (text, keys, density, message) in [
+        (
+            "[planet]\nradius_km = 13000\n",
+            ["planet.radius_km", "planet.surface_gravity_m_s2"],
+            2_698.254_998_805_064,
+            "`planet.radius_km` and `planet.surface_gravity_m_s2` do not fit together: \
+             bulk_density_kg_m3 = 2698.254998805064 is out of range",
+        ),
+        (
+            "[planet]\nsurface_gravity_m_s2 = 1.0\nradius_m = 1.5e6\n",
+            ["planet.radius_m", "planet.surface_gravity_m_s2"],
+            2_384.593_786_492_896,
+            "`planet.radius_m` and `planet.surface_gravity_m_s2` do not fit together: \
+             bulk_density_kg_m3 = 2384.593786492896 is out of range",
+        ),
+        (
+            "[planet]\nradius_km = 1500\nsurface_gravity_m_s2 = 7\n",
+            ["planet.radius_km", "planet.surface_gravity_m_s2"],
+            16_692.156_505_450_27,
+            "`planet.radius_km` and `planet.surface_gravity_m_s2` do not fit together: \
+             bulk_density_kg_m3 = 16692.15650545027 is out of range",
+        ),
+    ] {
+        let e = err(text);
+        match &e {
+            ConfigError::Inconsistent {
+                keys: k,
+                error:
+                    ParamError::Inconsistent {
+                        name: "bulk_density_kg_m3",
+                        value,
+                        fields: ["radius_m", "surface_gravity_m_s2"],
+                    },
+            } => {
+                assert_eq!(*k, keys, "{text}");
+                assert!(
+                    ((value - density) / density).abs() < 1e-12,
+                    "{text}: {value}"
+                );
+            }
+            e => panic!("{e:?} from\n{text}"),
+        }
+        assert_eq!(e.to_string(), message, "{text}");
+    }
+    // A field out of its own bounds is reported first.
+    assert!(matches!(
+        err("[planet]\nradius_km = 13000\nsurface_gravity_m_s2 = 0.5\n"),
+        ConfigError::Invalid {
+            key: "planet.surface_gravity_m_s2",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -399,9 +688,9 @@ fn float_keys_accept_integers() {
     assert_eq!(p.radius_m.to_bits(), 6_371_000.0_f64.to_bits());
     assert_eq!(p.ocean_volume_m3.to_bits(), 0.0_f64.to_bits());
     // The largest TOML integer becomes the nearest float, 2^63.
-    let (p, _) = ok("[planet]\nradius_m = 9223372036854775807\n");
+    let (p, _) = ok("[planet]\nocean_volume_m3 = 9223372036854775807\n");
     assert_eq!(
-        p.radius_m.to_bits(),
+        p.ocean_volume_m3.to_bits(),
         9_223_372_036_854_775_808.0_f64.to_bits()
     );
 }

@@ -621,6 +621,12 @@ fn generate_reports_a_bad_planet_file_and_writes_nothing() {
         "generate_bad_planet_both",
         "[planet]\nradius_m = 1.0\nradius_km = 1.0\n",
     );
+    // Earth's gravity on a planet of 13,000 km: 2,698 kg/m³, below the
+    // densities of rocky planets.
+    let inconsistent = settings_file(
+        "generate_bad_planet_density",
+        "[planet]\nradius_km = 13000\n",
+    );
     // What follows `error: <path>: `: its start, and a part of it.
     for (path, start, part) in [
         // The message of the operating system (error 2 on Unix and Windows).
@@ -639,6 +645,12 @@ fn generate_reports_a_bad_planet_file_and_writes_nothing() {
             &both,
             "`planet.radius_m` and `planet.radius_km` are the same quantity; give one of them\n",
             "",
+        ),
+        (
+            &inconsistent,
+            "`planet.radius_km` and `planet.surface_gravity_m_s2` do not fit together: \
+             bulk_density_kg_m3 = 2698.",
+            " is out of range\n",
         ),
     ] {
         let dir = scratch("generate_bad_planet_file_out");
