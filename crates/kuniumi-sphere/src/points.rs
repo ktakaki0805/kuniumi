@@ -33,8 +33,8 @@
 //!
 //! # Determinism
 //!
-//! The angle `i · g` is reduced with `%` by [`TAU`](core::f64::consts::TAU)
-//! before [`det::sin_cos`], so arguments stay below 2π. `%` on `f64`
+//! The angle `i · g` is reduced with `%` by [`TAU`] before
+//! [`det::sin_cos`], so arguments stay below 2π. `%` on `f64`
 //! compiles to LLVM's `frem`, which gives "the same output as a libm `fmod`
 //! function" (LLVM Language Reference); on x86_64 Linux it calls the `fmod`
 //! of Rust's `compiler_builtins`. The result of `fmod` is exact (C11 Annex

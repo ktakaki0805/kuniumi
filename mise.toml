@@ -4,8 +4,9 @@
 min_version = "2026.11.0"
 
 [tools]
-# Development toolchain. Pinned so that new clippy lints and rustfmt changes
-# arrive only when the pin is raised on purpose, in its own commit.
+# Development toolchain. Pinned so that new clippy and rustdoc lints and
+# rustfmt changes arrive only when the pin is raised on purpose, in its own
+# commit.
 rust = { version = "1.97.0", components = ["rustfmt", "clippy"] }
 cargo-deny = "0.20.2"
 # Python for the development scripts under tools/ only (D-11); their packages
@@ -23,6 +24,11 @@ run = "cargo fmt --all --check"
 [tasks.clippy]
 description = "Lint, warnings are errors"
 run = "cargo clippy --workspace --all-targets --locked -- -D warnings"
+
+[tasks.doc]
+description = "Build the documentation, warnings are errors"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --workspace --no-deps --locked"
 
 [tasks.test-debug]
 description = "Tests in debug mode"
@@ -48,8 +54,8 @@ description = "Licences, banned crates and sources (D-10)"
 run = "cargo deny check"
 
 [tasks.check]
-description = "fmt, clippy and tests in debug and release"
-run = [{ task = "fmt" }, { task = "clippy" }, { task = "test" }]
+description = "fmt, clippy, doc and tests in debug and release"
+run = [{ task = "fmt" }, { task = "clippy" }, { task = "doc" }, { task = "test" }]
 
 [tasks.ci]
 description = "The gate for every change: check, msrv, deny"

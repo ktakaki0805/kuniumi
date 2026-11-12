@@ -4,7 +4,7 @@
 //!
 //! - [`Colormap::Viridis`], perceptually uniform and sequential: viridis by
 //!   Nathaniel J. Smith, Stefan van der Walt and Eric Firing (2015), released
-//!   under CC0. [`VIRIDIS`] holds every 5th of the 256 entries of
+//!   under CC0. `VIRIDIS` holds every 5th of the 256 entries of
 //!   `_viridis_data` in `colormaps.py` of the BIDS colormap project
 //!   (<https://github.com/BIDS/colormap>, commit `bc549477`; the table
 //!   matplotlib ships), so 52 control points at `t = k/51`. Interpolated

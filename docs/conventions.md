@@ -165,7 +165,8 @@ tolerances.
 ## Code style
 
 - Formatted by `mise run format`; `mise run ci` passes (rustfmt check, clippy
-  with `-D warnings`, tests in debug and release, MSRV, cargo-deny).
+  with `-D warnings`, `cargo doc` with `-D warnings`, tests in debug and
+  release, MSRV, cargo-deny).
 - `unsafe` is forbidden.
 - Every public item has a doc comment. Physics code cites its source (paper and
   equation) and documents each parameter with its SI unit and Earth value.

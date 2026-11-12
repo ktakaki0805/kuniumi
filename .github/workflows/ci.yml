@@ -26,6 +26,7 @@ jobs:
       - uses: jdx/mise-action@v5
       - run: mise run fmt
       - run: mise run clippy
+      - run: mise run doc
 
   test-linux:
     if: github.event_name != 'schedule'

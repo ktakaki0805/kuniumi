@@ -177,11 +177,13 @@ produces a different world. Each ticket's commit updates it.
 **D-23 Development environment.** [mise](https://mise.jdx.dev) pins the tools
 in `mise.toml`: the development Rust toolchain (with rustfmt and clippy), Rust
 1.85.0 for the MSRV check, and cargo-deny. `mise install` sets up a machine.
-`mise run check` runs fmt, clippy and the tests in debug and release;
-`mise run ci` adds the MSRV build and cargo-deny and is the gate for every
-change. The development toolchain is raised on purpose, in its own commit,
-because new clippy lints and rustfmt changes arrive with it; a toolchain change
-must not change any golden value (D-08).
+`mise run check` runs fmt, clippy, the documentation build (`mise run doc`:
+`cargo doc --workspace --no-deps` with warnings as errors, added by M2-09) and
+the tests in debug and release; `mise run ci` adds the MSRV build and
+cargo-deny and is the gate for every change. The development toolchain is
+raised on purpose, in its own commit, because new clippy and rustdoc lints and
+rustfmt changes arrive with it; a toolchain change must not change any golden
+value (D-08).
 
 **D-24 MSRV.** `rust-version = "1.85"` (the edition 2024 minimum), checked by
 `mise run msrv`. Raising it is recorded here.
@@ -189,10 +191,10 @@ must not change any golden value (D-08).
 **D-25 CI.** In a private repository Actions minutes are billed against the
 account's included amount (GitHub Free: USD 12 per month; macOS minutes cost
 about ten times Linux minutes). Every push runs the Linux checks (fmt, clippy,
-tests in debug and release, MSRV, cargo-deny) on Linux x86_64; the release
-tests on Linux ARM64, macOS and Windows run weekly and on demand. Every job
-installs its tools with `jdx/mise-action` and runs the mise tasks of D-23, so
-CI and local checks use the same toolchains and commands.
+rustdoc, tests in debug and release, MSRV, cargo-deny) on Linux x86_64; the
+release tests on Linux ARM64, macOS and Windows run weekly and on demand. Every
+job installs its tools with `jdx/mise-action` and runs the mise tasks of D-23,
+so CI and local checks use the same toolchains and commands.
 
 ## Open questions
 

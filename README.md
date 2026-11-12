@@ -58,7 +58,7 @@ For development, the toolchains and tools are pinned in `mise.toml` for
 
 ```sh
 mise install    # set up the pinned tools
-mise run ci     # formatting, lints, tests, MSRV build and licence checks
+mise run ci     # formatting, lints, docs, tests, MSRV build and licence checks
 ```
 
 ## Layout

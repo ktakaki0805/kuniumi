@@ -259,6 +259,10 @@ section: every change after which an existing seed produces a different world
   `bar_to_pa` and their constants (M2-07).
 - `kuniumi generate --planet FILE` reads a settings file; `--cells` replaces
   the file's `cells` and no longer has a default of its own (M2-07).
+- The mise task `doc`: `cargo doc --workspace --no-deps --locked` with
+  warnings as errors (`RUSTDOCFLAGS="-D warnings"`). `mise run check`, and
+  so `mise run ci`, runs it, and so does the `lint` job of the CI workflow
+  (M2-09).
 
 ### Changed
 
@@ -371,6 +375,13 @@ section: every change after which an existing seed produces a different world
 ### Removed
 
 - The hand-written argument parser and usage text of the CLI (M1-09).
+
+### Fixed
+
+- The two rustdoc warnings of the workspace: the public documentation of
+  `kuniumi_io::colormap` no longer links to the private `VIRIDIS`, and that
+  of `kuniumi_sphere::points` no longer spells out the target of its `TAU`
+  link, which resolves to `core::f64::consts::TAU` as before (M2-09).
 
 ### World-breaking
 
