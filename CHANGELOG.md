@@ -383,6 +383,19 @@ section: every change after which an existing seed produces a different world
   10,000 cells and 43–205 at 100,000 for Earth's 40 %. Larger enclosed seas
   are kept. The ocean regions of `margin_distances` come from the same
   helper, unchanged (M2-10).
+- The ocean floor of a plate without a divergent cell is no longer
+  180 Myr old everywhere: it is ranked after all floor that a ridge
+  reaches, by its distance from its plate's boundary (the new
+  `ridgeless_distances`; `earth_area_age` takes these distances as a fourth
+  argument), so it takes the oldest part of Earth's area–age distribution,
+  older away from the boundary; the trench rule is unchanged. No ocean
+  floor is at 180 Myr any more and the mean age is 60 Myr in every world:
+  at 650,000 cells (seeds 1–10) such plates hold 10.3–14.7 % of the ocean
+  floor in seeds 3, 6, 9 and 10, now 111–122 Myr old at their boundary and
+  close to 180 Myr inside; in these four worlds the mean ocean-floor age
+  falls from 72–78 Myr to 60.0 Myr, the sea level rises from between −819
+  and −892 m to between −689 and −726 m, and the land fraction falls from
+  29.4–31.4 % to 28.5–30.8 % (M2-12).
 
 ### Removed
 
@@ -397,6 +410,11 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M2-12: `crust_age` changes in every world with a plate without a
+  divergent cell (4 of seeds 1–10 at 650,000 cells, 4 at 10,000 cells, the
+  golden world among them), and with it `surface_height` and the sea
+  level; the ages of the other worlds, the plates, continents, boundaries,
+  thickness, uplift and `trench` are unchanged.
 - M2-11: `crust_thickness`, `crust_age` and `trench` change for every seed
   (thinned margins, the time-nearest ridge and Earth's area–age
   distribution); the plates, continents, boundaries and `uplift_rate` are

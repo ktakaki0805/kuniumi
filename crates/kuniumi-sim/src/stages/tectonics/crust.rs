@@ -1,14 +1,15 @@
 //! Crust thickness, ocean-floor age, uplift rate and trenches for the
-//! one-shot tectonics (tickets M2-04 and M2-11; design: プレートテクトニクス /
-//! 境界ごとの処理, 地殻から標高へ).
+//! one-shot tectonics (tickets M2-04, M2-11 and M2-12; design:
+//! プレートテクトニクス / 境界ごとの処理, 地殻から標高へ).
 //!
 //! Without time evolution, each cell gets its crust from its distance to the
 //! boundaries and coasts of its own plate: ocean floor ages away from the
 //! divergent boundaries at their half spreading rate, with Earth's
-//! distribution of area by age; continental crust thins towards the open
-//! ocean and continental rifts (margins, mostly under the sea), thickens
-//! near collisions and inland of subduction zones, and rises there. M6
-//! replaces this with the history of the plates.
+//! distribution of area by age, and the floor of a plate without a ridge is
+//! the oldest, older away from its plate's boundary; continental crust
+//! thins towards the open ocean and continental rifts (margins, mostly
+//! under the sea), thickens near collisions and inland of subduction zones,
+//! and rises there. M6 replaces this with the history of the plates.
 
 use core::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -222,7 +223,8 @@ impl Eq for Front {}
 /// their neighbours, as in clusters of slow cells near a relative pole
 /// (ticket M2-11 measures them; M2-13). Paths pass through any cell of the
 /// plate, continental cells included, as in ticket M2-04; cells of a plate
-/// without a divergent cell are not reached.
+/// without a divergent cell are not reached (their age comes from
+/// [`ridgeless_distances`], ticket M2-12).
 ///
 /// # Panics
 ///
@@ -289,8 +291,9 @@ pub fn ridge_times(
 }
 
 /// The age (s) of every cell of `grid` from the times of [`ridge_times`]
-/// (`time_s`), with the area–age distribution of Earth's ocean floor
-/// (ticket M2-11).
+/// (`time_s`) and the distances of [`ridgeless_distances`]
+/// (`ridgeless_m`), with the area–age distribution of Earth's ocean floor
+/// (tickets M2-11 and M2-12).
 ///
 /// On Earth the area of ocean floor falls off linearly with its age,
 /// `dA/dt ∝ 1 − t/t_max`, to the oldest floor at `t_max`: the triangular
@@ -302,19 +305,31 @@ pub fn ridge_times(
 /// Earth's (79–144 Myr; ticket M2-04): the ages keep the order of the
 /// times, and the distribution is Earth's.
 ///
-/// The oceanic cells (`continental` false) with a finite time are sorted by
-/// time, then index; with `A` their area (summed in that order), `A_<i` the
-/// area of the cells before cell `i` and `a_i` its own,
-/// `G_i = (A_<i + a_i/2) / A` is the middle of the cell's share of the
-/// area, and its age is the inverse of the cumulative distribution
-/// `F(t) = 1 − (1 − t/t_max)²` there: `t_max (1 − √(1 − G_i))`. Ridge cells
-/// (time 0) are `+0`, at the front of the order. Continental cells and
-/// oceanic cells without a ridge on their plate are `t_max` old.
+/// The oceanic cells (`continental` false) are put in one order: first
+/// those with a finite time, sorted by time, then index; then the floor of
+/// plates without a ridge, those with an infinite time and a finite
+/// distance, sorted by distance, then index (chosen with the owner, ticket
+/// M2-12: floor whose ridge is gone is older than all floor with an active
+/// ridge, and older the farther it lies from its plate's boundary). With
+/// `A` their area (summed in that order), `A_<i` the area of the cells
+/// before cell `i` and `a_i` its own, `G_i = (A_<i + a_i/2) / A` is the
+/// middle of the cell's share of the area, and its age is the inverse of
+/// the cumulative distribution `F(t) = 1 − (1 − t/t_max)²` there:
+/// `t_max (1 − √(1 − G_i))`. Ridge cells (time 0) are `+0`, at the front of
+/// the order. Continental cells, and oceanic cells with neither a finite
+/// time nor a finite distance (none from [`crust`], unless a spreading
+/// rate underflows), are `t_max` old.
 ///
 /// # Panics
 ///
-/// If `continental` or `time_s` do not hold one value per cell of `grid`.
-pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -> Vec<f64> {
+/// If `continental`, `time_s` or `ridgeless_m` do not hold one value per
+/// cell of `grid`.
+pub fn earth_area_age(
+    grid: &SphereGrid,
+    continental: &[bool],
+    time_s: &[f64],
+    ridgeless_m: &[f64],
+) -> Vec<f64> {
     let n = grid.len();
     assert_eq!(
         continental.len(),
@@ -328,9 +343,16 @@ pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -
         "a time for each of the {n} cells, got {}",
         time_s.len()
     );
+    assert_eq!(
+        ridgeless_m.len(),
+        n,
+        "a ridgeless distance for each of the {n} cells, got {}",
+        ridgeless_m.len()
+    );
     let mut age_s = vec![MAX_CRUST_AGE_S; n];
+    let oceanic = |i: u32| !continental[i as usize];
     let mut order: Vec<u32> = (0..n as u32)
-        .filter(|&i| !continental[i as usize] && time_s[i as usize].is_finite())
+        .filter(|&i| oceanic(i) && time_s[i as usize].is_finite())
         .collect();
     // The cells are distinct, so the order is total.
     order.sort_unstable_by(|&a, &b| {
@@ -338,6 +360,17 @@ pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -
             .total_cmp(&time_s[b as usize])
             .then(a.cmp(&b))
     });
+    let mut ridgeless: Vec<u32> = (0..n as u32)
+        .filter(|&i| {
+            oceanic(i) && !time_s[i as usize].is_finite() && ridgeless_m[i as usize].is_finite()
+        })
+        .collect();
+    ridgeless.sort_unstable_by(|&a, &b| {
+        ridgeless_m[a as usize]
+            .total_cmp(&ridgeless_m[b as usize])
+            .then(a.cmp(&b))
+    });
+    order.extend(ridgeless);
     let mut total_sr = 0.0;
     for &i in &order {
         total_sr += grid.area_sr(i);
@@ -345,7 +378,8 @@ pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -
     let mut before_sr = 0.0;
     for &i in &order {
         let area_sr = grid.area_sr(i);
-        // Times are never negative: a ridge cell is at +0.
+        // Times are never negative: a ridge cell is at +0. A ridgeless
+        // cell's time is `+∞`.
         if time_s[i as usize] <= 0.0 {
             age_s[i as usize] = 0.0;
         } else {
@@ -358,6 +392,78 @@ pub fn earth_area_age(grid: &SphereGrid, continental: &[bool], time_s: &[f64]) -
         before_sr += area_sr;
     }
     age_s
+}
+
+/// The distance (m) of every cell of a plate without a divergent cell from
+/// its plate's boundary, through cells of the plate (ticket M2-12); `+∞`
+/// for the cells of plates with a divergent cell.
+///
+/// The ocean floor of such a plate is reached by no front of
+/// [`ridge_times`]: it has no active ridge. Ranked by
+/// this distance after all floor that a ridge reaches
+/// ([`earth_area_age`]), it takes the oldest part of Earth's area–age
+/// distribution, older the farther it lies from the plate's boundary
+/// (chosen with the owner).
+///
+/// Sources: every boundary cell (`bounds.kind` not
+/// [`BoundaryType::None`]) of a plate (`plates`) with no divergent cell,
+/// starting at `½ d_ij R`, half the distance to its nearest neighbour `j`
+/// on another plate: the plate boundary lies on the Voronoi edges, halfway
+/// between the centres, so the distances do not depend on the size of the
+/// cells (as [`margin_distances`]). Multi-source Dijkstra from the sources
+/// through every cell of the same plate, continental cells included (as
+/// [`ridge_times`]), on a planet of radius `radius_m`. Every cell of such
+/// a plate is reached, since plates are connected and every plate of a
+/// partition into two or more has a boundary.
+///
+/// # Panics
+///
+/// If `plates` or `bounds` do not hold one value per cell of `grid`.
+pub fn ridgeless_distances(
+    grid: &SphereGrid,
+    plates: &[u32],
+    bounds: &Boundaries,
+    radius_m: f64,
+) -> Vec<f64> {
+    let n = grid.len();
+    assert_eq!(
+        plates.len(),
+        n,
+        "a plate for each of the {n} cells, got {}",
+        plates.len()
+    );
+    assert_eq!(
+        bounds.kind.len(),
+        n,
+        "a boundary for each of the {n} cells, got {}",
+        bounds.kind.len()
+    );
+    // The plates with a divergent cell, sorted, without repeats.
+    let mut ridged: Vec<u32> = (0..n)
+        .filter(|&i| bounds.kind[i] == BoundaryType::Divergent)
+        .map(|i| plates[i])
+        .collect();
+    ridged.sort_unstable();
+    ridged.dedup();
+    let ridgeless = |i: u32| ridged.binary_search(&plates[i as usize]).is_err();
+    let mut starts = Vec::new();
+    for i in 0..n as u32 {
+        if bounds.kind[i as usize] == BoundaryType::None || !ridgeless(i) {
+            continue;
+        }
+        let mut start_m: Option<f64> = None;
+        let distances_rad = grid.centre_distances_rad(i);
+        for (&j, &d_rad) in grid.neighbors(i).iter().zip(distances_rad) {
+            if plates[j as usize] != plates[i as usize] {
+                let half_m = 0.5 * d_rad * radius_m;
+                start_m = Some(start_m.map_or(half_m, |d| smaller(d, half_m)));
+            }
+        }
+        if let Some(d) = start_m {
+            starts.push((i, d));
+        }
+    }
+    grow(grid, plates, radius_m, &starts, &|_| true).distance_m
 }
 
 /// The distance (m) of every continental cell of `grid` from the coastline
@@ -583,8 +689,8 @@ pub struct Crust {
     pub thickness_m: Vec<f64>,
     /// The age (s) of the crust: of oceanic crust the time since it left
     /// its ridge, in `[0, `[`MAX_CRUST_AGE_S`]`]` with Earth's area–age
-    /// distribution ([`earth_area_age`]); of continental crust
-    /// [`MAX_CRUST_AGE_S`].
+    /// distribution ([`earth_area_age`]), the floor of plates without a
+    /// ridge the oldest; of continental crust [`MAX_CRUST_AGE_S`].
     pub age_s: Vec<f64>,
     /// The rock uplift rate (m/s), in `[0, `[`MAX_UPLIFT_RATE_M_S`]`]`;
     /// positive only on continental crust near collision and arc fronts.
@@ -600,15 +706,17 @@ pub struct Crust {
 /// boundaries of the partition (`bounds`, from
 /// [`boundaries`](super::boundaries)), on a planet of radius `radius_m`.
 ///
-/// The method (tickets M2-04 and M2-11, chosen with the owner), with every
-/// distance measured inside the cell's own plate:
+/// The method (tickets M2-04, M2-11 and M2-12, chosen with the owner), with
+/// every distance measured inside the cell's own plate:
 ///
 /// 1. Ocean-floor age: the time `t` at which the first front from the
 ///    divergent cells of the plate, each growing at its own half spreading
 ///    rate, reaches the cell ([`ridge_times`]), ranked onto Earth's
 ///    area–age distribution ([`earth_area_age`]): 0 at ridge cells, at most
-///    [`MAX_CRUST_AGE_S`], mean 60 Myr; a plate without a divergent cell is
-///    at [`MAX_CRUST_AGE_S`]. Continental crust gets [`MAX_CRUST_AGE_S`].
+///    [`MAX_CRUST_AGE_S`], mean 60 Myr. The floor of a plate without a
+///    divergent cell comes last in the ranking, by its distance from the
+///    plate's boundary ([`ridgeless_distances`]), so it is the oldest.
+///    Continental crust gets [`MAX_CRUST_AGE_S`].
 /// 2. The role of each convergent cell, from its crust and that of the
 ///    *cell across*, its neighbour on the plate across with the longest
 ///    shared Voronoi edge (the first in neighbour order on a tie):
@@ -691,7 +799,12 @@ pub fn crust(
 
     let mut result = Crust {
         thickness_m: Vec::with_capacity(n),
-        age_s: earth_area_age(grid, continental, &times.time_s),
+        age_s: earth_area_age(
+            grid,
+            continental,
+            &times.time_s,
+            &ridgeless_distances(grid, plates, bounds, radius_m),
+        ),
         uplift_rate_m_s: Vec::with_capacity(n),
         trench: role.iter().map(|&r| r == Role::Trench).collect(),
     };

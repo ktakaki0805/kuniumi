@@ -16,7 +16,8 @@
 //! cell then gets its crust from its distance to the boundaries and coasts
 //! of its own plate ([`crust`]): ocean floor ages away from the divergent
 //! boundaries at their half spreading rates ([`ridge_times`]), with Earth's
-//! distribution of area by age ([`earth_area_age`]); continental crust
+//! distribution of area by age ([`earth_area_age`]), the floor of plates
+//! without a ridge the oldest ([`ridgeless_distances`]); continental crust
 //! thins towards the open ocean and continental rifts, where much of it
 //! lies under the sea ([`margin_distances`]), thickens into plateaus at
 //! collisions and into arcs inland of subduction zones, where it also
@@ -71,7 +72,7 @@ pub use crust::{
     CONTINENTAL_THICKNESS_M, CRUST_AGE, CRUST_THICKNESS, Crust, MARGIN_COAST_THICKNESS_M,
     MARGIN_MIN_OCEAN_FRACTION, MARGIN_WIDTH_M, MAX_CRUST_AGE_S, MAX_UPLIFT_RATE_M_S, Nearest,
     OCEANIC_THICKNESS_M, RidgeTimes, TRENCH, UPLIFT_RATE, crust, earth_area_age, margin_distances,
-    nearest_sources, ridge_times,
+    nearest_sources, ridge_times, ridgeless_distances,
 };
 
 /// The random stream of the partition: the seed cells, then the growth rate

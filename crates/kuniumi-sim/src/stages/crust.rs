@@ -15,8 +15,9 @@
 //! continental crust of the reference thickness (35 km) stands at
 //! [`REFERENCE_HEIGHT_M`] and the ocean floor at its depth below it; the sea
 //! level is solved afterwards, on the same datum (docs/conventions.md,
-//! "Elevation, sea level and time"). For Earth's water it lies 0.7–1.0 km
-//! below the datum (ticket M2-05).
+//! "Elevation, sea level and time"). For Earth's water it lies about 0.7 km
+//! below the datum (0.69–0.76 km for seeds 1–10 at 10,000 and 650,000
+//! cells; tickets M2-05 and M2-12).
 //!
 //! Outputs ([`run`]): [`SURFACE_HEIGHT`] (m) and `World::sea_level_m` (m).
 //! The stage draws no random numbers.
@@ -54,8 +55,8 @@ pub const REFERENCE_HEIGHT_M: f64 = 300.0;
 /// cells (the oceanic side of a subduction boundary, `trench` of the
 /// Tectonics stage) lie at the deeper of this and the depth of their age,
 /// and the ocean floor of any age is shallower than 6.4 km, so every trench
-/// lies at −8 km, 7.0–7.3 km below the sea level of Earth's water (ticket
-/// M2-05, seeds 1–10 at 10,000 and 650,000 cells). The middle of the
+/// lies at −8 km, 7.2–7.3 km below the sea level of Earth's water (tickets
+/// M2-05 and M2-12, seeds 1–10 at 10,000 and 650,000 cells). The middle of the
 /// 7–10 km of the ticket, which most of Earth's major trenches reach (the
 /// deepest, the Mariana trench, about 10.9 km), and the value of ticket
 /// M2-11's prototype; a trench that depends on the age of the subducting

@@ -656,7 +656,8 @@ fn ages_grow_away_from_a_ridge() {
         let got = crust(grid, plates, &continental, bounds, EARTH_RADIUS_M);
         let reference = reference_times(grid, plates, EARTH_RADIUS_M, bounds);
         let times = reference_time_values(grid, plates, bounds);
-        let want = earth_area_age(grid, &continental, &times);
+        // Both plates have a ridge: no ridgeless floor.
+        let want = earth_area_age(grid, &continental, &times, &vec![f64::INFINITY; n]);
         assert_eq!(bits(&got.age_s), bits(&want), "{}", case.label);
         for i in 0..n {
             let label = format!("{}, cell {i}", case.label);
@@ -710,7 +711,9 @@ fn ages_cross_continents_on_their_plate() {
             .collect();
         let got = crust(grid, plates, &continental, bounds, EARTH_RADIUS_M);
         let times = reference_time_values(grid, plates, bounds);
-        let want = earth_area_age(grid, &continental, &times);
+        // Both plates have a ridge: no ridgeless floor.
+        let ridgeless = vec![f64::INFINITY; grid.len()];
+        let want = earth_area_age(grid, &continental, &times, &ridgeless);
         assert_eq!(bits(&got.age_s), bits(&want), "{}", case.label);
         for i in 0..grid.len() {
             let label = format!("{}, cell {i}", case.label);
