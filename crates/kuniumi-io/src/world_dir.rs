@@ -89,7 +89,10 @@
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use kuniumi_sim::metrics::{ElevationMetrics, PERCENTILES, VALLEY_RATIO, earth};
+use kuniumi_sim::metrics::{
+    ElevationMetrics, HYPSOMETRY_BIN_M, Hypsometry, MAX_HYPSOMETRY_BINS, PERCENTILES, VALLEY_RATIO,
+    earth,
+};
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
 use kuniumi_world::{
     Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings, TectonicRegime,
@@ -609,15 +612,14 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 /// ([`Field::is_valid_name`]) or appears twice, if a field does not hold one
 /// value per cell, if a class field holds a value that is not a class id
 /// ([`Field::is_class_value`]), as [`world_json`], if `surface_height`
-/// holds a value that is not finite, or one whose elevation above the sea
-/// level, `h − z`, overflows (the limits of `kuniumi_sim::metrics`; the
-/// grid's areas, summing to 4π, always meet theirs); otherwise the error of
-/// the file system, with the path in its message.
-///
-/// # Panics
-///
-/// If the elevations of `surface_height` span more than 2³¹ bins of 100 m,
-/// about 2.1e11 m ([`ElevationMetrics::new`]; ticket M2-18).
+/// holds a value that is not finite, one whose elevation above the sea
+/// level, `h − z`, overflows, or elevations that need more bins of 100 m
+/// than the histogram holds, [`MAX_HYPSOMETRY_BINS`] (10⁶, a relief of about
+/// 100,000 km; ticket M2-18); otherwise the error of the file system, with
+/// the path in its message. With these checks every world that passes them
+/// meets the limits of `kuniumi_sim::metrics` (the grid's areas, summing to
+/// 4π, always meet theirs, and every finite elevation divided by 100 m is
+/// finite), so its metrics are computed without a panic.
 pub fn write(dir: &Path, world: &World) -> io::Result<Vec<PathBuf>> {
     write_maps_of_width(dir, world, MAP_WIDTH_PX)
 }
@@ -673,9 +675,16 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
 ///
 /// # Errors
 ///
-/// [`io::ErrorKind::InvalidInput`] if a height is not finite, or if its
-/// elevation above the sea level overflows: the same correctly rounded
-/// `h − z` as the metrics' own check.
+/// [`io::ErrorKind::InvalidInput`] if a height is not finite, if its
+/// elevation above the sea level overflows (the same correctly rounded
+/// `h − z` as the metrics' own check), or if the elevations need more than
+/// [`MAX_HYPSOMETRY_BINS`] bins of [`HYPSOMETRY_BIN_M`], which
+/// [`Hypsometry::new`] would refuse with a panic. The number of bins comes
+/// from [`Hypsometry::bins_needed`], the arithmetic of the histogram
+/// itself. The bound, 10⁶ bins or a relief of about 100,000 km, keeps the
+/// shares to 8 MB and [`METRICS_FILE`], which lists every bin, to about
+/// 29 MB, far beyond any plausible solid surface (the reason is given in
+/// full at [`MAX_HYPSOMETRY_BINS`]).
 fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
     if let Some(field) = world.field(SURFACE_HEIGHT) {
         if let Some(cell) = field.values.iter().position(|h| !h.is_finite()) {
@@ -694,6 +703,14 @@ fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
                 "field `{SURFACE_HEIGHT}` has the value {:e} at cell {cell}, whose elevation \
                  above the sea level of {sea_level:e} m overflows",
                 field.values[cell]
+            )));
+        }
+        let bins = Hypsometry::bins_needed(&field.values, sea_level, HYPSOMETRY_BIN_M);
+        if bins > MAX_HYPSOMETRY_BINS as f64 {
+            return Err(invalid_input(format!(
+                "the elevations of field `{SURFACE_HEIGHT}` need {bins:e} bins of \
+                 {HYPSOMETRY_BIN_M} m for the histogram of {METRICS_FILE}, more than \
+                 {MAX_HYPSOMETRY_BINS:e}"
             )));
         }
     }

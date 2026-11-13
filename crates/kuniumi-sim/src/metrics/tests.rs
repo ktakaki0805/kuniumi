@@ -16,6 +16,8 @@
 //!   1–10 at 10,000 cells;
 //! - `total_area_below_2_pow_1023`, `elevations_near_the_largest_double` and
 //!   `means_whose_sums_overflow`: inputs at the limits (ticket M2-15);
+//! - `bins_needed_by_hand` and `hypsometry_at_the_bound`: the number of bins
+//!   and its bound, [`MAX_HYPSOMETRY_BINS`] (ticket M2-18);
 //! - the panics, the limits among them.
 
 use std::collections::BTreeMap;
@@ -462,6 +464,10 @@ fn histograms_of_real_worlds() {
             last - first + 1,
             "{cells} {seed}"
         );
+        assert_bits(
+            Hypsometry::bins_needed(height, z, 100.0),
+            (last - first + 1) as f64,
+        );
         for (bin, &share) in hyps.shares().iter().enumerate() {
             let k = first + bin as i64;
             assert_bits(hyps.lower_edge_m(bin), k as f64 * 100.0);
@@ -737,14 +743,99 @@ fn bins_need_a_finite_index() {
 }
 
 #[test]
-#[should_panic(expected = "more than 2^31")]
-fn bins_need_at_most_2_pow_31() {
-    // From 0 to 1e12 m in 100 m bins: 1e10 bins.
-    let _ = Hypsometry::new(&[1.0, 1.0], &[0.0, 1e12], 0.0, 100.0);
+fn bins_needed_by_hand() {
+    // Each case: heights, sea level, bin width, and the bins by hand.
+    let cases: [(&[f64], f64, f64, f64); 6] = [
+        // floor(−4,000/100) = −40 to floor(1,000/100) = 10: 51 bins.
+        (&[-4_000.0, 1_000.0], 0.0, 100.0, 51.0),
+        // Relative to the sea level: −4,000 + 700 = −3,300 m (bin −33) to
+        // 1,000 + 700 = 1,700 m (bin 17): 51 bins.
+        (&[-4_000.0, 1_000.0, 0.0], -700.0, 100.0, 51.0),
+        // In 1 km bins: −4 to 1, 6 bins.
+        (&[-4_000.0, 1_000.0], 0.0, 1_000.0, 6.0),
+        // One cell, one bin.
+        (&[123.0], 0.0, 100.0, 1.0),
+        // The smallest subnormal below the sea level is ocean, bin −1,
+        // although its quotient rounds to −0; the cell at the sea level is
+        // in bin 0.
+        (&[0.0, -5e-324], 0.0, 100.0, 2.0),
+        // 1e293 m below the sea level, every elevation rounds to −1e293 m.
+        (&[-100.0, 50.0, 300.0], 1e293, 100.0, 1.0),
+    ];
+    for (height, z, w, bins) in cases {
+        assert_bits(Hypsometry::bins_needed(height, z, w), bins);
+        let area = vec![1.0; height.len()];
+        let hyps = Hypsometry::new(&area, height, z, w);
+        assert_eq!(hyps.shares().len(), bins as usize, "{height:?} {z} {w}");
+    }
+    // Beyond the bound: 0 to 1e12 m in 100 m bins, bins 0 to 1e10.
+    assert_bits(
+        Hypsometry::bins_needed(&[0.0, 1e12], 0.0, 100.0),
+        10_000_000_001.0,
+    );
+    // So far apart that no integer type holds the count: ±1e300 m, bins
+    // ±1e298.
+    assert!(Hypsometry::bins_needed(&[-1e300, 1e300], 0.0, 100.0) > 1e297);
+    // In 1 m bins ±1e308 m are bins ±1e308, whose difference overflows.
+    assert_bits(
+        Hypsometry::bins_needed(&[-1e308, 1e308], 0.0, 1.0),
+        f64::INFINITY,
+    );
 }
 
 #[test]
-#[should_panic(expected = "more than 2^31")]
-fn metrics_need_at_most_2_pow_31_bins() {
+#[should_panic(expected = "the elevations need inf bins of 1 m, more than 1e6")]
+fn bins_need_a_finite_count() {
+    let _ = Hypsometry::new(&[1.0, 1.0], &[-1e308, 1e308], 0.0, 1.0);
+}
+
+#[test]
+fn hypsometry_at_the_bound() {
+    assert_eq!(MAX_HYPSOMETRY_BINS, 1_000_000);
+    // 0 m and 99,999,900 m in 100 m bins: bins 0 and 999,999, 10⁶ in all.
+    let height = [0.0, 99_999_900.0];
+    assert_bits(Hypsometry::bins_needed(&height, 0.0, 100.0), 1e6);
+    let hyps = Hypsometry::new(&[1.0, 1.0], &height, 0.0, 100.0);
+    let shares = hyps.shares();
+    assert_eq!(shares.len(), 1_000_000);
+    assert_eq!((shares[0], shares[999_999]), (0.5, 0.5));
+    assert!(shares[1..999_999].iter().all(|&s| s == 0.0));
+    assert_bits(hyps.upper_edge_m(999_999), 1e8);
+    // So do the metrics of the world's bins of 100 m.
+    let metrics = ElevationMetrics::new(&[1.0, 3.0], &height, 0.0);
+    assert_eq!(metrics.hypsometry.shares().len(), 1_000_000);
+    assert_bits(metrics.hypsometry.shares()[999_999], 0.75);
+}
+
+#[test]
+#[should_panic(expected = "the elevations need 1.000001e6 bins of 100 m, more than 1e6")]
+fn bins_need_at_most_a_million() {
+    // 0 m and 1e8 m in 100 m bins: bins 0 and 10⁶, one more than the bound.
+    let _ = Hypsometry::new(&[1.0, 1.0], &[0.0, 1e8], 0.0, 100.0);
+}
+
+#[test]
+#[should_panic(expected = "the elevations need 1.0000000001e10 bins of 100 m, more than 1e6")]
+fn metrics_need_at_most_a_million_bins() {
+    // 0 m and 1e12 m: bins 0 to 1e10.
     let _ = ElevationMetrics::new(&[1.0, 1.0], &[0.0, 1e12], 0.0);
+}
+
+#[test]
+#[should_panic(expected = "the elevation of cell 1 above the sea level overflows: \
+                           height 1e308 m, sea level -1e308 m")]
+fn bins_needed_checks_the_heights() {
+    let _ = Hypsometry::bins_needed(&[0.0, 1e308], -1e308, 100.0);
+}
+
+#[test]
+#[should_panic(expected = "at least one height")]
+fn bins_needed_needs_a_height() {
+    let _ = Hypsometry::bins_needed(&[], 0.0, 100.0);
+}
+
+#[test]
+#[should_panic(expected = "a bin width that is finite and positive")]
+fn bins_needed_needs_a_positive_width() {
+    let _ = Hypsometry::bins_needed(&[1.0], 0.0, f64::INFINITY);
 }

@@ -24,7 +24,9 @@
 //! - `no_metrics_without_a_surface_height_and_none_left_over`;
 //! - `rejects_non_finite_heights_before_writing_anything`;
 //! - `rejects_elevations_that_overflow_before_writing_anything` and
-//!   `huge_elevations_have_finite_metrics` (ticket M2-15).
+//!   `huge_elevations_have_finite_metrics` (ticket M2-15);
+//! - `rejects_elevations_beyond_the_histogram_before_writing_anything` and
+//!   `accepts_elevations_at_the_bound` (ticket M2-18).
 
 use std::path::PathBuf;
 
@@ -1226,6 +1228,75 @@ fn rejects_elevations_that_overflow_before_writing_anything() {
          the sea level of -1e308 m overflows"
     );
     assert!(!dir.exists(), "nothing is written");
+}
+
+/// [`world_with_relief`] with every height at `base_m` except cell 3 at
+/// `peak_m`, and the sea level at `sea_level_m`.
+fn world_with_one_peak(base_m: f64, peak_m: f64, sea_level_m: f64) -> World {
+    let mut world = world_with_relief();
+    world.fields[2].values.fill(base_m);
+    world.fields[2].values[3] = peak_m;
+    world.sea_level_m = sea_level_m;
+    world
+}
+
+#[test]
+fn rejects_elevations_beyond_the_histogram_before_writing_anything() {
+    // Each case: the base, the peak and the sea level (m), and the number
+    // of bins of 100 m by hand.
+    let cases = [
+        // Bins 0 and 10⁶: 1,000,001, one more than the bound (the old code
+        // wrote it).
+        (0.0, 1e8, 0.0, "1.000001e6"),
+        // Bins 0 and 1e10 (the old code panicked, more than 2³¹ bins).
+        (0.0, 1e12, 0.0, "1.0000000001e10"),
+        // Counted above the sea level: the elevations 60 m and
+        // 100,000,010 m are in bins 0 and 10⁶, while the heights alone
+        // (0 m and 99,999,950 m, bins 0 and 999,999) would fit.
+        (0.0, 99_999_950.0, -60.0, "1.000001e6"),
+    ];
+    for (base, peak, sea_level, bins) in cases {
+        let world = world_with_one_peak(base, peak, sea_level);
+        let dir = scratch("beyond_the_histogram");
+        let err = write(&dir, &world).unwrap_err();
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "{peak} {sea_level}"
+        );
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "the elevations of field `surface_height` need {bins} bins of 100 m for the \
+                 histogram of metrics.txt, more than 1e6"
+            )
+        );
+        assert!(!dir.exists(), "nothing is written");
+    }
+}
+
+#[test]
+fn accepts_elevations_at_the_bound() {
+    // Each case needs exactly 10⁶ bins of 100 m. Checked through
+    // `elevation_metrics`, which `write` calls first, to keep the test
+    // from writing a `metrics.txt` of 29 MB.
+    let cases = [
+        // Bins 0 and 999,999.
+        (0.0, 99_999_900.0, 0.0),
+        // The elevations −60 m and 99,999,890 m: bins −1 and 999,998.
+        (0.0, 99_999_950.0, 60.0),
+        // The elevations 0 m and 99,999,950 m: bins 0 and 999,999, while
+        // the heights alone (50 m and 1e8 m, bins 0 and 10⁶) would not fit.
+        (50.0, 1e8, 50.0),
+    ];
+    for (base, peak, sea_level) in cases {
+        let world = world_with_one_peak(base, peak, sea_level);
+        let metrics = elevation_metrics(&world).unwrap().unwrap();
+        let shares = metrics.hypsometry.shares();
+        assert_eq!(shares.len(), 1_000_000, "{peak} {sea_level}");
+        assert!(shares[0] > 0.99 && shares[999_999] > 0.0);
+        assert_eq!(metrics.highest_m.to_bits(), (peak - sea_level).to_bits());
+    }
 }
 
 #[test]

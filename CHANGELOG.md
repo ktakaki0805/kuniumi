@@ -461,6 +461,15 @@ section: every change after which an existing seed produces a different world
   was finite (M2-15).
 - D-06 (`docs/decisions.md`) and the project table of the design list
   `kuniumi-config` as an existing crate, no longer as planned (M2-16).
+- `kuniumi_io::world_dir::write` returns `InvalidInput`, before writing
+  anything, for a `surface_height` whose elevations need more than 10⁶
+  bins of 100 m (a relief of about 100,000 km) for the histogram of
+  `metrics.txt`, instead of panicking above 2³¹ bins and needing up to
+  17 GB for the shares below that (and a line of `metrics.txt` per bin).
+  `kuniumi_sim::metrics::Hypsometry::new` holds at most
+  `MAX_HYPSOMETRY_BINS` = 10⁶ bins (8 MB; formerly 2³¹), and the new
+  `Hypsometry::bins_needed` counts them beforehand with the histogram's
+  own arithmetic. Every output for an existing seed is unchanged (M2-18).
 
 ### World-breaking
 

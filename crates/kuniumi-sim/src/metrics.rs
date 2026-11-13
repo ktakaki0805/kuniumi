@@ -45,10 +45,12 @@
 //!    enough).
 //!
 //! [`Hypsometry::new`] also needs every `x_i / w` to be finite (true for
-//! any bin width `w ≥ 1 m`) and at most 2³¹ bins; [`percentiles_m`]
-//! fractions in (0, 1]. The grid of a world has areas in steradians
-//! summing to 4π, so for [`ElevationMetrics::of_world`] only the heights
-//! and the sea level matter.
+//! any bin width `w ≥ 1 m`) and at most [`MAX_HYPSOMETRY_BINS`] bins, 10⁶:
+//! a relief of about 100,000 km in the world's bins of 100 m (ticket
+//! M2-18), which [`Hypsometry::bins_needed`] counts beforehand;
+//! [`percentiles_m`] fractions in (0, 1]. The grid of a world has areas in
+//! steradians summing to 4π, so for [`ElevationMetrics::of_world`] only the
+//! heights and the sea level matter.
 //!
 //! Within these limits no metric returns NaN or infinity. The land fraction
 //! and the shares are ratios of finite sums of areas; the percentiles and
@@ -78,8 +80,23 @@ pub const PERCENTILES: [f64; 9] = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 
 /// two separate peaks ([`Hypsometry::has_separate_peaks`]): ½.
 pub const VALLEY_RATIO: f64 = 0.5;
 
-/// The most bins a histogram may have, 2³¹ ([`Hypsometry::new`]).
-const MAX_BINS: f64 = 2_147_483_648.0;
+/// The most bins a histogram may hold ([`Hypsometry::new`]): 10⁶ (ticket
+/// M2-18).
+///
+/// A bound on memory and on the length of `metrics.txt` (in
+/// `kuniumi_io::world_dir`), which lists every bin, empty ones included: at
+/// the bound the shares take 8 MB and `metrics.txt` about 29 MB, where 2³¹
+/// bins, the bound before, took 17 GB. In the world's bins of 100 m
+/// ([`HYPSOMETRY_BIN_M`]) it is a relief of 100,000 km, almost four times the
+/// diameter of the largest planet that `PlanetParams` allows (a radius of
+/// 13,000 km, 260,000 bins across), which no solid surface comes near; the
+/// relief of the Crust stage needs about 150 bins.
+///
+/// Elevations spanning `D` metres need between `⌊D / w⌋ + 1` and
+/// `⌈D / w⌉ + 1` bins of width `w`, depending on where the edges fall: in
+/// 100 m bins a relief below 99,999.9 km always fits, one of 100,000 km or
+/// more never does. [`Hypsometry::bins_needed`] gives the exact number.
+pub const MAX_HYPSOMETRY_BINS: usize = 1_000_000;
 
 /// The bound on the total area of the cells, 2¹⁰²³ (module documentation,
 /// "Limits").
@@ -271,8 +288,9 @@ pub fn percentiles_m(
 /// above the surface every cell falls into one bin (that far out, more than
 /// 2⁵³ widths from the sea level, the edges are rounded and `k + 1 = k`).
 /// The number of bins is the span of the elevations over the width, plus
-/// one: about 150 for the relief of the Crust stage (−8 km to +5.6 km) in
-/// 100 m bins.
+/// one ([`bins_needed`](Self::bins_needed)): about 150 for the relief of the
+/// Crust stage (−8 km to +5.6 km) in 100 m bins, and at most
+/// [`MAX_HYPSOMETRY_BINS`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Hypsometry {
     /// The width `w` of the bins (m).
@@ -292,42 +310,23 @@ impl Hypsometry {
     /// # Panics
     ///
     /// As [`land_fraction`]; if the bin width is not finite and positive,
-    /// if an elevation over the width overflows, or if more than 2³¹ bins
-    /// would be needed.
+    /// if an elevation over the width overflows, or if more than
+    /// [`MAX_HYPSOMETRY_BINS`] (10⁶) bins would be needed
+    /// ([`bins_needed`](Self::bins_needed)).
     pub fn new(area: &[f64], height_m: &[f64], sea_level_m: f64, bin_width_m: f64) -> Self {
         check(area, height_m, sea_level_m);
+        let (first, count) = bin_span(height_m, sea_level_m, bin_width_m);
         assert!(
-            bin_width_m.is_finite() && bin_width_m > 0.0,
-            "the histogram needs a bin width that is finite and positive, got {bin_width_m}"
+            count <= MAX_HYPSOMETRY_BINS as f64,
+            "the elevations need {count:e} bins of {bin_width_m} m, more than \
+             {MAX_HYPSOMETRY_BINS:e}"
         );
-        let bins: Vec<f64> = height_m
-            .iter()
-            .map(|&h| {
-                let x = h - sea_level_m;
-                let k = (x / bin_width_m).floor();
-                assert!(
-                    k.is_finite(),
-                    "the elevation {x} m over the bin width {bin_width_m} m overflows"
-                );
-                if x < 0.0 && k >= 0.0 { -1.0 } else { k }
-            })
-            .collect();
-        let (first, last) = bins
-            .iter()
-            .skip(1)
-            .fold((bins[0], bins[0]), |(lo, hi), &k| {
-                (if k < lo { k } else { lo }, if k > hi { k } else { hi })
-            });
-        let span = last - first;
-        assert!(
-            span < MAX_BINS,
-            "the elevations span {span} bins of {bin_width_m} m, more than 2^31"
-        );
-        let mut areas = vec![0.0; span as usize + 1];
+        let mut areas = vec![0.0; count as usize];
         let mut total = 0.0;
-        for (&a, &k) in area.iter().zip(&bins) {
-            // `k − first` lies in [0, span]: both are integers, and rounding
-            // is monotonic.
+        for (&a, &h) in area.iter().zip(height_m) {
+            // `k − first` lies in [0, count − 1]: both are integers, and
+            // rounding is monotonic.
+            let k = bin_index(h - sea_level_m, bin_width_m);
             areas[(k - first) as usize] += a;
             total += a;
         }
@@ -336,6 +335,35 @@ impl Hypsometry {
             first_bin: first,
             shares: areas.into_iter().map(|a| a / total).collect(),
         }
+    }
+
+    /// The number of bins that [`new`](Self::new) needs for the elevations of
+    /// the heights `height_m` (m) above the sea level `sea_level_m` (m), in
+    /// bins `bin_width_m` (m) wide: `k_max − k_min + 1` for the bin indices
+    /// `k_i` of the type documentation, by the same arithmetic as `new`. The
+    /// areas do not matter.
+    ///
+    /// `new` panics where the number exceeds [`MAX_HYPSOMETRY_BINS`]; a
+    /// caller that rejects such inputs instead checks it first
+    /// (`kuniumi_io::world_dir::write` does). It is an integer-valued `f64`,
+    /// like the indices, since elevations far apart need more bins than any
+    /// integer type holds: up to about 3.6e306 in bins of 100 m, and
+    /// infinitely many in bins of about 2 m or less, where `k_max − k_min`
+    /// can overflow (never NaN). Beyond 2⁵³ it is rounded.
+    ///
+    /// # Panics
+    ///
+    /// As `new` for the heights (limits 1 and 3 of the module
+    /// documentation): if `height_m` is empty, a height or the sea level is
+    /// not finite, or an elevation `h − z` overflows; if the bin width is not
+    /// finite and positive, or an elevation over the width overflows.
+    pub fn bins_needed(height_m: &[f64], sea_level_m: f64, bin_width_m: f64) -> f64 {
+        assert!(
+            !height_m.is_empty(),
+            "the histogram needs at least one height"
+        );
+        check_heights(height_m, sea_level_m);
+        bin_span(height_m, sea_level_m, bin_width_m).1
     }
 
     /// The width of the bins (m).
@@ -457,8 +485,9 @@ impl ElevationMetrics {
     /// # Panics
     ///
     /// As [`land_fraction`], and as [`Hypsometry::new`] with
-    /// [`HYPSOMETRY_BIN_M`]: if the elevations span more than 2³¹ bins of
-    /// 100 m (about 2.1e11 m).
+    /// [`HYPSOMETRY_BIN_M`]: if the elevations need more than
+    /// [`MAX_HYPSOMETRY_BINS`] (10⁶) bins of 100 m, a relief of about
+    /// 100,000 km ([`Hypsometry::bins_needed`]).
     pub fn new(area: &[f64], height_m: &[f64], sea_level_m: f64) -> Self {
         check(area, height_m, sea_level_m);
         let (lowest_m, highest_m) = height_m
@@ -487,8 +516,9 @@ impl ElevationMetrics {
     ///
     /// As [`new`](Self::new): if the field does not hold one value per
     /// cell, a height or the sea level is not finite, an elevation above the
-    /// sea level overflows, or the elevations span more than 2³¹ bins. (The
-    /// areas of a grid sum to 4π, far below the limit.)
+    /// sea level overflows, or the elevations need more than
+    /// [`MAX_HYPSOMETRY_BINS`] bins. (The areas of a grid sum to 4π, far
+    /// below the limit.)
     pub fn of_world(world: &World) -> Option<Self> {
         let height = world.field(SURFACE_HEIGHT)?;
         let area: Vec<f64> = (0..world.grid.len() as u32)
@@ -503,9 +533,8 @@ impl ElevationMetrics {
 /// # Panics
 ///
 /// If `area` is empty or not as long as `height_m`, an area is not finite
-/// and positive, the areas sum (in cell order) to 2¹⁰²³ or more, a height
-/// or `sea_level_m` is not finite, or an elevation `h − sea_level_m`
-/// overflows.
+/// and positive, the areas sum (in cell order) to 2¹⁰²³ or more, or as
+/// [`check_heights`].
 fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
     assert!(
         !area.is_empty() && area.len() == height_m.len(),
@@ -519,6 +548,22 @@ fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
             area[cell]
         );
     }
+    let total = area.iter().fold(0.0, |sum, &a| sum + a);
+    assert!(
+        total < MAX_TOTAL_AREA,
+        "the areas of the cells sum to {total:e}, not below 2^1023"
+    );
+    check_heights(height_m, sea_level_m);
+}
+
+/// Checks the heights and the sea level (module documentation, "Limits",
+/// limit 3).
+///
+/// # Panics
+///
+/// If a height or `sea_level_m` is not finite, or an elevation
+/// `h − sea_level_m` overflows.
+fn check_heights(height_m: &[f64], sea_level_m: f64) {
     if let Some(cell) = height_m.iter().position(|h| !h.is_finite()) {
         panic!(
             "the height of cell {cell} is not finite: {}",
@@ -528,11 +573,6 @@ fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
     assert!(
         sea_level_m.is_finite(),
         "the sea level is not finite: {sea_level_m}"
-    );
-    let total = area.iter().fold(0.0, |sum, &a| sum + a);
-    assert!(
-        total < MAX_TOTAL_AREA,
-        "the areas of the cells sum to {total:e}, not below 2^1023"
     );
     if let Some(cell) = height_m
         .iter()
@@ -544,6 +584,48 @@ fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
             height_m[cell]
         );
     }
+}
+
+/// The index `k` of the bin of [`Hypsometry`] that holds the elevation
+/// `elevation_m` (m) in bins `bin_width_m` (m) wide: `floor(x / w)`, or −1
+/// for an ocean cell whose quotient rounds to −0 (type documentation).
+///
+/// # Panics
+///
+/// If the quotient overflows.
+fn bin_index(elevation_m: f64, bin_width_m: f64) -> f64 {
+    let k = (elevation_m / bin_width_m).floor();
+    assert!(
+        k.is_finite(),
+        "the elevation {elevation_m} m over the bin width {bin_width_m} m overflows"
+    );
+    if elevation_m < 0.0 && k >= 0.0 {
+        -1.0
+    } else {
+        k
+    }
+}
+
+/// The index of the lowest bin of the elevations of `height_m` above
+/// `sea_level_m` in bins `bin_width_m` wide, and the number of bins up to
+/// the highest, `k_max − k_min + 1` ([`bin_index`], in cell order). The
+/// heights are checked already and not empty.
+///
+/// # Panics
+///
+/// If the bin width is not finite and positive, or as [`bin_index`].
+fn bin_span(height_m: &[f64], sea_level_m: f64, bin_width_m: f64) -> (f64, f64) {
+    assert!(
+        bin_width_m.is_finite() && bin_width_m > 0.0,
+        "the histogram needs a bin width that is finite and positive, got {bin_width_m}"
+    );
+    let (first, last) = height_m
+        .iter()
+        .map(|&h| bin_index(h - sea_level_m, bin_width_m))
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), k| {
+            (if k < lo { k } else { lo }, if k > hi { k } else { hi })
+        });
+    (first, last - first + 1.0)
 }
 
 #[cfg(test)]
