@@ -27,8 +27,12 @@
 //! - `rejects_*` (also `fibonacci_rejects_more_than_max_cells_before_generating_points`),
 //!   `coplanar_ring_steps_are_not_counter_clockwise`, `errors_display`,
 //!   `compensated_sum_*`.
+//! - `wheels_are_valid`, `validate_matches_the_previous_implementation`
+//!   (ticket M1-13: a grid whose hub lists every other cell, and the
+//!   results of `validate` against its previous, quadratic implementation
+//!   for grids changed in many ways).
 //! - `fingerprints_match_recorded`.
-//! - `timing_650k` (ignored): run with
+//! - `timing_650k`, `timing_wheel_100k` (ignored): run with
 //!   `cargo test -p kuniumi-sphere --release grid -- --ignored --nocapture`.
 //!
 //! Run with `--nocapture` to see the measured values.
@@ -1187,6 +1191,439 @@ fn errors_display() {
 }
 
 // ---------------------------------------------------------------------------
+// Validation in linear time (ticket M1-13)
+
+/// A grid with the given centres, rings and areas, not validated: centre
+/// distances by std's `atan2` (`arc`), computed with the lower-indexed cell
+/// first, so that both entries of a pair hold the same bits; edge lengths
+/// half of them (`validate` accepts any symmetric value in [0, π]).
+fn from_rings(positions: Vec<Vec3>, rings: &[Vec<u32>], areas_sr: Vec<f64>) -> SphereGrid {
+    let mut neighbor_offsets = vec![0];
+    let mut neighbors = Vec::new();
+    let mut centre_distances_rad = Vec::new();
+    for (cell, ring) in rings.iter().enumerate() {
+        for &j in ring {
+            let (a, b) = (cell.min(j as usize), cell.max(j as usize));
+            centre_distances_rad.push(arc(positions[a], positions[b]));
+        }
+        neighbors.extend_from_slice(ring);
+        neighbor_offsets.push(neighbors.len() as u32);
+    }
+    let edge_lengths_rad = centre_distances_rad.iter().map(|d| d / 2.0).collect();
+    SphereGrid {
+        positions,
+        neighbor_offsets,
+        neighbors,
+        areas_sr,
+        edge_lengths_rad,
+        centre_distances_rad,
+    }
+}
+
+/// The wheel of `n ≥ 4` cells of ticket M1-13, not validated: the hub,
+/// cell 0, at +Z lists every other cell; the rim cells 1 … n − 1 lie on
+/// the circle z = −1/2 in increasing longitude, and rim cell k lists
+/// k + 1, the hub and k − 1 (cyclically), counter-clockwise seen from
+/// outside. The centres are the vertices of a pyramid with a flat
+/// (n − 1)-gon as its base, so every ring turns counter-clockwise and
+/// `validate` accepts the grid, although the hub's ring has n − 1 entries.
+/// Areas 4π/n; edge data as in `from_rings`.
+fn wheel(n: u32) -> SphereGrid {
+    assert!(n >= 4, "a wheel needs a hub and three rim cells");
+    let rim = n - 1;
+    let z: f64 = -0.5;
+    let r = (1.0 - z * z).sqrt();
+    let mut positions = vec![Vec3::Z];
+    positions.extend((0..rim).map(|k| {
+        let longitude = 2.0 * core::f64::consts::PI * f64::from(k) / f64::from(rim);
+        unit(r * longitude.cos(), r * longitude.sin(), z)
+    }));
+    let next = |k: u32| if k == rim { 1 } else { k + 1 };
+    let previous = |k: u32| if k == 1 { rim } else { k - 1 };
+    let mut rings: Vec<Vec<u32>> = vec![(1..=rim).collect()];
+    rings.extend((1..=rim).map(|k| vec![next(k), 0, previous(k)]));
+    from_rings(
+        positions,
+        &rings,
+        vec![FULL_SPHERE_SR / f64::from(n); n as usize],
+    )
+}
+
+/// `SphereGrid::validate` as it was before ticket M1-13 (commit 5ef3a4c),
+/// the reference of `validate_matches_the_previous_implementation`: the
+/// symmetry with `contains` and the reverse entries with `position`, in
+/// time proportional to the sum of the squared ring sizes. The other
+/// checks are the same code as today's.
+fn validate_quadratic(g: &SphereGrid) -> Result<(), GridError> {
+    use super::{AREA_TOLERANCE, DISTANCE_TOLERANCE_RAD, UNIT_TOLERANCE};
+    use crate::coords::great_circle_rad;
+    use crate::predicates::in_exact_range;
+    use core::f64::consts::PI;
+
+    let n = g.positions.len();
+    if g.neighbor_offsets.len() != n + 1 {
+        return Err(GridError::Length(
+            "neighbor_offsets must have n + 1 entries",
+        ));
+    }
+    if g.areas_sr.len() != n {
+        return Err(GridError::Length("areas_sr must have n entries"));
+    }
+    if g.edge_lengths_rad.len() != g.neighbors.len() {
+        return Err(GridError::Length(
+            "edge_lengths_rad must have one entry per neighbour",
+        ));
+    }
+    if g.centre_distances_rad.len() != g.neighbors.len() {
+        return Err(GridError::Length(
+            "centre_distances_rad must have one entry per neighbour",
+        ));
+    }
+    if u32::try_from(n).is_err() {
+        return Err(GridError::Length("cell count exceeds u32"));
+    }
+    if g.neighbor_offsets[0] != 0
+        || g.neighbor_offsets.windows(2).any(|w| w[0] > w[1])
+        || g.neighbor_offsets[n] as usize != g.neighbors.len()
+    {
+        return Err(GridError::Offsets);
+    }
+    for (i, p) in g.positions.iter().enumerate() {
+        let unit = (p.length_squared() - 1.0).abs() <= UNIT_TOLERANCE;
+        let exact = in_exact_range(p.x) && in_exact_range(p.y) && in_exact_range(p.z);
+        if !unit || !exact {
+            return Err(GridError::NotUnit { cell: i as u32 });
+        }
+    }
+    for cell in 0..n as u32 {
+        let ring = g.neighbors(cell);
+        for &j in ring {
+            if j as usize >= n || j == cell {
+                return Err(GridError::BadNeighbor { cell, neighbor: j });
+            }
+            if !g.neighbors(j).contains(&cell) {
+                return Err(GridError::Asymmetric { a: cell, b: j });
+            }
+        }
+        if !g.ring_is_counter_clockwise(cell) {
+            return Err(GridError::Orientation { cell });
+        }
+        for (e, &j) in g.range(cell).zip(g.neighbors(cell)) {
+            let back = g.range(j).start
+                + g.neighbors(j)
+                    .iter()
+                    .position(|&k| k == cell)
+                    .expect("the adjacency is symmetric");
+            let length = g.edge_lengths_rad[e];
+            if !(0.0..=PI).contains(&length)
+                || length.to_bits() != g.edge_lengths_rad[back].to_bits()
+            {
+                return Err(GridError::EdgeLength { cell, neighbor: j });
+            }
+            let distance = g.centre_distances_rad[e];
+            let expected = great_circle_rad(g.position(cell), g.position(j));
+            let in_range = distance > 0.0 && distance <= PI;
+            if !in_range
+                || distance.to_bits() != g.centre_distances_rad[back].to_bits()
+                || (distance - expected).abs() > DISTANCE_TOLERANCE_RAD
+            {
+                return Err(GridError::CentreDistance { cell, neighbor: j });
+            }
+        }
+    }
+    let full_sphere = 4.0 * PI;
+    let sum_ok =
+        ((compensated_sum(&g.areas_sr) - full_sphere) / full_sphere).abs() <= AREA_TOLERANCE;
+    if g.areas_sr.iter().any(|&a| a <= 0.0 || !a.is_finite()) || !sum_ok {
+        return Err(GridError::Area);
+    }
+    Ok(())
+}
+
+/// One change to the arrays of a grid, for
+/// `validate_matches_the_previous_implementation`. Indices refer to the
+/// arrays as they are when the change is applied; changes that move
+/// entries keep the edge data with them and the offsets consistent.
+#[derive(Clone, Copy, Debug)]
+enum Change {
+    /// The neighbour of entry `e` set to `value`.
+    SetNeighbor { e: usize, value: u32 },
+    /// The neighbours (not the edge data) of entries `a` and `b` swapped.
+    SwapNeighbors { a: usize, b: usize },
+    /// A cell's ring reversed.
+    ReverseRing(u32),
+    /// A cell's ring rotated by one place.
+    RotateRing(u32),
+    /// Entry `e` removed.
+    RemoveEntry(usize),
+    /// Entry `e` listed twice in a row.
+    DuplicateEntry(usize),
+    /// A cell's ring listed twice.
+    DoubleRing(u32),
+    /// Offset `k` raised by one.
+    RaiseOffset(usize),
+    /// Offset `k` lowered by one (unless 0).
+    LowerOffset(usize),
+    /// One bit of the edge length of entry `e` flipped.
+    FlipEdgeLength { e: usize, bit: u32 },
+    /// One bit of the centre distance of entry `e` flipped.
+    FlipCentreDistance { e: usize, bit: u32 },
+    /// A cell's area doubled.
+    DoubleArea(u32),
+}
+
+/// The cell whose ring holds entry `e`; the offsets must be valid.
+fn owner(g: &SphereGrid, e: usize) -> u32 {
+    (g.neighbor_offsets.partition_point(|&o| o as usize <= e) - 1) as u32
+}
+
+/// Adds `delta` (wrapping) to the offsets after cell `cell`.
+fn shift_offsets(g: &mut SphereGrid, cell: u32, delta: u32) {
+    for o in &mut g.neighbor_offsets[cell as usize + 1..] {
+        *o = o.wrapping_add(delta);
+    }
+}
+
+fn apply(g: &mut SphereGrid, change: Change) {
+    let flip = |x: f64, bit: u32| f64::from_bits(x.to_bits() ^ (1 << bit));
+    match change {
+        Change::SetNeighbor { e, value } => g.neighbors[e] = value,
+        Change::SwapNeighbors { a, b } => g.neighbors.swap(a, b),
+        Change::ReverseRing(cell) => {
+            let r = g.range(cell);
+            g.neighbors[r.clone()].reverse();
+            g.edge_lengths_rad[r.clone()].reverse();
+            g.centre_distances_rad[r].reverse();
+        }
+        Change::RotateRing(cell) => {
+            let r = g.range(cell);
+            if !r.is_empty() {
+                g.neighbors[r.clone()].rotate_left(1);
+                g.edge_lengths_rad[r.clone()].rotate_left(1);
+                g.centre_distances_rad[r].rotate_left(1);
+            }
+        }
+        Change::RemoveEntry(e) => {
+            let cell = owner(g, e);
+            g.neighbors.remove(e);
+            g.edge_lengths_rad.remove(e);
+            g.centre_distances_rad.remove(e);
+            shift_offsets(g, cell, u32::MAX);
+        }
+        Change::DuplicateEntry(e) => {
+            let cell = owner(g, e);
+            g.neighbors.insert(e, g.neighbors[e]);
+            g.edge_lengths_rad.insert(e, g.edge_lengths_rad[e]);
+            g.centre_distances_rad.insert(e, g.centre_distances_rad[e]);
+            shift_offsets(g, cell, 1);
+        }
+        Change::DoubleRing(cell) => {
+            let r = g.range(cell);
+            let at = r.end..r.end;
+            let ring = g.neighbors[r.clone()].to_vec();
+            let lengths = g.edge_lengths_rad[r.clone()].to_vec();
+            let distances = g.centre_distances_rad[r.clone()].to_vec();
+            g.neighbors.splice(at.clone(), ring);
+            g.edge_lengths_rad.splice(at.clone(), lengths);
+            g.centre_distances_rad.splice(at, distances);
+            shift_offsets(g, cell, r.len() as u32);
+        }
+        Change::RaiseOffset(k) => g.neighbor_offsets[k] += 1,
+        Change::LowerOffset(k) => g.neighbor_offsets[k] = g.neighbor_offsets[k].saturating_sub(1),
+        Change::FlipEdgeLength { e, bit } => {
+            g.edge_lengths_rad[e] = flip(g.edge_lengths_rad[e], bit)
+        }
+        Change::FlipCentreDistance { e, bit } => {
+            g.centre_distances_rad[e] = flip(g.centre_distances_rad[e], bit);
+        }
+        Change::DoubleArea(cell) => g.areas_sr[cell as usize] *= 2.0,
+    }
+}
+
+/// Every single change of the kinds of `Change` to `g` (bits 0, 52 and 63
+/// of the edge data), each applied to a fresh copy.
+fn every_single_change(g: &SphereGrid) -> Vec<Change> {
+    let n = g.len() as u32;
+    let m = g.neighbors.len();
+    let mut out = Vec::new();
+    for e in 0..m {
+        for value in (0..=n).chain([u32::MAX]) {
+            out.push(Change::SetNeighbor { e, value });
+        }
+        for b in e + 1..m {
+            out.push(Change::SwapNeighbors { a: e, b });
+        }
+        out.extend([Change::RemoveEntry(e), Change::DuplicateEntry(e)]);
+        for bit in [0, 52, 63] {
+            out.push(Change::FlipEdgeLength { e, bit });
+            out.push(Change::FlipCentreDistance { e, bit });
+        }
+    }
+    for cell in 0..n {
+        out.extend([
+            Change::ReverseRing(cell),
+            Change::RotateRing(cell),
+            Change::DoubleRing(cell),
+            Change::DoubleArea(cell),
+        ]);
+    }
+    for k in 0..=n as usize {
+        out.extend([Change::RaiseOffset(k), Change::LowerOffset(k)]);
+    }
+    out
+}
+
+/// A random change of kind `kind` (0 to 11, in the order of `Change`) to
+/// `g` as it is, or `None` if `g` has no entry to change.
+fn random_change(g: &SphereGrid, kind: u64, rng: &mut Rng) -> Option<Change> {
+    let n = g.len() as u64;
+    let m = g.neighbors.len() as u64;
+    let cell = rng.below(n) as u32;
+    let entry = |rng: &mut Rng| (m > 0).then(|| rng.below(m) as usize);
+    Some(match kind {
+        0 => {
+            let e = entry(rng)?;
+            // Mostly cells, sometimes the first index past them or u32::MAX.
+            let value = match rng.below(8) {
+                0 => n as u32,
+                1 => u32::MAX,
+                _ => rng.below(n) as u32,
+            };
+            Change::SetNeighbor { e, value }
+        }
+        1 => Change::SwapNeighbors {
+            a: entry(rng)?,
+            b: entry(rng)?,
+        },
+        2 => Change::ReverseRing(cell),
+        3 => Change::RotateRing(cell),
+        4 => Change::RemoveEntry(entry(rng)?),
+        5 => Change::DuplicateEntry(entry(rng)?),
+        6 => Change::DoubleRing(cell),
+        7 => Change::RaiseOffset(rng.below(n + 1) as usize),
+        8 => Change::LowerOffset(rng.below(n + 1) as usize),
+        9 => Change::FlipEdgeLength {
+            e: entry(rng)?,
+            bit: rng.below(64) as u32,
+        },
+        10 => Change::FlipCentreDistance {
+            e: entry(rng)?,
+            bit: rng.below(64) as u32,
+        },
+        _ => Change::DoubleArea(cell),
+    })
+}
+
+/// The name of a result of `validate`.
+fn outcome(result: &Result<(), GridError>) -> &'static str {
+    match result {
+        Ok(()) => "Ok",
+        Err(GridError::Length(_)) => "Length",
+        Err(GridError::NotUnit { .. }) => "NotUnit",
+        Err(GridError::Offsets) => "Offsets",
+        Err(GridError::BadNeighbor { .. }) => "BadNeighbor",
+        Err(GridError::Asymmetric { .. }) => "Asymmetric",
+        Err(GridError::Orientation { .. }) => "Orientation",
+        Err(GridError::EdgeLength { .. }) => "EdgeLength",
+        Err(GridError::CentreDistance { .. }) => "CentreDistance",
+        Err(GridError::Area) => "Area",
+    }
+}
+
+#[test]
+fn wheels_are_valid() {
+    for n in [4, 5, 1_000, 100_000] {
+        let g = wheel(n);
+        let m = 4 * (n as usize - 1);
+        assert_eq!(g.neighbors.len(), m, "n = {n}");
+        assert_eq!(g.neighbors(0).len(), n as usize - 1, "n = {n}");
+        assert_eq!(g.validate(), Ok(()), "n = {n}");
+        if n <= 1_000 {
+            assert_eq!(validate_quadratic(&g), Ok(()), "n = {n}");
+        }
+    }
+    // Four cells: the tetrahedron's graph, every cell next to the others.
+    let g = wheel(4);
+    for cell in 0..4 {
+        let mut ring = g.neighbors(cell).to_vec();
+        ring.sort_unstable();
+        let others: Vec<u32> = (0..4).filter(|&k| k != cell).collect();
+        assert_eq!(ring, others, "cell {cell}");
+    }
+}
+
+#[test]
+fn validate_matches_the_previous_implementation() {
+    // Ticket M1-13: the same result, `Ok` or the same error with the same
+    // cells, as the code of commit 5ef3a4c for grids changed in every way
+    // `Change` describes; the counts show that each check is reached.
+    let mut counts = std::collections::BTreeMap::new();
+    let mut compare = |g: &SphereGrid, what: &dyn Fn() -> String| {
+        let result = g.validate();
+        assert_eq!(result, validate_quadratic(g), "{}", what());
+        *counts.entry(outcome(&result)).or_insert(0u32) += 1;
+    };
+    let octahedron = SphereGrid::octahedron();
+    let singles = every_single_change(&octahedron);
+    for &change in &singles {
+        let mut g = octahedron.clone();
+        apply(&mut g, change);
+        compare(&g, &|| format!("octahedron, {change:?}"));
+    }
+    let empty = SphereGrid {
+        positions: Vec::new(),
+        neighbor_offsets: vec![0],
+        neighbors: Vec::new(),
+        areas_sr: Vec::new(),
+        edge_lengths_rad: Vec::new(),
+        centre_distances_rad: Vec::new(),
+    };
+    compare(&empty, &|| "the grid without cells".to_string());
+    let grids = [
+        ("octahedron", octahedron),
+        ("icosahedron", from_points_ok(&icosahedron_points())),
+        ("Fibonacci 60", grid(60, 1)),
+        ("wheel 9", wheel(9)),
+        ("wheel 40", wheel(40)),
+    ];
+    let mut rng = Rng::for_stream(1, "test/validate");
+    for (name, base) in &grids {
+        assert_eq!(base.validate(), Ok(()), "{name}");
+        for _ in 0..2_000 {
+            // One to three changes, the kinds in the order of `Change`, so
+            // that the offsets are still valid where a change needs them.
+            let mut kinds: Vec<u64> = (0..=rng.below(3)).map(|_| rng.below(12)).collect();
+            kinds.sort_unstable();
+            let mut g = base.clone();
+            let mut changes = Vec::new();
+            for kind in kinds {
+                if let Some(change) = random_change(&g, kind, &mut rng) {
+                    apply(&mut g, change);
+                    changes.push(change);
+                }
+            }
+            compare(&g, &|| format!("{name}, {changes:?}"));
+        }
+    }
+    println!(
+        "{} single changes of the octahedron, then 10,000 random ones: {counts:?}",
+        singles.len()
+    );
+    for name in [
+        "Ok",
+        "Offsets",
+        "BadNeighbor",
+        "Asymmetric",
+        "Orientation",
+        "EdgeLength",
+        "CentreDistance",
+        "Area",
+    ] {
+        assert!(counts.contains_key(name), "no grid gave {name}: {counts:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Golden fingerprints
 
 /// FNV-1a of the positions (x, y, z) and then the areas, little-endian.
@@ -1270,4 +1707,38 @@ fn timing_650k() {
          dual {t_dual:.2} s; SphereGrid::fibonacci {total:.2} s; validate {t_validate:.2} s"
     );
     assert!(total < 60.0, "{total} s");
+}
+
+/// The shortest of five runs of `validate`, which must accept `g`, in
+/// seconds.
+fn best_validate_s(g: &SphereGrid) -> f64 {
+    (0..5)
+        .map(|_| {
+            let start = Instant::now();
+            assert_eq!(g.validate(), Ok(()));
+            start.elapsed().as_secs_f64()
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
+#[test]
+#[ignore = "timing; run in release with --ignored --nocapture"]
+fn timing_wheel_100k() {
+    // Ticket M1-13: a wheel, whose hub lists every other cell, validates
+    // in time comparable to the Fibonacci grid of the same size (before
+    // the ticket: 1.136 s against 0.0149 s, growing as n²).
+    let n = 100_000;
+    let t_wheel = best_validate_s(&wheel(n));
+    let t_fibonacci = best_validate_s(&grid(n, 1));
+    let t_wheel_650k = best_validate_s(&wheel(650_000));
+    println!(
+        "validate, best of 5: wheel of 100,000 cells {t_wheel:.4} s, \
+         SphereGrid::fibonacci(100_000, 1) {t_fibonacci:.4} s (ratio {:.2}); \
+         wheel of 650,000 cells {t_wheel_650k:.4} s",
+        t_wheel / t_fibonacci
+    );
+    assert!(
+        t_wheel <= 2.0 * t_fibonacci,
+        "wheel {t_wheel} s, Fibonacci grid {t_fibonacci} s"
+    );
 }

@@ -293,7 +293,7 @@ impl SphereGrid {
     /// [`BuildError::Degenerate`] when a point's cell has no positive area,
     /// else [`BuildError::Invalid`] if the grid fails
     /// [`validate`](Self::validate), which every returned grid has passed
-    /// (0.10 s of about 2.8 s for 650,000 cells in release).
+    /// (0.08 to 0.09 s of about 2.8 s for 650,000 cells in release).
     pub fn from_points(points: &[Vec3], seed: u64) -> Result<Self, BuildError> {
         check_cell_count(points.len())?;
         let triangulation = delaunay::triangulate(points, seed)?;
@@ -458,6 +458,15 @@ impl SphereGrid {
     /// within 1e-12 relative. The sum is taken in index order with Neumaier's
     /// compensated summation, so that its own rounding stays far below the
     /// tolerance.
+    ///
+    /// Time and memory are linear in the size of the grid for every input,
+    /// including arrays read from a file (ticket M1-13), however long a
+    /// ring is: whether a neighbour lists a cell back, and the entry that
+    /// does (the first one), come from the entries grouped by the cell
+    /// they list, not from searching the neighbour's ring. That grouping
+    /// takes 8 bytes per neighbour entry and 12 bytes per cell besides the
+    /// grid (39 MB for 650,000 cells, whose grid holds 101 MB), freed on
+    /// return.
     pub fn validate(&self) -> Result<(), GridError> {
         let n = self.positions.len();
         if self.neighbor_offsets.len() != n + 1 {
@@ -498,20 +507,33 @@ impl SphereGrid {
                 return Err(GridError::NotUnit { cell: i as u32 });
             }
         }
+        let incoming = Incoming::new(self);
+        // `back[j]`: the first entry of ring j that lists the cell being
+        // checked, valid where `stamp[j]` is that cell. `u32::MAX` is no
+        // cell, since n ≤ u32::MAX.
+        let mut stamp = vec![u32::MAX; n];
+        let mut back = vec![0u32; n];
         for cell in 0..n as u32 {
-            let ring = self.neighbors(cell);
-            for &j in ring {
+            // In increasing entry index, so the first entry of each ring
+            // that lists `cell` comes first.
+            for &(j, f) in incoming.listing(cell) {
+                if stamp[j as usize] != cell {
+                    stamp[j as usize] = cell;
+                    back[j as usize] = f;
+                }
+            }
+            for &j in self.neighbors(cell) {
                 if j as usize >= n || j == cell {
                     return Err(GridError::BadNeighbor { cell, neighbor: j });
                 }
-                if !self.neighbors(j).contains(&cell) {
+                if stamp[j as usize] != cell {
                     return Err(GridError::Asymmetric { a: cell, b: j });
                 }
             }
             if !self.ring_is_counter_clockwise(cell) {
                 return Err(GridError::Orientation { cell });
             }
-            self.validate_edges(cell)?;
+            self.validate_edges(cell, &back)?;
         }
         let full_sphere = 4.0 * PI;
         // Written so that NaN fails, including a NaN sum (inf − inf when
@@ -541,15 +563,11 @@ impl SphereGrid {
 
     /// The edge-length and centre-distance checks of
     /// [`validate`](Self::validate) for the neighbours of `cell`, which are
-    /// known to be valid and symmetric.
-    fn validate_edges(&self, cell: u32) -> Result<(), GridError> {
+    /// known to be valid and symmetric; `back[j]` is the first entry of
+    /// ring `j` that lists `cell`, for every neighbour `j`.
+    fn validate_edges(&self, cell: u32, back: &[u32]) -> Result<(), GridError> {
         for (e, &j) in self.range(cell).zip(self.neighbors(cell)) {
-            let back = self.range(j).start
-                + self
-                    .neighbors(j)
-                    .iter()
-                    .position(|&k| k == cell)
-                    .expect("the adjacency is symmetric");
+            let back = back[j as usize] as usize;
             let length = self.edge_lengths_rad[e];
             if !(0.0..=PI).contains(&length)
                 || length.to_bits() != self.edge_lengths_rad[back].to_bits()
@@ -567,6 +585,70 @@ impl SphereGrid {
             }
         }
         Ok(())
+    }
+}
+
+/// The entries of every ring grouped by the cell they list (ticket M1-13),
+/// so that [`SphereGrid::validate`] finds whether a neighbour lists a cell
+/// back, and at which entry, without searching rings, whose sizes a grid
+/// read from a file does not bound. A stable counting sort of the entries
+/// by their neighbour: O(n + m) time for n cells and m entries, 8 bytes
+/// per entry and 4 per cell.
+struct Incoming {
+    /// `n + 1` offsets into `entries`, one group per cell.
+    offsets: Vec<u32>,
+    /// The pair `(j, f)` of every entry `f` of ring `j` whose neighbour is
+    /// a cell, grouped by that neighbour, in increasing `f` within a group.
+    entries: Vec<(u32, u32)>,
+}
+
+impl Incoming {
+    /// The grouping of `grid`'s entries. The offsets of `grid` must be
+    /// valid (from 0, non-decreasing, ending at the number of entries) and
+    /// it may have at most `u32::MAX` cells, as `validate` checks first;
+    /// the number of entries, equal to the last offset, then fits `u32`
+    /// too, and so do the group sizes and entry indices.
+    fn new(grid: &SphereGrid) -> Self {
+        let n = grid.len();
+        // The size of each group; an entry whose neighbour is not a cell
+        // (n or more) lists no cell and is left out.
+        let mut offsets = vec![0u32; n + 1];
+        for &k in &grid.neighbors {
+            if (k as usize) < n {
+                offsets[k as usize] += 1;
+            }
+        }
+        // The start of each group, and the number of pairs at `offsets[n]`.
+        let mut start = 0;
+        for o in &mut offsets {
+            let size = *o;
+            *o = start;
+            start += size;
+        }
+        let mut entries = vec![(0, 0); start as usize];
+        // Rings in index order, so each group is in increasing entry
+        // index; `offsets[k]` serves as the next free place of group k.
+        for j in 0..n as u32 {
+            for f in grid.range(j) {
+                let k = grid.neighbors[f] as usize;
+                if k < n {
+                    entries[offsets[k] as usize] = (j, f as u32);
+                    offsets[k] += 1;
+                }
+            }
+        }
+        // `offsets[k]` is now the end of group k, the start of group k + 1.
+        offsets.copy_within(0..n, 1);
+        offsets[0] = 0;
+        Self { offsets, entries }
+    }
+
+    /// The pairs `(j, f)` of the entries `f` of ring `j` that list `cell`,
+    /// in increasing `f`.
+    fn listing(&self, cell: u32) -> &[(u32, u32)] {
+        let start = self.offsets[cell as usize] as usize;
+        let end = self.offsets[cell as usize + 1] as usize;
+        &self.entries[start..end]
     }
 }
 

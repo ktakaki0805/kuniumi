@@ -503,6 +503,17 @@ section: every change after which an existing seed produces a different world
   `MAX_HYPSOMETRY_BINS` = 10⁶ bins (8 MB; formerly 2³¹), and the new
   `Hypsometry::bins_needed` counts them beforehand with the histogram's
   own arithmetic. Every output for an existing seed is unchanged (M2-18).
+- `SphereGrid::validate`, and with it `SphereGrid::from_parts`,
+  `kuniumi_io::grid_file::read_grid` and `world_dir::read`, takes time
+  linear in the size of the grid for every input. A crafted grid whose
+  hub lists every other cell (a wheel) took time quadratic in the cells,
+  1.14 s for 100,000 cells and about 56 s for 650,000 (release), because
+  each neighbour's ring was searched for the reverse entry; the entries
+  are now grouped by the cell they list with a counting sort (8 bytes per
+  entry and 12 per cell while validating, 39 MB for 650,000 cells), and
+  the wheels take 0.009 s and 0.11 s. Results and the first error are the
+  same for every input; the 650,000-cell Fibonacci grid validates in 0.08
+  to 0.09 s instead of 0.10 s (M1-13).
 
 ### World-breaking
 
