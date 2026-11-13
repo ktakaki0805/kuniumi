@@ -394,4 +394,71 @@ mod tests {
             );
         }
     }
+
+    /// The bytes of a file with the octahedron's centres and areas and the
+    /// given rings, laid out as in the module documentation; every entry
+    /// with the octahedron's edge length and centre distance.
+    fn octahedron_file_with_rings(rings: &[&[u32]]) -> Vec<u8> {
+        let header_and_centres = &octahedron_bytes()[..172];
+        let m: usize = rings.iter().map(|r| r.len()).sum();
+        let mut b = header_and_centres[..20].to_vec();
+        b.extend((m as u64).to_le_bytes());
+        b.extend(&header_and_centres[28..]);
+        let mut offset = 0u32;
+        b.extend(offset.to_le_bytes());
+        for ring in rings {
+            offset += ring.len() as u32;
+            b.extend(offset.to_le_bytes());
+        }
+        for j in rings.iter().copied().flatten() {
+            b.extend(j.to_le_bytes());
+        }
+        for _ in 0..6 {
+            b.extend(2.094_395_102_393_195_7f64.to_bits().to_le_bytes());
+        }
+        for _ in 0..m {
+            b.extend(1.230_959_417_340_774_7f64.to_bits().to_le_bytes());
+        }
+        for _ in 0..m {
+            b.extend((PI / 2.0).to_bits().to_le_bytes());
+        }
+        b
+    }
+
+    #[test]
+    fn rejects_rings_that_do_not_turn_once() {
+        // Ticket M1-14: a file whose cells list no neighbours, and one
+        // whose ring of +Z goes around it twice, were read as valid grids
+        // before.
+        let rings: [&[u32]; 6] = [
+            &[2, 4, 3, 5],
+            &[2, 5, 3, 4],
+            &[4, 0, 5, 1],
+            &[4, 1, 5, 0],
+            &[0, 2, 1, 3],
+            &[0, 3, 1, 2],
+        ];
+        assert!(octahedron_file_with_rings(&rings) == octahedron_bytes());
+        let mut doubled = rings;
+        doubled[4] = &[0, 2, 1, 3, 0, 2, 1, 3];
+        let empty: [&[u32]; 6] = [&[]; 6];
+        let cases: [(Vec<u8>, &str); 2] = [
+            (
+                octahedron_file_with_rings(&empty),
+                "cell 0 has no neighbours",
+            ),
+            (
+                octahedron_file_with_rings(&doubled),
+                "neighbours of cell 4 go around it 2 times, not once",
+            ),
+        ];
+        for (bytes, message) in cases {
+            let err = read_grid(bytes.as_slice()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{message}");
+            assert_eq!(
+                err.to_string(),
+                format!("the .kgrid file does not hold a valid grid: {message}")
+            );
+        }
+    }
 }

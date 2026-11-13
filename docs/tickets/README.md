@@ -66,6 +66,7 @@ planned once the code they build on exists.
 | [M1-12](M1-12-survey-slope-test.md) | Slope normalisation test of the jitter survey | M1-11 |
 | [M1-13](M1-13-validate-linear-time.md) | Grid validation in linear time for any input | MV-01 |
 | [M1-14](M1-14-simple-rings.md) | Rings that turn once around their cell | M1-13 |
+| [M1-15](M1-15-rings-form-one-sphere.md) | Rings that fit together into one sphere | M1-14 |
 
 ### M2 — One-shot plates and initial relief
 

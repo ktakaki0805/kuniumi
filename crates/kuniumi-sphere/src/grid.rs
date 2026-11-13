@@ -85,6 +85,19 @@ pub enum GridError {
         /// Cell index.
         cell: u32,
     },
+    /// The ring of a cell does not go around it exactly once (ticket
+    /// M1-14): it is empty (`turns` 0), or its steps, each
+    /// counter-clockwise by less than π (the check of
+    /// [`Orientation`](Self::Orientation), which comes first), turn around
+    /// the cell `turns` times in all, 2 or more. A ring that lists a
+    /// neighbour twice always turns at least twice. Counted exactly with
+    /// [`orient3d`](crate::predicates::orient3d).
+    Winding {
+        /// Cell index.
+        cell: u32,
+        /// How many times the ring goes around the cell.
+        turns: u32,
+    },
     /// The Voronoi edge length stored for `(cell, neighbor)` is not finite,
     /// lies outside [0, π], or differs (in any bit) from the one stored for
     /// `(neighbor, cell)`.
@@ -123,6 +136,13 @@ impl fmt::Display for GridError {
             }
             Self::Orientation { cell } => {
                 write!(f, "neighbours of cell {cell} are not counter-clockwise")
+            }
+            Self::Winding { cell, turns: 0 } => write!(f, "cell {cell} has no neighbours"),
+            Self::Winding { cell, turns } => {
+                write!(
+                    f,
+                    "neighbours of cell {cell} go around it {turns} times, not once"
+                )
             }
             Self::EdgeLength { cell, neighbor } => {
                 write!(
@@ -293,7 +313,7 @@ impl SphereGrid {
     /// [`BuildError::Degenerate`] when a point's cell has no positive area,
     /// else [`BuildError::Invalid`] if the grid fails
     /// [`validate`](Self::validate), which every returned grid has passed
-    /// (0.08 to 0.09 s of about 2.8 s for 650,000 cells in release).
+    /// (0.12 s of about 2.8 s for 650,000 cells in release).
     pub fn from_points(points: &[Vec3], seed: u64) -> Result<Self, BuildError> {
         check_cell_count(points.len())?;
         let triangulation = delaunay::triangulate(points, seed)?;
@@ -324,7 +344,9 @@ impl SphereGrid {
     /// - `positions`: one unit vector per cell;
     /// - `neighbor_offsets`: length `n + 1`, the neighbours of cell `i` are
     ///   `neighbors[offsets[i]..offsets[i + 1]]`;
-    /// - `neighbors`: symmetric adjacency, counter-clockwise seen from outside;
+    /// - `neighbors`: symmetric adjacency, counter-clockwise seen from
+    ///   outside, each ring going once around its cell (so listing each
+    ///   neighbour once);
     /// - `areas_sr`: Voronoi cell areas in steradians, summing to 4π;
     /// - `edge_lengths_rad`: per entry of `neighbors`, the length of the
     ///   Voronoi edge between the two cells, in radians;
@@ -416,7 +438,8 @@ impl SphereGrid {
         start..end
     }
 
-    /// Neighbours of cell `i`, counter-clockwise as seen from outside.
+    /// Neighbours of cell `i`, counter-clockwise as seen from outside,
+    /// going once around the cell (each listed once).
     pub fn neighbors(&self, i: u32) -> &[u32] {
         &self.neighbors[self.range(i)]
     }
@@ -450,14 +473,23 @@ impl SphereGrid {
     ///
     /// The order: the array lengths, the offsets, every centre; then cell by
     /// cell in index order: the neighbours' indices and symmetry, the
-    /// counter-clockwise order, and per neighbour its edge length and centre
-    /// distance; finally the areas. The orientation test is the exact
-    /// predicate with which [`delaunay::triangulate`] checks its triangles,
-    /// so a grid from [`from_points`](Self::from_points) never fails it, even
-    /// for nearly hemispherical inputs. The areas must be positive and sum to 4π
-    /// within 1e-12 relative. The sum is taken in index order with Neumaier's
-    /// compensated summation, so that its own rounding stays far below the
-    /// tolerance.
+    /// counter-clockwise order, the number of times the ring goes around
+    /// the cell, and per neighbour its edge length and centre distance;
+    /// finally the areas. The orientation test is the exact predicate with
+    /// which [`delaunay::triangulate`] checks its triangles, so a grid from
+    /// [`from_points`](Self::from_points) never fails it, even for nearly
+    /// hemispherical inputs. Every ring must go around its cell exactly
+    /// once (ticket M1-14), which rules out an empty ring, a ring that
+    /// lists a neighbour twice and one that turns more than once; the turns
+    /// are counted exactly, with the same predicate. A grid from
+    /// `from_points` never fails this either: its rings are the triangle
+    /// fans of the convex hull of the centres, every triangle positive seen
+    /// from the centre of the sphere, and the hull, a closed surface around
+    /// that centre, projects onto the sphere once, so the angles of the
+    /// fan around each centre add up to one turn. The areas must be
+    /// positive and sum to 4π within 1e-12 relative. The sum is taken in
+    /// index order with Neumaier's compensated summation, so that its own
+    /// rounding stays far below the tolerance.
     ///
     /// Time and memory are linear in the size of the grid for every input,
     /// including arrays read from a file (ticket M1-13), however long a
@@ -466,7 +498,9 @@ impl SphereGrid {
     /// they list, not from searching the neighbour's ring. That grouping
     /// takes 8 bytes per neighbour entry and 12 bytes per cell besides the
     /// grid (39 MB for 650,000 cells, whose grid holds 101 MB), freed on
-    /// return.
+    /// return. Counting the turns of a ring of `d` entries takes `d − 1`
+    /// exact predicates besides the `d` of the counter-clockwise check, and
+    /// no memory.
     pub fn validate(&self) -> Result<(), GridError> {
         let n = self.positions.len();
         if self.neighbor_offsets.len() != n + 1 {
@@ -533,6 +567,10 @@ impl SphereGrid {
             if !self.ring_is_counter_clockwise(cell) {
                 return Err(GridError::Orientation { cell });
             }
+            let turns = self.ring_turns(cell);
+            if turns != 1 {
+                return Err(GridError::Winding { cell, turns });
+            }
             self.validate_edges(cell, &back)?;
         }
         let full_sphere = 4.0 * PI;
@@ -559,6 +597,61 @@ impl SphereGrid {
             let b = self.position(ring[(k + 1) % ring.len()]);
             orient3d(p, a, b, Vec3::ZERO) == Orientation::Negative
         })
+    }
+
+    /// How many times the ring of `cell` goes around its centre `p`
+    /// (ticket M1-14), for a ring that has passed
+    /// [`ring_is_counter_clockwise`](Self::ring_is_counter_clockwise); 0 for
+    /// an empty ring.
+    ///
+    /// For the ring `a₀, …, a_{d−1}`, let `side_k` be
+    /// `orient3d(p, a₀, a_k, 0)`, which is `Zero` for `k = 0`, and
+    /// `side_d = side_0`. The result is the number of `k < d` with
+    /// `side_k` `Positive` and `side_{k+1}` not.
+    ///
+    /// Why: `orient3d(p, a, b, 0)` is the sign of `−det[a, b, p]`, and
+    /// `det[a, b, p]` is unchanged when `a` and `b` are replaced by their
+    /// projections onto the plane through the origin perpendicular to `p`.
+    /// Every step `a_k → a_{k+1}` has passed with `det > 0`, so every
+    /// projection is non-zero and each step turns it counter-clockwise
+    /// about `p` by an angle in (0, π). Measured counter-clockwise from
+    /// `a₀`, the angles of the neighbours, unwrapped, grow from 0 to 2π
+    /// times the number of turns, and each multiple of 2π on the way is
+    /// passed or reached by exactly one step, a step of less than π
+    /// passing at most one. A step from the angle `φ` to `φ + θ` does so
+    /// exactly when `φ mod 2π` lies in (π, 2π), where `side_k` is
+    /// `Positive`, and `(φ + θ) mod 2π` in [0, π), where `side_{k+1}` is
+    /// not: from (π, 2π), a step of less than π that does not reach 2π
+    /// stays in (π, 2π), and one that does ends in [2π, 3π). The last step
+    /// always counts, since `a_{d−1} → a₀` turns counter-clockwise.
+    ///
+    /// The steps between two entries that list the same neighbour start
+    /// and end at the same angle (mod 2π), and so do the steps from the
+    /// second back round to the first; each part turns a positive multiple
+    /// of 2π, so such a ring turns at least twice. `d − 1` exact
+    /// predicates, no rounding: the same count on every platform.
+    fn ring_turns(&self, cell: u32) -> u32 {
+        let p = self.position(cell);
+        let ring = self.neighbors(cell);
+        let Some(&first) = ring.first() else {
+            return 0;
+        };
+        let a0 = self.position(first);
+        // `side_0` is Zero: not Positive.
+        let mut was_positive = false;
+        let mut turns = 0;
+        for &j in &ring[1..] {
+            let positive = orient3d(p, a0, self.position(j), Vec3::ZERO) == Orientation::Positive;
+            if was_positive && !positive {
+                turns += 1;
+            }
+            was_positive = positive;
+        }
+        // The step back to `a₀`, whose side is Zero.
+        if was_positive {
+            turns += 1;
+        }
+        turns
     }
 
     /// The edge-length and centre-distance checks of

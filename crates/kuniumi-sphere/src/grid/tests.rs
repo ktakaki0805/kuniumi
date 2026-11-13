@@ -27,10 +27,14 @@
 //! - `rejects_*` (also `fibonacci_rejects_more_than_max_cells_before_generating_points`),
 //!   `coplanar_ring_steps_are_not_counter_clockwise`, `errors_display`,
 //!   `compensated_sum_*`.
-//! - `wheels_are_valid`, `validate_matches_the_previous_implementation`
-//!   (ticket M1-13: a grid whose hub lists every other cell, and the
-//!   results of `validate` against its previous, quadratic implementation
-//!   for grids changed in many ways).
+//! - `wheels_are_valid`, `validate_matches_the_reference` (tickets M1-13
+//!   and M1-14: a grid whose hub lists every other cell, and the results
+//!   of `validate` against its previous, quadratic implementation with the
+//!   turns of each ring counted by summing angles, for grids changed in
+//!   many ways).
+//! - `rejects_rings_that_do_not_turn_once`, `ring_turns_counts_exactly`
+//!   (ticket M1-14: rings that are empty, list a neighbour twice or turn
+//!   around their cell more than once; hand counts of turns).
 //! - `fingerprints_match_recorded`.
 //! - `timing_650k`, `timing_wheel_100k` (ignored): run with
 //!   `cargo test -p kuniumi-sphere --release grid -- --ignored --nocapture`.
@@ -1188,6 +1192,14 @@ fn errors_display() {
         .to_string(),
         "invalid centre distance between cells 1 and 2"
     );
+    assert_eq!(
+        GridError::Winding { cell: 6, turns: 0 }.to_string(),
+        "cell 6 has no neighbours"
+    );
+    assert_eq!(
+        GridError::Winding { cell: 4, turns: 2 }.to_string(),
+        "neighbours of cell 4 go around it 2 times, not once"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1249,12 +1261,41 @@ fn wheel(n: u32) -> SphereGrid {
     )
 }
 
-/// `SphereGrid::validate` as it was before ticket M1-13 (commit 5ef3a4c),
-/// the reference of `validate_matches_the_previous_implementation`: the
-/// symmetry with `contains` and the reverse entries with `position`, in
-/// time proportional to the sum of the squared ring sizes. The other
-/// checks are the same code as today's.
-fn validate_quadratic(g: &SphereGrid) -> Result<(), GridError> {
+/// The turns of the ring of `cell` around its centre `p`, counted
+/// independently of `SphereGrid::ring_turns` (ticket M1-14): the angles of
+/// the steps `a → b` about `p`, `atan2(|(a × b) · p|, a · b − (a · p)(b · p))`
+/// with std's `atan2` (the angle between the projections of `a` and `b`
+/// onto the plane perpendicular to `p`), summed over the ring and divided
+/// by 2π, rounded to the nearest whole number. The absolute value is taken
+/// because every step must already have passed the exact
+/// counter-clockwise check, which fixes its sign; every angle then lies in
+/// [0, π] within rounding (about 1e-15 rad), far from changing the
+/// rounded count. An empty ring gives 0.
+fn reference_turns(g: &SphereGrid, cell: u32) -> u32 {
+    let p = g.position(cell);
+    let ring = g.neighbors(cell);
+    let total_rad: f64 = (0..ring.len())
+        .map(|k| {
+            let a = g.position(ring[k]);
+            let b = g.position(ring[(k + 1) % ring.len()]);
+            a.cross(b)
+                .dot(p)
+                .abs()
+                .atan2(a.dot(b) - a.dot(p) * b.dot(p))
+        })
+        .sum();
+    (total_rad / core::f64::consts::TAU).round() as u32
+}
+
+/// The reference of `validate_matches_the_reference`. With
+/// `count_turns = false`, `SphereGrid::validate` as it was before ticket
+/// M1-13 (commit 5ef3a4c): the symmetry with `contains` and the reverse
+/// entries with `position`, in time proportional to the sum of the
+/// squared ring sizes; the other checks are the same code as today's.
+/// With `count_turns = true`, also the rule of ticket M1-14: after the
+/// counter-clockwise check, `Winding` unless the ring turns once around
+/// its cell (`reference_turns`).
+fn validate_reference(g: &SphereGrid, count_turns: bool) -> Result<(), GridError> {
     use super::{AREA_TOLERANCE, DISTANCE_TOLERANCE_RAD, UNIT_TOLERANCE};
     use crate::coords::great_circle_rad;
     use crate::predicates::in_exact_range;
@@ -1308,6 +1349,12 @@ fn validate_quadratic(g: &SphereGrid) -> Result<(), GridError> {
         if !g.ring_is_counter_clockwise(cell) {
             return Err(GridError::Orientation { cell });
         }
+        if count_turns {
+            let turns = reference_turns(g, cell);
+            if turns != 1 {
+                return Err(GridError::Winding { cell, turns });
+            }
+        }
         for (e, &j) in g.range(cell).zip(g.neighbors(cell)) {
             let back = g.range(j).start
                 + g.neighbors(j)
@@ -1341,7 +1388,7 @@ fn validate_quadratic(g: &SphereGrid) -> Result<(), GridError> {
 }
 
 /// One change to the arrays of a grid, for
-/// `validate_matches_the_previous_implementation`. Indices refer to the
+/// `validate_matches_the_reference`. Indices refer to the
 /// arrays as they are when the change is applied; changes that move
 /// entries keep the edge data with them and the offsets consistent.
 #[derive(Clone, Copy, Debug)]
@@ -1524,6 +1571,7 @@ fn outcome(result: &Result<(), GridError>) -> &'static str {
         Err(GridError::BadNeighbor { .. }) => "BadNeighbor",
         Err(GridError::Asymmetric { .. }) => "Asymmetric",
         Err(GridError::Orientation { .. }) => "Orientation",
+        Err(GridError::Winding { .. }) => "Winding",
         Err(GridError::EdgeLength { .. }) => "EdgeLength",
         Err(GridError::CentreDistance { .. }) => "CentreDistance",
         Err(GridError::Area) => "Area",
@@ -1539,7 +1587,7 @@ fn wheels_are_valid() {
         assert_eq!(g.neighbors(0).len(), n as usize - 1, "n = {n}");
         assert_eq!(g.validate(), Ok(()), "n = {n}");
         if n <= 1_000 {
-            assert_eq!(validate_quadratic(&g), Ok(()), "n = {n}");
+            assert_eq!(validate_reference(&g, true), Ok(()), "n = {n}");
         }
     }
     // Four cells: the tetrahedron's graph, every cell next to the others.
@@ -1552,17 +1600,170 @@ fn wheels_are_valid() {
     }
 }
 
+/// `wheel(n)` with the hub's ring replaced by `hub_ring`, not validated;
+/// edge data as in `from_rings`.
+fn wheel_with_hub_ring(n: u32, hub_ring: &[u32]) -> SphereGrid {
+    let w = wheel(n);
+    let mut rings: Vec<Vec<u32>> = (0..n).map(|i| w.neighbors(i).to_vec()).collect();
+    rings[0] = hub_ring.to_vec();
+    from_rings(w.positions, &rings, w.areas_sr)
+}
+
+/// Grids whose only defect is a ring that does not turn once around its
+/// cell (ticket M1-14), each with the error `validate` must return; every
+/// one passes the checks of ticket M1-13.
+fn rings_that_do_not_turn_once() -> Vec<(&'static str, SphereGrid, GridError)> {
+    let octahedron = SphereGrid::octahedron();
+    let mut doubled = octahedron.clone();
+    apply(&mut doubled, Change::DoubleRing(4));
+    // The octahedron and a seventh cell, listing no neighbour and listed
+    // by none.
+    let mut positions = octahedron.positions.clone();
+    positions.push(unit(1.0, 1.0, 1.0));
+    let mut rings: Vec<Vec<u32>> = (0..6).map(|i| octahedron.neighbors(i).to_vec()).collect();
+    rings.push(Vec::new());
+    let isolated = from_rings(positions, &rings, vec![FULL_SPHERE_SR / 7.0; 7]);
+    let no_rings: Vec<Vec<u32>> = vec![Vec::new(); 6];
+    let without_adjacency = from_rings(
+        octahedron.positions.clone(),
+        &no_rings,
+        octahedron.areas_sr.clone(),
+    );
+    let one_cell = from_rings(vec![Vec3::Z], &[Vec::new()], vec![FULL_SPHERE_SR]);
+    let winding = |cell: u32, turns: u32| GridError::Winding { cell, turns };
+    vec![
+        ("octahedron, ring of +Z doubled", doubled, winding(4, 2)),
+        // Five rim cells 72° apart; the hub visits every second one, 144°
+        // per step: the pentagram {5/2}.
+        (
+            "pentagram",
+            wheel_with_hub_ring(6, &[1, 3, 5, 2, 4]),
+            winding(0, 2),
+        ),
+        // Seven rim cells 360°/7 apart, 3 · 360°/7 per step: {7/3}.
+        (
+            "heptagram",
+            wheel_with_hub_ring(8, &[1, 4, 7, 3, 6, 2, 5]),
+            winding(0, 3),
+        ),
+        ("octahedron and an isolated cell", isolated, winding(6, 0)),
+        (
+            "octahedron without adjacency",
+            without_adjacency,
+            winding(0, 0),
+        ),
+        ("one cell", one_cell, winding(0, 0)),
+    ]
+}
+
 #[test]
-fn validate_matches_the_previous_implementation() {
-    // Ticket M1-13: the same result, `Ok` or the same error with the same
-    // cells, as the code of commit 5ef3a4c for grids changed in every way
-    // `Change` describes; the counts show that each check is reached.
+fn rejects_rings_that_do_not_turn_once() {
+    for (name, g, error) in rings_that_do_not_turn_once() {
+        assert_eq!(validate_reference(&g, false), Ok(()), "{name}: M1-13 rules");
+        assert_eq!(
+            validate_reference(&g, true),
+            Err(error),
+            "{name}: reference"
+        );
+        assert_eq!(g.validate(), Err(error), "{name}");
+        let SphereGrid {
+            positions,
+            neighbor_offsets,
+            neighbors,
+            areas_sr,
+            edge_lengths_rad,
+            centre_distances_rad,
+        } = g;
+        assert_eq!(
+            SphereGrid::from_parts(
+                positions,
+                neighbor_offsets,
+                neighbors,
+                areas_sr,
+                edge_lengths_rad,
+                centre_distances_rad,
+            ),
+            Err(error),
+            "{name}: from_parts"
+        );
+    }
+}
+
+/// A grid of `positions` in which cell 4 has `ring` and every other cell
+/// none, for calling the ring checks directly (not valid as a whole).
+fn ring_of_cell_4(positions: &[Vec3], ring: &[u32]) -> SphereGrid {
+    let n = positions.len();
+    let mut neighbor_offsets = vec![0; 5];
+    neighbor_offsets.resize(n + 1, ring.len() as u32);
+    SphereGrid {
+        positions: positions.to_vec(),
+        neighbor_offsets,
+        neighbors: ring.to_vec(),
+        areas_sr: vec![0.0; n],
+        edge_lengths_rad: vec![0.0; ring.len()],
+        centre_distances_rad: vec![0.0; ring.len()],
+    }
+}
+
+#[test]
+fn ring_turns_counts_exactly() {
+    // Rings around +Z (cell 4), every step counter-clockwise; the count
+    // must not depend on where the ring starts. Hand counts: the
+    // octahedron's ring once, doubled twice, tripled three times.
+    let octahedron = SphereGrid::octahedron();
+    // The first four of the eight: +X, +Y, −X, −Y; then four cells below
+    // the equator at longitudes 0°, 90°, 180° and 270°, whose coordinates
+    // are exactly 0 where the longitude makes them so: the fifth lies
+    // exactly on the half-plane through +Z and the first (`orient3d`
+    // Zero), the third and seventh exactly opposite it.
+    let mut eight = octahedron.positions.clone();
+    eight.extend([
+        unit(1.0, 0.0, -0.5),
+        unit(0.0, 1.0, -0.5),
+        unit(-1.0, 0.0, -0.5),
+        unit(0.0, -1.0, -0.5),
+    ]);
+    let square = [0, 2, 1, 3];
+    let cases: [(&[Vec3], Vec<u32>, u32); 5] = [
+        (octahedron.positions(), Vec::new(), 0),
+        (octahedron.positions(), square.to_vec(), 1),
+        (octahedron.positions(), square.repeat(2), 2),
+        (octahedron.positions(), square.repeat(3), 3),
+        (&eight, vec![0, 2, 1, 3, 6, 7, 8, 9], 2),
+    ];
+    use crate::predicates::{Orientation, orient3d};
+    assert_eq!(
+        orient3d(Vec3::Z, eight[0], eight[6], Vec3::ZERO),
+        Orientation::Zero
+    );
+    for (positions, ring, turns) in cases {
+        for r in 0..ring.len().max(1) {
+            let mut rotated = ring.clone();
+            rotated.rotate_left(r);
+            let g = ring_of_cell_4(positions, &rotated);
+            assert!(g.ring_is_counter_clockwise(4), "{rotated:?}");
+            assert_eq!(g.ring_turns(4), turns, "{rotated:?}");
+            assert_eq!(reference_turns(&g, 4), turns, "{rotated:?}: reference");
+        }
+    }
+}
+
+#[test]
+fn validate_matches_the_reference() {
+    // Tickets M1-13 and M1-14: the same result, `Ok` or the same error
+    // with the same cells, as the code of commit 5ef3a4c with the turns
+    // counted by summing angles, for grids changed in every way `Change`
+    // describes and for the grids of `rings_that_do_not_turn_once`; the
+    // counts show that each check is reached.
     let mut counts = std::collections::BTreeMap::new();
     let mut compare = |g: &SphereGrid, what: &dyn Fn() -> String| {
         let result = g.validate();
-        assert_eq!(result, validate_quadratic(g), "{}", what());
+        assert_eq!(result, validate_reference(g, true), "{}", what());
         *counts.entry(outcome(&result)).or_insert(0u32) += 1;
     };
+    for (name, g, _) in rings_that_do_not_turn_once() {
+        compare(&g, &|| name.to_string());
+    }
     let octahedron = SphereGrid::octahedron();
     let singles = every_single_change(&octahedron);
     for &change in &singles {
@@ -1606,7 +1807,8 @@ fn validate_matches_the_previous_implementation() {
         }
     }
     println!(
-        "{} single changes of the octahedron, then 10,000 random ones: {counts:?}",
+        "6 rings that do not turn once, {} single changes of the octahedron, the grid without \
+         cells, then 10,000 random changes: {counts:?}",
         singles.len()
     );
     for name in [
@@ -1615,6 +1817,7 @@ fn validate_matches_the_previous_implementation() {
         "BadNeighbor",
         "Asymmetric",
         "Orientation",
+        "Winding",
         "EdgeLength",
         "CentreDistance",
         "Area",

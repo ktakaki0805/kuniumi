@@ -514,6 +514,19 @@ section: every change after which an existing seed produces a different world
   the wheels take 0.009 s and 0.11 s. Results and the first error are the
   same for every input; the 650,000-cell Fibonacci grid validates in 0.08
   to 0.09 s instead of 0.10 s (M1-13).
+- `SphereGrid::validate`, and with it `SphereGrid::from_parts`,
+  `kuniumi_io::grid_file::read_grid` and `world_dir::read`, rejects a ring
+  that does not go around its cell exactly once, with the new
+  `GridError::Winding { cell, turns }` ("cell N has no neighbours", or
+  "neighbours of cell N go around it K times, not once"). Before, the
+  octahedron with the ring of +Z listed twice, a hub whose five neighbours
+  form a pentagram, a cell without neighbours and a grid without any
+  adjacency were accepted. The turns are counted exactly with `orient3d`,
+  in `d − 1` predicates per ring of `d` entries and no memory; a ring that
+  lists a neighbour twice always turns at least twice. Every grid
+  `SphereGrid::from_points` builds is unchanged and passes; the
+  650,000-cell Fibonacci grid validates in 0.12 s instead of 0.08 to
+  0.09 s, and the 100,000-cell wheel of M1-13 in 0.012 s (M1-14).
 
 ### World-breaking
 
