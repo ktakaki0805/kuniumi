@@ -86,6 +86,7 @@ planned once the code they build on exists.
 | [M2-15](M2-15-chart-metrics-extremes.md) | Extreme inputs of the chart and the metrics | M2-06 |
 | [M2-16](M2-16-workspace-lists.md) | Crate lists of the decisions and the design | M2-07 |
 | [M2-17](M2-17-deep-water-worlds.md) | Sea level of deep water worlds | M2-08 |
+| [M2-18](M2-18-histogram-span.md) | Elevation spans beyond the histogram in world directories | M2-15 |
 
 ### MV — Viewer
 

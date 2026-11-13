@@ -608,9 +608,16 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 /// [`io::ErrorKind::InvalidInput`] if a field name is not valid
 /// ([`Field::is_valid_name`]) or appears twice, if a field does not hold one
 /// value per cell, if a class field holds a value that is not a class id
-/// ([`Field::is_class_value`]), as [`world_json`], or if `surface_height`
-/// holds a value that is not finite; otherwise the error of the file
-/// system, with the path in its message.
+/// ([`Field::is_class_value`]), as [`world_json`], if `surface_height`
+/// holds a value that is not finite, or one whose elevation above the sea
+/// level, `h − z`, overflows (the limits of `kuniumi_sim::metrics`; the
+/// grid's areas, summing to 4π, always meet theirs); otherwise the error of
+/// the file system, with the path in its message.
+///
+/// # Panics
+///
+/// If the elevations of `surface_height` span more than 2³¹ bins of 100 m,
+/// about 2.1e11 m ([`ElevationMetrics::new`]; ticket M2-18).
 pub fn write(dir: &Path, world: &World) -> io::Result<Vec<PathBuf>> {
     write_maps_of_width(dir, world, MAP_WIDTH_PX)
 }
@@ -666,12 +673,26 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
 ///
 /// # Errors
 ///
-/// [`io::ErrorKind::InvalidInput`] if a height is not finite.
+/// [`io::ErrorKind::InvalidInput`] if a height is not finite, or if its
+/// elevation above the sea level overflows: the same correctly rounded
+/// `h − z` as the metrics' own check.
 fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
     if let Some(field) = world.field(SURFACE_HEIGHT) {
         if let Some(cell) = field.values.iter().position(|h| !h.is_finite()) {
             return Err(invalid_input(format!(
                 "field `{SURFACE_HEIGHT}` has the non-finite value {} at cell {cell}",
+                field.values[cell]
+            )));
+        }
+        let sea_level = world.sea_level_m;
+        if let Some(cell) = field
+            .values
+            .iter()
+            .position(|&h| !(h - sea_level).is_finite())
+        {
+            return Err(invalid_input(format!(
+                "field `{SURFACE_HEIGHT}` has the value {:e} at cell {cell}, whose elevation \
+                 above the sea level of {sea_level:e} m overflows",
                 field.values[cell]
             )));
         }

@@ -294,6 +294,134 @@ fn subnormal_bounds() {
 }
 
 #[test]
+fn grid_lines_end_at_x_max() {
+    // From 0 to 22 in steps of 5: ⌊22/5⌋ + 1 = 5 lines, at 0, 5, 10, 15
+    // and 20, in the columns ⌊x/22 · 20⌋ = 0, 4, 9, 13 and 18. The loop may
+    // reach the sixth multiple, 25, beyond x_max: no line for it, so the
+    // last column stays blank.
+    let axes = Axes {
+        x_max: 22.0,
+        ..AXES
+    };
+    let pixels = histogram(&[], &axes, &[], W as u32, H as u32);
+    let mut expected = Image(vec![BACKGROUND; W * H]);
+    for c in [0, 4, 9, 13, 18] {
+        for r in 0..Q {
+            expected.set(c, r, GRID);
+        }
+    }
+    for r in [5, 0] {
+        for c in 0..P {
+            expected.set(c, r, GRID);
+        }
+    }
+    for x in M - 1..M + P {
+        expected.0[(M + Q) * W + x] = AXIS;
+    }
+    for y in M..=M + Q {
+        expected.0[y * W + M - 1] = AXIS;
+    }
+    assert_pixels(&pixels, &expected.0, W);
+}
+
+#[test]
+fn grid_lines_one_beyond_the_count() {
+    // From 3 to 4.3 in steps of 0.1: 3/0.1 rounds to 30 exactly (k₀ = 30)
+    // and 4.3/0.1 to 42.99999999999999, so 13 lines are counted,
+    // but 43 · 0.1 rounds to 4.3 itself: a 14th line, drawn as before the
+    // count bounded the loop. Columns ⌊(fl(k · 0.1) − 3)/1.3 · 20⌋ for
+    // k = 30…43 (Python, also with the old `while` loop): 0, 1, 3, 4, 6,
+    // 7, 9, 10, 12, 13, 15, 16, 18 and 19.
+    let axes = Axes {
+        x_min: 3.0,
+        x_max: 4.3,
+        x_step: 0.1,
+        ..AXES
+    };
+    let pixels = histogram(&[], &axes, &[], W as u32, H as u32);
+    let mut expected = Image(vec![BACKGROUND; W * H]);
+    for c in [0, 1, 3, 4, 6, 7, 9, 10, 12, 13, 15, 16, 18, 19] {
+        for r in 0..Q {
+            expected.set(c, r, GRID);
+        }
+    }
+    for r in [5, 0] {
+        for c in 0..P {
+            expected.set(c, r, GRID);
+        }
+    }
+    for x in M - 1..M + P {
+        expected.0[(M + Q) * W + x] = AXIS;
+    }
+    for y in M..=M + Q {
+        expected.0[y * W + M - 1] = AXIS;
+    }
+    assert_pixels(&pixels, &expected.0, W);
+}
+
+#[test]
+fn grid_lines_far_from_zero() {
+    // More than 2⁵³ steps from 0, where `k + 1` rounds to `k` (the loop over
+    // the lines never ended before ticket M2-15). By hand, on 20 columns:
+    //
+    // From 2⁵³ to 2⁵³ + 8 in steps of 1: 9 lines; the indices 2⁵³ + j,
+    // j = 0…9, round (ties to even) to the doubles 2⁵³ + 2m, m = 0…4, in
+    // the columns ⌊2m/8 · 20⌋ = 0, 5, 10, 15 and 20 → 19: the lines of
+    // `AXES`.
+    let two_53 = 9_007_199_254_740_992.0;
+    let axes = Axes {
+        x_min: two_53,
+        x_max: two_53 + 8.0,
+        x_step: 1.0,
+        ..AXES
+    };
+    let pixels = histogram(&[], &axes, &[], W as u32, H as u32);
+    assert_pixels(&pixels, &Image::blank().0, W);
+
+    // From 1e20 to the next double, 1e20 + 2¹⁴, in steps of 1,000: the plot
+    // holds two doubles. 1e20/1000 = 1e17 exactly and (1e20 + 16384)/1000
+    // rounds to 1e17 + 16 (an ulp of 16), so 17 lines; their indices round
+    // to 1e17 (j ≤ 8) and 1e17 + 16 (j ≥ 9), whose multiples are 1e20
+    // (column 0) and 1e20 + 16000, which rounds to 1e20 + 16384 (column
+    // 20 → 19). A bar over the whole range, 5 rows high in every column;
+    // a marker at x_max, in column 19.
+    let axes = Axes {
+        x_min: 1e20,
+        x_max: 1e20 + 16_384.0,
+        x_step: 1_000.0,
+        ..AXES
+    };
+    let bars = [bar(1e20, 1e20 + 16_384.0, 0.5, RED)];
+    let markers = [Marker {
+        x: 1e20 + 16_384.0,
+        colour: MARK,
+    }];
+    let pixels = histogram(&bars, &axes, &markers, W as u32, H as u32);
+    let mut expected = Image(vec![BACKGROUND; W * H]);
+    for c in [0, 19] {
+        for r in 0..Q {
+            expected.set(c, r, GRID);
+        }
+    }
+    for r in [5, 0] {
+        for c in 0..P {
+            expected.set(c, r, GRID);
+        }
+    }
+    for c in 0..P {
+        expected.bar(c, 5, RED);
+    }
+    expected.bar(19, Q, MARK);
+    for x in M - 1..M + P {
+        expected.0[(M + Q) * W + x] = AXIS;
+    }
+    for y in M..=M + Q {
+        expected.0[y * W + M - 1] = AXIS;
+    }
+    assert_pixels(&pixels, &expected.0, W);
+}
+
+#[test]
 #[should_panic(expected = "larger than its margins")]
 fn needs_room_for_a_plot() {
     let _ = histogram(&[], &AXES, &[], 40, 50);

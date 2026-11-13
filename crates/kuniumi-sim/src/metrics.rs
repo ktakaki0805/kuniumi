@@ -25,6 +25,40 @@
 //!   `f64` are used, so the results are the same on every platform.
 //!
 //! [`earth`] holds the values of Earth that the design compares with.
+//!
+//! # Limits
+//!
+//! Every metric takes the areas `a_i`, the heights `h_i` and the sea level
+//! `z` and panics (naming the first offending cell where there is one)
+//! unless (ticket M2-15):
+//!
+//! 1. there is one area per height, and at least one cell;
+//! 2. every area is finite and positive, and their total, summed in cell
+//!    order, lies below 2¹⁰²³ ≈ 8.99e307, half the largest double. Merely
+//!    finite would not do: the percentiles sum the areas in the order of
+//!    the elevations, which rounds differently (the areas `MAX/2, MAX/2,
+//!    2⁹⁶⁹, 2⁹⁶⁹` sum to `f64::MAX` in that order, to infinity with the
+//!    small ones first); with the margin, sums of the areas in any order
+//!    stay finite (for fewer than 2⁵⁰ cells);
+//! 3. every height and the sea level are finite, and so is every elevation
+//!    `x_i = h_i − z` (heights and sea level below 2¹⁰²³ in magnitude are
+//!    enough).
+//!
+//! [`Hypsometry::new`] also needs every `x_i / w` to be finite (true for
+//! any bin width `w ≥ 1 m`) and at most 2³¹ bins; [`percentiles_m`]
+//! fractions in (0, 1]. The grid of a world has areas in steradians
+//! summing to 4π, so for [`ElevationMetrics::of_world`] only the heights
+//! and the sea level matter.
+//!
+//! Within these limits no metric returns NaN or infinity. The land fraction
+//! and the shares are ratios of finite sums of areas; the percentiles and
+//! the extremes are elevations. The means `Σ a_i v_i / Σ a_i` of elevations
+//! and depths `v_i ≥ 0` keep this form where it is finite; where it
+//! overflows (two cells of area 1 at 1e308 m, or a sea level 1.7e308 m
+//! above a grid of 4π sr) they are `Σ (a_i / W) v_i`, with `W = Σ a_i`,
+//! capped at the largest `v_i`, since a weighted mean lies within its
+//! values. Products `a_i v_i` in the subnormal range (below about 2e-308)
+//! lose precision.
 
 use kuniumi_world::World;
 
@@ -46,6 +80,10 @@ pub const VALLEY_RATIO: f64 = 0.5;
 
 /// The most bins a histogram may have, 2³¹ ([`Hypsometry::new`]).
 const MAX_BINS: f64 = 2_147_483_648.0;
+
+/// The bound on the total area of the cells, 2¹⁰²³ (module documentation,
+/// "Limits").
+const MAX_TOTAL_AREA: f64 = 8.988_465_674_311_58e307;
 
 /// Approximate values of Earth, which the metrics are compared with.
 ///
@@ -84,8 +122,10 @@ pub mod earth {
 ///
 /// # Panics
 ///
-/// If the slices are empty or differ in length, an area is not finite and
-/// positive, or a height or the sea level is not finite.
+/// Beyond the limits of the module documentation: if the slices are empty
+/// or differ in length, an area is not finite and positive, the areas sum
+/// to 2¹⁰²³ or more, a height or the sea level is not finite, or an
+/// elevation `h_i − z` overflows.
 pub fn land_fraction(area: &[f64], height_m: &[f64], sea_level_m: f64) -> f64 {
     check(area, height_m, sea_level_m);
     let (mut land, mut total) = (0.0, 0.0);
@@ -132,6 +172,11 @@ fn is_ocean(height_m: f64, sea_level_m: f64) -> bool {
 
 /// `Σ a_i v_i / Σ a_i` over the cells for which `value` of the height gives
 /// some `v_i`, sums in cell order; `None` if it gives none.
+///
+/// The values are finite and not negative, and `W = Σ a_i` is finite (the
+/// limits of the module documentation). Should the quotient overflow, the
+/// mean is `Σ (a_i / W) v_i` in cell order instead, whose weights are at
+/// most 1, capped at the largest `v_i`.
 fn weighted_mean(
     area: &[f64],
     height_m: &[f64],
@@ -145,7 +190,23 @@ fn weighted_mean(
             any = true;
         }
     }
-    any.then(|| sum / weight)
+    if !any {
+        return None;
+    }
+    let mean = sum / weight;
+    if mean.is_finite() {
+        return Some(mean);
+    }
+    let (mut mean, mut largest) = (0.0, 0.0);
+    for (&a, &h) in area.iter().zip(height_m) {
+        if let Some(v) = value(h) {
+            mean += a / weight * v;
+            if v > largest {
+                largest = v;
+            }
+        }
+    }
+    Some(if mean > largest { largest } else { mean })
 }
 
 /// The area-weighted percentiles of the elevation (m) at `fractions` of the
@@ -395,7 +456,9 @@ impl ElevationMetrics {
     ///
     /// # Panics
     ///
-    /// As [`land_fraction`].
+    /// As [`land_fraction`], and as [`Hypsometry::new`] with
+    /// [`HYPSOMETRY_BIN_M`]: if the elevations span more than 2³¹ bins of
+    /// 100 m (about 2.1e11 m).
     pub fn new(area: &[f64], height_m: &[f64], sea_level_m: f64) -> Self {
         check(area, height_m, sea_level_m);
         let (lowest_m, highest_m) = height_m
@@ -422,8 +485,10 @@ impl ElevationMetrics {
     ///
     /// # Panics
     ///
-    /// As [`land_fraction`]: if the field does not hold one value per cell,
-    /// or a height or the sea level is not finite.
+    /// As [`new`](Self::new): if the field does not hold one value per
+    /// cell, a height or the sea level is not finite, an elevation above the
+    /// sea level overflows, or the elevations span more than 2³¹ bins. (The
+    /// areas of a grid sum to 4π, far below the limit.)
     pub fn of_world(world: &World) -> Option<Self> {
         let height = world.field(SURFACE_HEIGHT)?;
         let area: Vec<f64> = (0..world.grid.len() as u32)
@@ -433,12 +498,14 @@ impl ElevationMetrics {
     }
 }
 
-/// Checks the inputs of the metrics.
+/// Checks the inputs of the metrics (module documentation, "Limits").
 ///
 /// # Panics
 ///
 /// If `area` is empty or not as long as `height_m`, an area is not finite
-/// and positive, or a height or `sea_level_m` is not finite.
+/// and positive, the areas sum (in cell order) to 2¹⁰²³ or more, a height
+/// or `sea_level_m` is not finite, or an elevation `h − sea_level_m`
+/// overflows.
 fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
     assert!(
         !area.is_empty() && area.len() == height_m.len(),
@@ -462,6 +529,21 @@ fn check(area: &[f64], height_m: &[f64], sea_level_m: f64) {
         sea_level_m.is_finite(),
         "the sea level is not finite: {sea_level_m}"
     );
+    let total = area.iter().fold(0.0, |sum, &a| sum + a);
+    assert!(
+        total < MAX_TOTAL_AREA,
+        "the areas of the cells sum to {total:e}, not below 2^1023"
+    );
+    if let Some(cell) = height_m
+        .iter()
+        .position(|&h| !(h - sea_level_m).is_finite())
+    {
+        panic!(
+            "the elevation of cell {cell} above the sea level overflows: height {:e} m, \
+             sea level {sea_level_m:e} m",
+            height_m[cell]
+        );
+    }
 }
 
 #[cfg(test)]

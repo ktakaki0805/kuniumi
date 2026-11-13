@@ -18,7 +18,14 @@
 //!    from `x_min` to `x_max` (vertical) and of `y_step` above 0 up to
 //!    `y_max` (horizontal). The value `x` lies in the column
 //!    `⌊(x − x_min)/(x_max − x_min) · P⌋`, `x_max` in the last one; the value
-//!    `y` on the row `Q − round(y / y_max · Q)`, `y_max` on the first.
+//!    `y` on the row `Q − round(y / y_max · Q)`, `y_max` on the first. The
+//!    vertical lines are `k · x_step` for `k = k₀ + j`, `k₀ =
+//!    ⌈x_min / x_step⌉`, `j = 0, 1, …` while `k · x_step ≤ x_max`, at most
+//!    `n + 1` of them for the `n = ⌊x_max / x_step⌋ − k₀ + 1` lines that
+//!    may not outnumber the columns. More than 2⁵³ steps from 0, where
+//!    `f64` no longer holds every integer, `k₀ + j` rounds to the nearest
+//!    double: lines may coincide, and they fall on the columns of the
+//!    doubles nearest to the multiples (ticket M2-15).
 //! 2. [`AXIS`] lines just outside the plot, which nothing else touches:
 //!    below it (image row `M + Q`, columns `M − 1` to `M + P − 1`) and left
 //!    of it (image column `M − 1`, rows `M` to `M + Q`).
@@ -31,9 +38,10 @@
 //!
 //! Only `+ − × ÷`, comparisons, `floor`, `ceil`, `round` and conversions of
 //! integer-valued `f64` are used, so the pixels are the same on every
-//! platform. Any finite bounds work: subnormal ones, and ones whose
+//! platform. Any finite bounds work: subnormal ones, ones whose
 //! difference `x_max − x_min` would overflow (the differences are then
-//! taken of their halves).
+//! taken of their halves), and ones more than 2⁵³ steps from 0 (layout
+//! step 1).
 
 use crate::Rgb8;
 
@@ -90,6 +98,11 @@ pub struct Marker {
 
 /// A bar chart of `bars` on `axes`, with `markers`, `width_px × height_px`
 /// pixels (module documentation).
+///
+/// Any axes that pass the checks below are drawn, also axes more than 2⁵³
+/// steps from 0, whose vertical lines fall on the columns of the doubles
+/// nearest to the multiples of `x_step` (module documentation, layout step
+/// 1).
 ///
 /// # Panics
 ///
@@ -187,14 +200,20 @@ pub fn histogram(
         pixels[(margin + r) * width + margin + c] = colour;
     };
 
-    // 1. Grid lines.
-    let mut k = first_line;
-    while k * x_step <= x_max {
-        let c = column(k * x_step);
+    // 1. Grid lines. The count bounds the vertical ones where `k + 1`
+    // rounds to `k` (|k| ≥ 2⁵³); below that, the old `k += 1` reached the
+    // same `k`, and `k · x_step ≤ x_max` implies `x_max / x_step ≥ k − 1`,
+    // so it never drew more than `x_lines + 1` lines either. `x_lines` is
+    // a whole number in [0, columns].
+    for j in 0..=x_lines as usize {
+        let x = (first_line + j as f64) * x_step;
+        if x > x_max {
+            break;
+        }
+        let c = column(x);
         for r in 0..rows as usize {
             set(c, r, GRID);
         }
-        k += 1.0;
     }
     let mut k = 1.0;
     while k <= y_lines {

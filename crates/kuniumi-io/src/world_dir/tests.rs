@@ -22,7 +22,9 @@
 //! - `chart_axes` and `hypsometry_chart_draws_the_bins_and_the_markers`;
 //! - `writes_metrics_and_the_chart_before_world_json`;
 //! - `no_metrics_without_a_surface_height_and_none_left_over`;
-//! - `rejects_non_finite_heights_before_writing_anything`.
+//! - `rejects_non_finite_heights_before_writing_anything`;
+//! - `rejects_elevations_that_overflow_before_writing_anything` and
+//!   `huge_elevations_have_finite_metrics` (ticket M2-15).
 
 use std::path::PathBuf;
 
@@ -1207,6 +1209,43 @@ fn rejects_non_finite_heights_before_writing_anything() {
         );
         assert!(!dir.exists(), "nothing is written");
     }
+}
+
+#[test]
+fn rejects_elevations_that_overflow_before_writing_anything() {
+    // 1e308 m above a sea level of −1e308 m: the elevation overflows.
+    let mut world = world_with_relief();
+    world.fields[2].values[3] = 1e308;
+    world.sea_level_m = -1e308;
+    let dir = scratch("overflowing_elevation");
+    let err = write(&dir, &world).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(
+        err.to_string(),
+        "field `surface_height` has the value 1e308 at cell 3, whose elevation above \
+         the sea level of -1e308 m overflows"
+    );
+    assert!(!dir.exists(), "nothing is written");
+}
+
+#[test]
+fn huge_elevations_have_finite_metrics() {
+    // Every cell 1e308 m above the sea level: the area-weighted sum of the
+    // elevations overflows (4π sr · 1e308 m), their mean does not.
+    let mut world = world_with_relief();
+    world.fields[2].values.fill(1e308);
+    world.sea_level_m = 0.0;
+    let dir = scratch("huge_elevations");
+    write_maps_of_width(&dir, &world, 64).unwrap();
+    let text = String::from_utf8(read(&dir.join(METRICS_FILE))).unwrap();
+    assert!(!text.contains("inf") && !text.contains("NaN"), "{text}");
+    let mean = text
+        .lines()
+        .find_map(|line| line.strip_prefix("mean_land_elevation_m = "))
+        .unwrap();
+    let mean: f64 = mean.parse().unwrap();
+    assert!((mean / 1e308 - 1.0).abs() < 1e-15, "{mean}");
+    remove(&dir);
 }
 
 /// A fresh path for the test `name` under the system's temporary directory

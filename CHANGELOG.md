@@ -418,6 +418,14 @@ section: every change after which an existing seed produces a different world
   `world_dir::map_colours(field, world, metrics)`, which returns the range
   too; the maps of the other fields, the fields themselves, `world.json`
   and `metrics.txt` are unchanged (M2-14).
+- The functions of `kuniumi_sim::metrics` state their limits ("Limits" in
+  the module documentation) and panic when the areas sum to 2¹⁰²³ or more
+  (formerly a land fraction, shares or means of NaN) or an elevation
+  `h − z` overflows, naming the cell (formerly a panic inside the
+  histogram, or none); `world_dir::write` returns `InvalidInput` for such
+  an elevation of `surface_height` before writing anything, and documents
+  the one panic left, elevations spanning more than 2³¹ bins of 100 m
+  (M2-18). Every output for an existing seed is unchanged (M2-15).
 
 ### Removed
 
@@ -429,6 +437,15 @@ section: every change after which an existing seed produces a different world
   `kuniumi_io::colormap` no longer links to the private `VIRIDIS`, and that
   of `kuniumi_sphere::points` no longer spells out the target of its `TAU`
   link, which resolves to `core::f64::consts::TAU` as before (M2-09).
+- `kuniumi_io::chart::histogram` no longer loops forever on an x axis more
+  than 2⁵³ steps from 0, where `k + 1` rounds to `k`: the vertical lines
+  are counted, at most one more than the lines the axes may hold, and fall
+  on the columns of the nearest doubles; every chart drawn before is the
+  same pixel for pixel. The mean land elevation and mean ocean depth of
+  `kuniumi_sim::metrics` no longer overflow to infinity when `Σ a_i v_i`
+  does (a sea level of 1.7e308 m on a grid in sr), but fall back to the
+  weights `a_i / Σ a_i`; the bits are unchanged wherever the old result
+  was finite (M2-15).
 
 ### World-breaking
 

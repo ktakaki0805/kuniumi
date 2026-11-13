@@ -14,7 +14,9 @@
 //! - `metrics_of_a_world`: [`ElevationMetrics::of_world`];
 //! - `earth_like_worlds_have_two_separate_peaks`: Earth's parameters, seeds
 //!   1–10 at 10,000 cells;
-//! - the panics.
+//! - `total_area_below_2_pow_1023`, `elevations_near_the_largest_double` and
+//!   `means_whose_sums_overflow`: inputs at the limits (ticket M2-15);
+//! - the panics, the limits among them.
 
 use std::collections::BTreeMap;
 
@@ -600,4 +602,149 @@ fn percentiles_need_fractions_in_range() {
 #[should_panic(expected = "a bin width that is finite and positive")]
 fn bins_need_a_positive_width() {
     let _ = Hypsometry::new(&[1.0], &[1.0], 0.0, 0.0);
+}
+
+#[test]
+fn total_area_below_2_pow_1023() {
+    // The bound is 2^1023: biased exponent 2046, mantissa 0.
+    assert_eq!(MAX_TOTAL_AREA.to_bits(), 2046 << 52);
+    // Areas of 4e307 each, 8e307 in all, below 2^1023 ≈ 8.99e307: by hand,
+    // half the surface at +1 m and half at −1 m.
+    let (area, height) = ([4e307, 4e307], [1.0, -1.0]);
+    let metrics = ElevationMetrics::new(&area, &height, 0.0);
+    assert_bits(metrics.land_fraction, 0.5);
+    assert_eq!(metrics.mean_land_elevation_m, Some(1.0));
+    assert_eq!(metrics.mean_ocean_depth_m, Some(1.0));
+    assert_eq!(
+        metrics.percentiles_m,
+        [-1.0, -1.0, -1.0, -1.0, -1.0, 1.0, 1.0, 1.0, 1.0]
+    );
+    assert_eq!(metrics.hypsometry.shares(), [0.5, 0.5]);
+    // One ulp below the bound: 2^1022 + (2^1022 − 2^970) = 2^1023 − 2^970,
+    // accepted; the land fraction 2^1022 / (2^1023 − 2^970) rounds up to
+    // 0.5 + 2^-53 (Python: `2.0**1022 / (2.0**1023 - 2.0**970)`).
+    let half = f64::from_bits(2045 << 52); // 2^1022
+    let below = half - f64::from_bits(1993 << 52); // 2^1022 − 2^970, exact
+    assert_bits(
+        land_fraction(&[half, below], &[1.0, -1.0], 0.0),
+        0.5 + f64::EPSILON / 2.0,
+    );
+}
+
+#[test]
+#[should_panic(expected = "the areas of the cells sum to 8.98846567431158e307, not below 2^1023")]
+fn needs_a_total_area_strictly_below_2_pow_1023() {
+    // 2^1022 + 2^1022 = 2^1023 exactly: rejected.
+    let half = f64::from_bits(2045 << 52);
+    let _ = land_fraction(&[half, half], &[1.0, -1.0], 0.0);
+}
+
+#[test]
+fn elevations_near_the_largest_double() {
+    // 8.9e307 m above a sea level 8.9e307 m below the datum: an elevation
+    // of 1.78e308 m, below the largest double; one bin, all finite.
+    let metrics = ElevationMetrics::new(&[1.0], &[8.9e307], -8.9e307);
+    assert_bits(metrics.land_fraction, 1.0);
+    assert_eq!(metrics.mean_land_elevation_m, Some(1.78e308));
+    assert_eq!(metrics.mean_ocean_depth_m, None);
+    assert_eq!((metrics.lowest_m, metrics.highest_m), (1.78e308, 1.78e308));
+    assert_eq!(metrics.percentiles_m, [1.78e308; 9]);
+    let hyps = &metrics.hypsometry;
+    assert_eq!(hyps.shares(), [1.0]);
+    assert!(hyps.is_land(0));
+    assert!(hyps.lower_edge_m(0).is_finite() && hyps.upper_edge_m(0).is_finite());
+}
+
+#[test]
+fn means_whose_sums_overflow() {
+    // Where the quotient is finite, its bits are those of `Σ a_i v_i /
+    // Σ a_i`, not of the fallback: (1 + 2 + 4)/3 rounds to
+    // 2.3333333333333335, 1/3 + 2/3 + 4/3 summed to 2.333333333333333
+    // (Python).
+    assert_bits(
+        mean_land_elevation_m(&[1.0; 3], &[1.0, 2.0, 4.0], 0.0).unwrap(),
+        7.0 / 3.0,
+    );
+    // Two cells of area 1 at 1e308 m: Σ a x = 2e308 overflows; the mean is
+    // 1e308 m (by hand: weights ½ and ½).
+    let (area, z) = ([1.0, 1.0], 0.0);
+    assert_eq!(
+        mean_land_elevation_m(&area, &[1e308, 1e308], z),
+        Some(1e308)
+    );
+    assert_eq!(mean_ocean_depth_m(&area, &[-1e308, -1e308], z), Some(1e308));
+    // Unequal values: areas 2 and 1 at 1e308 m and 1.5e308 m, so the
+    // weights 2/3 and 1/3 (Python: `2.0/3.0*1e308 + 1.0/3.0*1.5e308` is
+    // 1.1666666666666665e308), not the largest value.
+    assert_eq!(
+        mean_land_elevation_m(&[2.0, 1.0], &[1e308, 1.5e308], z),
+        Some(1.166_666_666_666_666_5e308)
+    );
+    // Land and ocean: the weights are the land's (W = 2), not the
+    // surface's; the ocean's sum does not overflow.
+    let (area, height) = ([1.0, 1.0, 1.0], [1e308, 1e308, -1.0]);
+    assert_eq!(mean_land_elevation_m(&area, &height, z), Some(1e308));
+    assert_eq!(mean_ocean_depth_m(&area, &height, z), Some(1.0));
+    // Eleven equal cells at the largest double: the weights 1/11 sum the
+    // values to beyond it (Python: `sum((1/11.0) * M for _ in range(11))`
+    // is inf for M = sys.float_info.max); a mean lies within its values,
+    // so it is the largest double.
+    assert_eq!(
+        mean_land_elevation_m(&[1.0; 11], &[f64::MAX; 11], 0.0),
+        Some(f64::MAX)
+    );
+    // A sea level 1.7e308 m above the octahedron (4π sr): Σ a (z − h)
+    // overflows; every depth rounds to 1.7e308 m, and so does their mean
+    // within rounding.
+    let area = areas_sr(&SphereGrid::octahedron());
+    let height = [-8_000.0, 0.0, 300.0, -4_000.0, 1_000.0, -11_000.0];
+    let metrics = ElevationMetrics::new(&area, &height, 1.7e308);
+    let depth = metrics.mean_ocean_depth_m.unwrap();
+    assert_close(depth / 1.7e308, 1.0, 1e-15, "the mean depth");
+    assert_eq!(metrics.mean_land_elevation_m, None);
+    assert_bits(metrics.land_fraction, 0.0);
+}
+
+#[test]
+#[should_panic(expected = "the areas of the cells sum to inf, not below 2^1023")]
+fn needs_a_total_area_below_2_pow_1023() {
+    let _ = land_fraction(&[1e308, 1e308], &[1.0, 2.0], 0.0);
+}
+
+#[test]
+#[should_panic(expected = "the areas of the cells sum to 1.7976931348623157e308, not below 2^1023")]
+fn needs_room_for_sums_in_any_order() {
+    // In cell order the areas sum to the largest double; sorted by
+    // elevation, the two small ones first, to infinity (2⁹⁶⁹ + 2⁹⁶⁹ + MAX/2
+    // = 2¹⁰²³, and 2¹⁰²³ + MAX/2 lies halfway between MAX and 2¹⁰²⁴, which
+    // is even), which would make every percentile the highest elevation.
+    let small = f64::from_bits((969 + 1023) << 52); // 2^969
+    let area = [f64::MAX / 2.0, f64::MAX / 2.0, small, small];
+    let _ = percentiles_m(&area, &[10.0, 20.0, 0.0, 1.0], 0.0, &PERCENTILES);
+}
+
+#[test]
+#[should_panic(expected = "the elevation of cell 0 above the sea level overflows: \
+                           height 1e308 m, sea level -1e308 m")]
+fn needs_elevations_that_do_not_overflow() {
+    let _ = ElevationMetrics::new(&[1.0], &[1e308], -1e308);
+}
+
+#[test]
+#[should_panic(expected = "over the bin width 0.5 m overflows")]
+fn bins_need_a_finite_index() {
+    let _ = Hypsometry::new(&[1.0], &[1e308], 0.0, 0.5);
+}
+
+#[test]
+#[should_panic(expected = "more than 2^31")]
+fn bins_need_at_most_2_pow_31() {
+    // From 0 to 1e12 m in 100 m bins: 1e10 bins.
+    let _ = Hypsometry::new(&[1.0, 1.0], &[0.0, 1e12], 0.0, 100.0);
+}
+
+#[test]
+#[should_panic(expected = "more than 2^31")]
+fn metrics_need_at_most_2_pow_31_bins() {
+    let _ = ElevationMetrics::new(&[1.0, 1.0], &[0.0, 1e12], 0.0);
 }
