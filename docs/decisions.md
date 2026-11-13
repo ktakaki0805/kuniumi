@@ -37,13 +37,15 @@ Japanese.
 | `kuniumi-math` | deterministic math, random numbers, vectors, SI units |
 | `kuniumi-sphere` | the spherical cell grid |
 | `kuniumi-world` | planet parameters, settings, the world data model |
+| `kuniumi-config` | settings files (TOML, D-15) |
 | `kuniumi-sim` | the generation pipeline (no I/O) |
 | `kuniumi-io` | file formats, images, fingerprints |
 | `kuniumi-cli` | the `kuniumi` command |
 
-`kuniumi-sim` never depends on `kuniumi-io`. Planned crates: `kuniumi-config`
-(settings files, D-15), `kuniumi-viewer` (D-19), `kuniumi-gpu` (D-08),
-`kuniumi-ffi` (engine bindings, D-07).
+`kuniumi-sim` never depends on `kuniumi-io`. Planned crates: `kuniumi-viewer`
+(D-19), `kuniumi-gpu` (D-08), `kuniumi-ffi` (engine bindings, D-07).
+(changed 2026-11-13: `kuniumi-config`, built by M2-07, moved from the planned
+crates into the table)
 
 **D-07 Generation API and output.** `kuniumi_sim::generate` does no I/O and
 never reads global state, the clock or the machine's core count, so it can be

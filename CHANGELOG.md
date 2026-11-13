@@ -446,6 +446,8 @@ section: every change after which an existing seed produces a different world
   does (a sea level of 1.7e308 m on a grid in sr), but fall back to the
   weights `a_i / Σ a_i`; the bits are unchanged wherever the old result
   was finite (M2-15).
+- D-06 (`docs/decisions.md`) and the project table of the design list
+  `kuniumi-config` as an existing crate, no longer as planned (M2-16).
 
 ### World-breaking
 
