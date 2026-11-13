@@ -426,6 +426,19 @@ section: every change after which an existing seed produces a different world
   an elevation of `surface_height` before writing anything, and documents
   the one panic left, elevations spanning more than 2³¹ bins of 100 m
   (M2-18). Every output for an existing seed is unchanged (M2-15).
+- The Crust stage holds the water of a water world (every cell under
+  water) above its highest height in a spherical shell on the sphere of
+  radius `R + h_max`, instead of a layer of the area at the datum:
+  `stages::crust::sea_level_m` gives `h_max + d` with
+  `(A/3)((R + h_max + d)³ − (R + h_max)³) = V − C`, and
+  `stages::crust::water_volume_m3` above the brim the same shell, so it
+  stays the inverse of the sea level. On the smallest planet with the most
+  water (1,500 km, 10²⁰ m³, 20,000 cells, seed 1) the sea level falls from
+  +3,533,312 m to +1,508,308 m, within a few metres of a model in which
+  every cell's column is a spherical shell; at 13,000 km from +44,103 m to
+  +43,957 m. Both functions panic for a water world whose highest height
+  lies at or below the planet's centre, which `PlanetParams::validate`
+  excludes; below the brim nothing changes (M2-17).
 
 ### Removed
 
@@ -451,6 +464,12 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M2-17: the sea level of every water world (`ocean_volume_m3` at least
+  the water the basins hold when filled to the highest height) is lower:
+  by 0.33 % at 13,000 km with the most water and by a factor of 2.3 at
+  1,500 km, and with it its `metrics.txt`, `hypsometry.png` and
+  `surface_height.png`; its fields are unchanged. Every world with land,
+  the golden world among them, is unchanged bit for bit.
 - M2-13: `crust_age` changes in every world where a ridge cell spreading
   more slowly than 1 cm/yr is the first to reach one of its neighbours
   (seeds 1–8 at 650,000 cells; not seed 9, which has no such ridge cell,

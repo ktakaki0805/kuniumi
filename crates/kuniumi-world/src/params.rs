@@ -141,10 +141,11 @@ impl PlanetParams {
     /// drowns every planet within the bounds: a layer 47 km deep on a
     /// 13,000 km planet, whose relief from the deepest trench to the
     /// highest mountain is about 20 km. On the smallest planet (1,500 km)
-    /// it is seven times the planet's volume, and the thin-layer sea level
-    /// of the Crust stage (3,533 km above the datum, where a spherical
-    /// shell would be 1,509 km deep) is finite but far from physical
-    /// (ticket M2-17). The smallest is 0, a dry planet.
+    /// it is seven times the planet's volume: the Crust stage holds the
+    /// water above the highest height in a spherical shell, about 1,504 km
+    /// deep, which puts the sea level about 1,508 km above the datum
+    /// (ticket M2-17; a layer of the area at the datum would put it at
+    /// 3,533 km). The smallest is 0, a dry planet.
     pub const MAX_OCEAN_VOLUME_M3: f64 = 1e20;
 
     /// The lowest surface pressure: 10⁴ Pa (0.1 bar). Below it water boils

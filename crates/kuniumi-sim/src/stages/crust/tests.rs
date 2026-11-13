@@ -11,6 +11,12 @@
 //!   `sea_level_holds_the_volume` (against [`reference_volume_m3`]),
 //!   `volume_and_sea_level_are_monotonic` and
 //!   `no_water_and_water_worlds`;
+//! - water worlds, whose water above the highest height is a spherical
+//!   shell (ticket M2-17): the octahedron by hand, `no_water_and_water_worlds`
+//!   (against [`reference_water_world_level_m`] and
+//!   [`reference_shell_volume_m3`]) and
+//!   `deep_water_worlds_against_spherical_shells` (against the fully
+//!   spherical model, [`spherical_level_m`]);
 //! - `the_stage_adds_surface_height_and_sets_the_sea_level`;
 //! - `land_fraction_of_earth_like_worlds`: Earth's parameters, seeds 1–10
 //!   at 10,000 cells.
@@ -145,6 +151,86 @@ fn reference_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, leve
         sum = t;
     }
     (sum + compensation) * radius_m * radius_m
+}
+
+/// The area of `grid` (sr), summed here.
+fn total_area_sr(grid: &SphereGrid) -> f64 {
+    (0..grid.len() as u32).map(|i| grid.area_sr(i)).sum()
+}
+
+/// The volume of water (m³) below `level_m` over `heights_m` with the
+/// shell of ticket M2-17 above the brim, written here: up to the highest
+/// height `h_max`, [`reference_volume_m3`]; above it, that at the brim plus
+/// the spherical shell from `R + h_max` to `R + z`,
+/// `(A/3)((R + z)³ − (R + h_max)³)` (`A` the grid's area), with the cubes
+/// taken directly.
+fn reference_shell_volume_m3(
+    grid: &SphereGrid,
+    heights_m: &[f64],
+    radius_m: f64,
+    level_m: f64,
+) -> f64 {
+    let (_, highest) = extremes(heights_m);
+    if level_m <= highest {
+        return reference_volume_m3(grid, heights_m, radius_m, level_m);
+    }
+    let (top, sea) = (radius_m + highest, radius_m + level_m);
+    reference_volume_m3(grid, heights_m, radius_m, highest)
+        + total_area_sr(grid) / 3.0 * (sea * sea * sea - top * top * top)
+}
+
+/// The sea level (m) of a water world by the formula of ticket M2-17,
+/// written here in its direct form with std `cbrt`: the highest height plus
+/// the depth of a spherical shell on the sphere of radius
+/// `R_top = R + h_max` holding the water above the brim,
+/// `cbrt(R_top³ + (V − C)/(A/3)) − R_top`.
+fn reference_water_world_level_m(
+    grid: &SphereGrid,
+    heights_m: &[f64],
+    radius_m: f64,
+    volume_m3: f64,
+) -> f64 {
+    let (_, highest) = extremes(heights_m);
+    let capacity = reference_volume_m3(grid, heights_m, radius_m, highest);
+    let top = radius_m + highest;
+    let q = (volume_m3 - capacity) / (total_area_sr(grid) / 3.0);
+    highest + ((top * top * top + q).cbrt() - top)
+}
+
+/// The volume of water (m³) below `level_m` over `heights_m` with every
+/// cell's column of water a spherical shell, written here:
+/// `Σ_{h_i < z} a_i ((R + z)³ − (R + h_i)³)/3` in cell order. The design's
+/// bathtub (ticket M2-05) takes each column as a prism of area `a_i R²`
+/// instead, which is the first-order term of this in `h/R`.
+fn spherical_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, level_m: f64) -> f64 {
+    let sea = radius_m + level_m;
+    (0..grid.len())
+        .filter(|&i| heights_m[i] < level_m)
+        .map(|i| {
+            let floor = radius_m + heights_m[i];
+            grid.area_sr(i as u32) * (sea * sea * sea - floor * floor * floor) / 3.0
+        })
+        .sum()
+}
+
+/// The sea level (m) that holds `volume_m3` with every column a spherical
+/// shell ([`spherical_volume_m3`]), by bisection between the lowest height
+/// and the thin layer over the whole planet, which holds more than enough
+/// water for a planet whose highest height is above the datum.
+fn spherical_level_m(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, volume_m3: f64) -> f64 {
+    let (lowest, highest) = extremes(heights_m);
+    let thin = highest + volume_m3 / (total_area_sr(grid) * radius_m * radius_m);
+    let (mut lo, mut hi) = (lowest, thin);
+    assert!(spherical_volume_m3(grid, heights_m, radius_m, hi) >= volume_m3);
+    for _ in 0..200 {
+        let mid = 0.5 * (lo + hi);
+        if spherical_volume_m3(grid, heights_m, radius_m, mid) < volume_m3 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    hi
 }
 
 /// The lowest and highest of `heights_m`.
@@ -327,8 +413,11 @@ fn sea_level_on_the_octahedron() {
     let grid = SphereGrid::octahedron();
     let heights = [-4000.0, -3000.0, -1000.0, 0.0, 500.0, 1000.0];
     let radius_m = 1000.0;
-    // Every cell has the same area: the volume of water is
-    // `a R² Σ max(0, z − h_i)`.
+    // Every cell has the same area `a`: up to the highest height, the
+    // volume of water is `a R² Σ max(0, z − h_i)`. Above it (ticket M2-17)
+    // the water over the brim is a spherical shell on the sphere of radius
+    // `R + 1000 = 2000` m: `(6a/3)((R + z)³ − 2000³)`, in units of `a R²`
+    // `2 ((R + z)³ − 2000³) / 10⁶`.
     let unit_m3 = grid.area_sr(0) * radius_m * radius_m;
     for (sum_m, want_m) in [
         // −3000 ≤ z ≤ −1000: (z + 4000) + (z + 3000) = 3000 at z = −2000.
@@ -337,8 +426,12 @@ fn sea_level_on_the_octahedron() {
         (9000.0, 250.0),
         // At the brim: 5000 + 4000 + 2000 + 1000 + 500 = 12500.
         (12_500.0, 1000.0),
-        // A water world: 12500 + 6 × 100 at z = 1100.
-        (13_100.0, 1100.0),
+        // A water world: 12500 + 2 (2100³ − 2000³) / 10⁶ = 12500 + 2522 at
+        // z = 1100 (the thin layer of M2-05, 12500 + 6 (z − 1000), would
+        // give z = 1420.3).
+        (15_022.0, 1100.0),
+        // 12500 + 2 (3000³ − 2000³) / 10⁶ = 12500 + 38000 at z = 2000.
+        (50_500.0, 2000.0),
         // A little water in the lowest cell.
         (1.0, -3999.0),
     ] {
@@ -361,7 +454,10 @@ fn sea_level_on_the_octahedron() {
         (-4000.0, 0.0),
         (-2000.0, 3000.0),
         (250.0, 9000.0),
-        (1100.0, 13_100.0),
+        (1000.0, 12_500.0),
+        (1100.0, 15_022.0),
+        // 12500 + 2 (3000³ − 2000³) / 10⁶.
+        (2000.0, 50_500.0),
     ] {
         let got = water_volume_m3(&grid, &heights, radius_m, z);
         let want = sum_m * unit_m3;
@@ -429,13 +525,27 @@ fn volume_and_sea_level_are_monotonic() {
             }
             previous = Some(v);
         }
-        // The sea level for growing volumes: strictly higher, up to twice
-        // what the basins hold.
+        // And on through the brim, where the water above the highest height
+        // becomes a spherical shell (ticket M2-17), every 100 m up to 100 km
+        // above it; the volume at the brim itself is the bathtub's.
         let capacity = water_volume_m3(grid, heights, EARTH_RADIUS_M, highest);
+        let brim = reference_volume_m3(grid, heights, EARTH_RADIUS_M, highest);
+        assert!((capacity - brim).abs() <= 1e-12 * brim, "{capacity} {brim}");
+        let mut previous = capacity;
+        for k in 1..=1_000 {
+            let z = highest + 100.0 * f64::from(k);
+            let v = water_volume_m3(grid, heights, EARTH_RADIUS_M, z);
+            assert!(v > previous, "{z}: {v} after {previous}");
+            previous = v;
+        }
+        // The sea level for growing volumes: strictly higher, up to twice
+        // what the basins hold in steps of 1 %, then up to 200 times.
         let mut previous = sea_level_m(grid, heights, EARTH_RADIUS_M, 0.0);
         assert_eq!(previous.to_bits(), lowest.to_bits());
-        for k in 1..=200 {
-            let volume_m3 = capacity * f64::from(k) / 100.0;
+        let volumes = (1..=200)
+            .map(|k| capacity * f64::from(k) / 100.0)
+            .chain((3..=200).map(|k| capacity * f64::from(k)));
+        for volume_m3 in volumes {
             let z = sea_level_m(grid, heights, EARTH_RADIUS_M, volume_m3);
             assert!(z > previous, "{volume_m3:e}: {z} after {previous}");
             previous = z;
@@ -468,35 +578,78 @@ fn no_water_and_water_worlds() {
     assert_eq!(z.to_bits(), highest.to_bits());
 
     // Water worlds: every cell under water, the rest of the water as a
-    // layer over the whole planet.
+    // spherical shell on the sphere through the highest height (ticket
+    // M2-17), against the direct formula with std `cbrt`; the volume at the
+    // level, with the same shell, holds the water.
     for volume_m3 in [2.0 * capacity, 10.0 * capacity, 1e25] {
         let z = sea_level_m(grid, heights, EARTH_RADIUS_M, volume_m3);
-        let want = highest + (volume_m3 - capacity) / area_m2;
+        let want = reference_water_world_level_m(grid, heights, EARTH_RADIUS_M, volume_m3);
         assert!(
-            (z - want).abs() <= 1e-12 * want.abs(),
+            (z - want).abs() <= 1e-9 * want.abs(),
             "{volume_m3:e}: {z} {want}"
         );
         assert!(heights.iter().all(|&h| h < z), "{volume_m3:e}");
-        let held = reference_volume_m3(grid, heights, EARTH_RADIUS_M, z);
-        let error = (held - volume_m3).abs() / volume_m3;
-        assert!(error < 1e-9, "{volume_m3:e}: {error:e}");
+        for held in [
+            water_volume_m3(grid, heights, EARTH_RADIUS_M, z),
+            reference_shell_volume_m3(grid, heights, EARTH_RADIUS_M, z),
+        ] {
+            let error = (held - volume_m3).abs() / volume_m3;
+            assert!(error < 1e-9, "{volume_m3:e}: {error:e}");
+        }
+        // Lower than the thin layer of M2-05, which spreads the water over
+        // the area at the datum instead of the growing area of the shell.
+        let thin = highest + (volume_m3 - capacity) / area_m2;
+        assert!(z < thin, "{volume_m3:e}: {z} {thin}");
     }
-    // The largest volume: a finite level, the water's depth over the whole
-    // planet.
+    // 1e25 m³, about 9,000 times Earth's volume, makes a sea surface of
+    // nearly the radius of a ball of that volume, `cbrt(3 V / 4π)` ≈
+    // 1.337e8 m, instead of a layer of 2e10 m.
+    let z = sea_level_m(grid, heights, EARTH_RADIUS_M, 1e25);
+    let ball_m = (3e25 / (4.0 * core::f64::consts::PI)).cbrt();
+    let sea_radius_m = EARTH_RADIUS_M + z;
+    assert!((sea_radius_m - ball_m).abs() < 1e-3 * ball_m, "{z}");
+    // The largest volume: a finite level, the radius of the shell that
+    // holds it.
     let z = sea_level_m(grid, heights, EARTH_RADIUS_M, f64::MAX);
-    let want = f64::MAX / area_m2;
+    let want = reference_water_world_level_m(grid, heights, EARTH_RADIUS_M, f64::MAX);
     assert!(
         z.is_finite() && (z - want).abs() <= 1e-9 * want,
         "{z} {want}"
     );
+    assert!((z - 3.5e102).abs() < 0.01e102, "{z:e}");
 
-    // A flat planet: every volume makes a layer.
+    // A flat planet: every volume makes a shell on the sphere of radius
+    // `R − 1000`, which is the fully spherical model there.
     let flat = vec![-1000.0; grid.len()];
     let z = sea_level_m(grid, &flat, EARTH_RADIUS_M, 1.335e18);
-    let want = -1000.0 + 1.335e18 / area_m2;
-    assert!((z - want).abs() < 1e-9, "{z} {want}");
+    let base_m = EARTH_RADIUS_M - 1000.0;
+    let q = 1.335e18 / (total_sr / 3.0);
+    let want = -1000.0 + ((base_m * base_m * base_m + q).cbrt() - base_m);
+    assert!((z - want).abs() < 1e-6, "{z} {want}");
+    let held = spherical_volume_m3(grid, &flat, EARTH_RADIUS_M, z);
+    assert!((held - 1.335e18).abs() < 1e-9 * 1.335e18, "{held:e}");
     let z = sea_level_m(grid, &flat, EARTH_RADIUS_M, 0.0);
     assert_eq!(z.to_bits(), (-1000.0_f64).to_bits());
+}
+
+/// The shell above the brim needs a highest height above the planet's
+/// centre (ticket M2-17).
+#[test]
+#[should_panic(
+    expected = "the highest height, -2000 m, lies at or below the centre of a planet of radius 1000 m"
+)]
+fn a_water_world_needs_its_highest_height_above_the_centre() {
+    sea_level_m(&SphereGrid::octahedron(), &[-2000.0; 6], 1000.0, 1.0);
+}
+
+/// [`a_water_world_needs_its_highest_height_above_the_centre`], for the
+/// volume above the brim.
+#[test]
+#[should_panic(
+    expected = "the highest height, -2000 m, lies at or below the centre of a planet of radius 1000 m"
+)]
+fn the_volume_above_the_brim_needs_its_highest_height_above_the_centre() {
+    water_volume_m3(&SphereGrid::octahedron(), &[-2000.0; 6], 1000.0, -1000.0);
 }
 
 #[test]
@@ -642,6 +795,95 @@ fn the_stage_adds_surface_height_and_sets_the_sea_level() {
         Err(SimError::Field(kuniumi_world::FieldError::Duplicate { .. }))
     ));
     assert_eq!(world, copy);
+}
+
+/// Deep water worlds (ticket M2-17): the smallest and the largest planet
+/// with the most water `PlanetParams::validate` allows, and the smallest
+/// with Earth's water, through the Crust stage (1,000 cells, seed 3),
+/// against the fully spherical model, in which every cell's column of
+/// water is a spherical shell ([`spherical_level_m`]).
+///
+/// Both models hold the water above the brim in the same shell
+/// `S(z) = (A/3)((R + z)³ − R_top³)`, `R_top = R + h_max`; they differ only
+/// in the water held below the brim, the stage's prisms `C` against the
+/// spherical columns `C_s`. So `S(z) − S(z_s) = C_s − C`, and since
+/// `S' = A (R + z)² ≥ A R_top²` above the brim,
+/// `|z − z_s| ≤ |C_s − C| / (A R_top²)`. The prisms' error is bounded in
+/// turn: a column from `h` to `h_max` holds `1 + (u + v) + (u² + uv +
+/// v²)/3` times its prism (`u = h_max/R`, `v = h/R`), so
+/// `|C_s − C| ≤ (2m + m²) C` with `m = max |h_i| / R`. The thin layer of
+/// M2-05 put the sea level more than twice as high on a 1,500 km planet
+/// with the most water.
+#[test]
+fn deep_water_worlds_against_spherical_shells() {
+    let settings = Settings {
+        cells: 1_000,
+        allow_partial: true,
+        ..Settings::default()
+    };
+    let earth = PlanetParams::earth();
+    for (radius_m, gravity_m_s2, volume_m3, thin_over) in [
+        (
+            PlanetParams::MIN_RADIUS_M,
+            2.5,
+            PlanetParams::MAX_OCEAN_VOLUME_M3,
+            2.0,
+        ),
+        (PlanetParams::MIN_RADIUS_M, 2.5, earth.ocean_volume_m3, 1.02),
+        (
+            PlanetParams::MAX_RADIUS_M,
+            20.0,
+            PlanetParams::MAX_OCEAN_VOLUME_M3,
+            1.002,
+        ),
+    ] {
+        let params = PlanetParams {
+            radius_m,
+            surface_gravity_m_s2: gravity_m_s2,
+            ocean_volume_m3: volume_m3,
+            ..earth.clone()
+        };
+        assert_eq!(params.validate(), Ok(()), "{params:?}");
+        let world = crate::generate(&params, &settings, 3, &mut |_| {}).expect("a partial world");
+        let (grid, heights) = (&world.grid, values(&world, SURFACE_HEIGHT));
+        let z = world.sea_level_m;
+        let (lowest, highest) = extremes(heights);
+        let capacity = reference_volume_m3(grid, heights, radius_m, highest);
+        let spherical_capacity = spherical_volume_m3(grid, heights, radius_m, highest);
+        assert!(volume_m3 > capacity && z > highest, "{params:?}: {z}");
+        // The prisms' error below the brim.
+        let m = lowest.abs().max(highest.abs()) / radius_m;
+        let gap_m3 = (spherical_capacity - capacity).abs();
+        assert!(
+            gap_m3 <= (2.0 * m + m * m) * capacity,
+            "{params:?}: {gap_m3:e}"
+        );
+        // The sea level against the spherical model, within the bound that
+        // this error gives, and so within `(2m + m²)` of the brim's mean
+        // depth `C / (A R_top²)`.
+        let spherical = spherical_level_m(grid, heights, radius_m, volume_m3);
+        let (area_sr, top_m) = (total_area_sr(grid), radius_m + highest);
+        let bound_m = gap_m3 / (area_sr * top_m * top_m);
+        let thin = highest + (volume_m3 - capacity) / (area_sr * radius_m * radius_m);
+        eprintln!(
+            "{:.0} km, {volume_m3:e} m³: sea level {z:.3} m, spherical {spherical:.3} m \
+             (off by {:.3} m, bound {bound_m:.3} m, {:.2e} relative), thin layer {thin:.3} m",
+            radius_m / 1e3,
+            z - spherical,
+            (z - spherical).abs() / spherical,
+        );
+        assert!(
+            (z - spherical).abs() <= bound_m * (1.0 + 1e-6) + 1e-6,
+            "{params:?}: {z} {spherical} {bound_m}"
+        );
+        assert!((z - spherical).abs() < 1e-3 * spherical, "{params:?}");
+        assert!(
+            thin > thin_over * spherical,
+            "{params:?}: {thin} {spherical}"
+        );
+        let held = water_volume_m3(grid, heights, radius_m, z);
+        assert!((held - volume_m3).abs() < 1e-9 * volume_m3, "{held:e}");
+    }
 }
 
 #[test]

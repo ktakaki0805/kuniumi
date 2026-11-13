@@ -8,8 +8,9 @@
 //! - continental crust floats on the mantle by Airy isostasy, higher where
 //!   it is thicker ([`continental_height_m`]);
 //! - the sea level is the level at which the basins hold the planet's
-//!   water, [`PlanetParams::ocean_volume_m3`] ([`sea_level_m`]). The land
-//!   fraction is a result, never an input.
+//!   water, [`PlanetParams::ocean_volume_m3`] ([`sea_level_m`]); on a water
+//!   world, the water above the highest height is a spherical shell
+//!   (ticket M2-17). The land fraction is a result, never an input.
 //!
 //! Heights are relative to the datum of the reference radius, on which
 //! continental crust of the reference thickness (35 km) stands at
@@ -257,8 +258,26 @@ pub fn surface_heights_m(
 
 /// The volume of water (m³) below the level `level_m` (m) over the heights
 /// `heights_m` (m, one per cell of `grid`) on a planet of radius `radius_m`
-/// (m): `Σ max(0, z − h_i) a_i R²`, with `a_i` the area of cell `i` (sr),
-/// summed in cell order.
+/// (m), the inverse of [`sea_level_m`]:
+///
+/// - up to the highest height `h_max`, the bathtub of the design,
+///   `Σ max(0, z − h_i) a_i R²`, with `a_i` the area of cell `i` (sr),
+///   summed in cell order: each cell's column of water is a prism of the
+///   cell's area at the datum (ticket M2-05);
+/// - above it, where every cell lies under water, the water the basins hold
+///   at the brim, `C`, plus the spherical shell between the sphere through
+///   the highest height, of radius `R_top = R + h_max`, and the sea
+///   surface (ticket M2-17):
+///   `C + (A/3)((R_top + d)³ − R_top³)`, with `d = z − h_max` and
+///   `A = Σ a_i` (sr), evaluated as `C + A d (R_top² + R_top d + d²/3)`,
+///   free of cancellation.
+///
+/// Prisms are the first-order approximation of spherical columns in
+/// `h/R`; below the brim their error is about `2|h|/R` of the volume (at
+/// most about 1 % for heights within ±8 km on the smallest planet that
+/// `PlanetParams::validate` accepts, 1,500 km). Above the brim the water
+/// can be far deeper than the relief, and a layer of the area at the datum
+/// would be far from a shell (ticket M2-17), so the shell is exact there.
 ///
 /// A bathtub model: every cell below the level holds water, whether it is
 /// connected to the open ocean or not (enclosed basins, such as the seas
@@ -267,7 +286,10 @@ pub fn surface_heights_m(
 ///
 /// # Panics
 ///
-/// If `heights_m` does not hold one value per cell of `grid`.
+/// If `heights_m` does not hold one value per cell of `grid`, or if
+/// `level_m` lies above the highest height and that lies at or below the
+/// planet's centre (`R + h_max ≤ 0`, which the bounds of
+/// `PlanetParams::validate` exclude).
 pub fn water_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, level_m: f64) -> f64 {
     assert_eq!(
         heights_m.len(),
@@ -275,6 +297,19 @@ pub fn water_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, leve
         "a height for each of the {} cells",
         grid.len()
     );
+    let (_, highest) = extremes(heights_m);
+    if level_m <= highest {
+        return bathtub_m3(grid, heights_m, radius_m, level_m);
+    }
+    let top_m = shell_base_m(radius_m, highest);
+    let d = level_m - highest;
+    bathtub_m3(grid, heights_m, radius_m, highest)
+        + total_area_sr(grid) * d * (top_m * top_m + top_m * d + d * d / 3.0)
+}
+
+/// The bathtub `Σ max(0, z − h_i) a_i R²` (m³) of [`water_volume_m3`] at
+/// the level `level_m`, summed in cell order, for every level.
+fn bathtub_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, level_m: f64) -> f64 {
     let mut sum = 0.0;
     for (cell, &h) in (0..).zip(heights_m) {
         if h < level_m {
@@ -282,6 +317,30 @@ pub fn water_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, leve
         }
     }
     sum * radius_m * radius_m
+}
+
+/// The area `A = Σ a_i` (sr) of `grid`, summed in cell order (4π up to
+/// rounding).
+fn total_area_sr(grid: &SphereGrid) -> f64 {
+    (0..grid.len() as u32).map(|cell| grid.area_sr(cell)).sum()
+}
+
+/// The radius `R + h_max` (m) of the sphere through the highest height
+/// `highest_m`, on which the water above the brim lies as a spherical shell
+/// ([`water_volume_m3`], [`sea_level_m`]).
+///
+/// # Panics
+///
+/// If it is not positive: the highest height lies at or below the planet's
+/// centre.
+fn shell_base_m(radius_m: f64, highest_m: f64) -> f64 {
+    let top_m = radius_m + highest_m;
+    assert!(
+        top_m > 0.0,
+        "the highest height, {highest_m} m, lies at or below the centre of a planet of radius \
+         {radius_m} m"
+    );
+    top_m
 }
 
 /// The sea level (m, on the datum of `heights_m`) at which the basins of
@@ -303,14 +362,34 @@ pub fn water_volume_m3(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, leve
 ///   `hi`, the lowest level found that holds at least `V`; it holds `V`
 ///   within 1e-9 relative for Earth-like volumes (ticket M2-05).
 /// - `V ≥ C`, a water world: every cell lies under water, and the rest of
-///   the water, `V − C`, covers the whole planet as a layer:
-///   `z = h_max + (V − C) / (Σ a_i R²)`, in closed form. Finite for every
-///   finite volume on a planet of radius 1 m or more, far below the
-///   smallest radius that `PlanetParams::validate` accepts (1,500 km).
+///   the water, `V − C`, is a spherical shell on the sphere through the
+///   highest height, of radius `R_top = R + h_max` (ticket M2-17):
+///   `(A/3)((R_top + d)³ − R_top³) = V − C` with `A = Σ a_i` (sr), so
+///   `z = h_max + d` with `d = b − R_top`, `b = (R_top³ + q)^(1/3)` and
+///   `q = (V − C)/(A/3)`, in closed form. `d` is evaluated as
+///   `q / (R_top² + R_top b + b²)` (from `b³ − R_top³ = (b − R_top)(b² +
+///   R_top b + R_top²)`), which is free of cancellation: `d` is 0 at
+///   `V = C`, so the brim is `h_max` exactly, and a few ulps accurate for a
+///   thin shell. The cube root is [`det::pow`]`(x, 1/3)`, which enters only
+///   the denominator. Finite for every finite volume on a planet-scale
+///   `R_top`, between 1e-100 m and 1e100 m, whose square and cube neither
+///   underflow nor overflow; the bounds of `PlanetParams::validate` keep
+///   it near 1,500 to 13,000 km.
+///
+/// The thin layer of ticket M2-05, `h_max + (V − C)/(A R²)`, spread the
+/// water over the area at the datum: on the smallest planet that
+/// `PlanetParams::validate` accepts (1,500 km) with the most water
+/// (10²⁰ m³, seven times the planet's volume) it put the sea level
+/// 3,533 km above the datum, where the shell gives 1,508 km (within 0.3 m
+/// of a model in which every cell's column is a spherical shell; ticket
+/// M2-17, 20,000 cells, seed 1).
 ///
 /// # Panics
 ///
-/// If `heights_m` does not hold one value per cell of `grid`.
+/// If `heights_m` does not hold one value per cell of `grid`, or for a
+/// water world (`V > 0` and `V ≥ C`) whose highest height lies at or below
+/// the planet's centre (`R + h_max ≤ 0`, which the bounds of
+/// `PlanetParams::validate` exclude).
 pub fn sea_level_m(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, volume_m3: f64) -> f64 {
     assert_eq!(
         heights_m.len(),
@@ -322,18 +401,22 @@ pub fn sea_level_m(grid: &SphereGrid, heights_m: &[f64], radius_m: f64, volume_m
     if volume_m3 <= 0.0 {
         return lowest;
     }
-    let capacity_m3 = water_volume_m3(grid, heights_m, radius_m, highest);
+    let capacity_m3 = bathtub_m3(grid, heights_m, radius_m, highest);
     if volume_m3 >= capacity_m3 {
-        let area_sr: f64 = (0..grid.len() as u32).map(|cell| grid.area_sr(cell)).sum();
-        return highest + (volume_m3 - capacity_m3) / (area_sr * radius_m * radius_m);
+        let top_m = shell_base_m(radius_m, highest);
+        let q = (volume_m3 - capacity_m3) / (total_area_sr(grid) / 3.0);
+        let b = det::pow(top_m * top_m * top_m + q, 1.0 / 3.0);
+        return highest + q / (top_m * top_m + top_m * b + b * b);
     }
+    // Every level of the bracket lies at or below the brim, where the
+    // volume is the bathtub's.
     let (mut lo, mut hi) = (lowest, highest);
     for _ in 0..MAX_HALVINGS {
         let mid = 0.5 * (lo + hi);
         if mid <= lo || mid >= hi {
             break;
         }
-        if water_volume_m3(grid, heights_m, radius_m, mid) < volume_m3 {
+        if bathtub_m3(grid, heights_m, radius_m, mid) < volume_m3 {
             lo = mid;
         } else {
             hi = mid;
