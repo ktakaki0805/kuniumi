@@ -24,10 +24,15 @@ use std::io::{self, Read, Write};
 use kuniumi_math::rng::fnv1a64;
 use kuniumi_world::{Field, FieldKind};
 
+use crate::binary::Reader;
+
 /// File magic.
 pub const MAGIC: [u8; 8] = *b"KUNIFLD\0";
 /// Current format version.
 pub const FORMAT_VERSION: u32 = 1;
+
+/// The name of the format in messages.
+const FORMAT: &str = ".kfield";
 
 /// Writes `field` in `.kfield` format.
 pub fn write_field(mut w: impl Write, field: &Field) -> io::Result<()> {
@@ -36,25 +41,28 @@ pub fn write_field(mut w: impl Write, field: &Field) -> io::Result<()> {
 
 /// Reads a field written by [`write_field`], as a [`FieldKind::Quantity`]
 /// (the file does not store the kind).
-pub fn read_field(mut r: impl Read) -> io::Result<Field> {
-    let mut magic = [0u8; 8];
-    r.read_exact(&mut magic)?;
-    if magic != MAGIC {
-        return Err(invalid("not a .kfield file"));
-    }
-    let version = read_u32(&mut r)?;
-    if version != FORMAT_VERSION {
-        return Err(invalid("unsupported .kfield version"));
-    }
-    let name = read_string(&mut r)?;
-    let unit = read_string(&mut r)?;
-    let count = usize::try_from(read_u64(&mut r)?).map_err(|_| invalid("value count too large"))?;
-    let mut values = Vec::with_capacity(count.min(1 << 24));
-    let mut buf = [0u8; 8];
-    for _ in 0..count {
-        r.read_exact(&mut buf)?;
-        values.push(f64::from_bits(u64::from_le_bytes(buf)));
-    }
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidData`] if the input does not start with
+/// [`MAGIC`] or a string is not UTF-8; [`io::ErrorKind::Unsupported`] for a
+/// format version other than [`FORMAT_VERSION`];
+/// [`io::ErrorKind::UnexpectedEof`] if the input ends early, naming the part
+/// of the file. The strings and the values are read in chunks, so lengths
+/// that claim more than the input holds allocate no more than about twice
+/// the input plus 64 KiB. Bytes after the last value are not read.
+pub fn read_field(r: impl Read) -> io::Result<Field> {
+    let mut r = Reader::new(r, FORMAT);
+    r.header(&MAGIC, FORMAT_VERSION)?;
+    let name = read_string(&mut r, "name")?;
+    let unit = read_string(&mut r, "unit")?;
+    let count = r.u64("value count")?;
+    let count = usize::try_from(count).map_err(|_| {
+        r.invalid(format!(
+            "the {FORMAT} file gives {count} values, more than this platform can address"
+        ))
+    })?;
+    let values = r.f64s(count, "values")?;
     Ok(Field {
         name,
         unit,
@@ -89,27 +97,13 @@ fn encode(field: &Field) -> Vec<u8> {
     out
 }
 
-fn read_u32(r: &mut impl Read) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    r.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-
-fn read_u64(r: &mut impl Read) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    r.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-
-fn read_string(r: &mut impl Read) -> io::Result<String> {
-    let len = read_u32(r)? as usize;
-    let mut bytes = vec![0u8; len];
-    r.read_exact(&mut bytes)?;
-    String::from_utf8(bytes).map_err(|_| invalid("string is not UTF-8"))
-}
-
-fn invalid(msg: &'static str) -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidData, msg)
+/// A string: its length (`u32`) and its UTF-8 bytes, the `part` of the
+/// file.
+fn read_string(r: &mut Reader<impl Read>, part: &str) -> io::Result<String> {
+    let len = r.u32(&format!("length of the {part}"))?;
+    let bytes = r.bytes(len as usize, part)?;
+    String::from_utf8(bytes)
+        .map_err(|_| r.invalid(format!("the {part} of the {FORMAT} file is not UTF-8")))
 }
 
 #[cfg(test)]
@@ -166,5 +160,109 @@ mod tests {
     fn rejects_wrong_magic() {
         let err = read_field(&b"NOTAFILE\x01\0\0\0"[..]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            err.to_string(),
+            "not a .kfield file: it does not start with the magic number KUNIFLD\\x00"
+        );
+    }
+
+    #[test]
+    fn rejects_other_versions() {
+        for version in [0u32, 2, u32::MAX] {
+            let mut bytes = encode(&sample());
+            bytes[8..12].copy_from_slice(&version.to_le_bytes());
+            let err = read_field(bytes.as_slice()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::Unsupported);
+            assert_eq!(
+                err.to_string(),
+                format!(
+                    ".kfield format version {version} is not supported: this build reads only \
+                     version 1"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn every_proper_prefix_is_truncated() {
+        // 8 magic, 4 version, 4 + 14 name, 4 + 1 unit, 8 count, 6 × 8 values.
+        let bytes = encode(&sample());
+        assert_eq!(bytes.len(), 91);
+        let parts = [
+            (0, "magic number"),
+            (8, "format version"),
+            (12, "length of the name"),
+            (16, "name"),
+            (30, "length of the unit"),
+            (34, "unit"),
+            (35, "value count"),
+            (43, "values"),
+        ];
+        for len in 0..bytes.len() {
+            let err = read_field(&bytes[..len]).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "{len}: {err}");
+            let part = parts
+                .iter()
+                .rev()
+                .find(|(start, _)| *start <= len)
+                .unwrap()
+                .1;
+            let message = err.to_string();
+            assert!(
+                message.starts_with(&format!(
+                    "truncated .kfield file: it ends inside the {part}"
+                )),
+                "{len}: {message}"
+            );
+        }
+        let err = read_field(&bytes[..43 + 8 * 4 + 3]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "truncated .kfield file: it ends inside the values (after 4 of 6)"
+        );
+        let err = read_field(&bytes[..20]).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "truncated .kfield file: it ends inside the name (after 4 of 14 bytes)"
+        );
+    }
+
+    #[test]
+    fn huge_counts_in_a_short_file_are_truncated() {
+        // A name of 4 GiB − 1 bytes and 2⁶⁴ − 1 values, each with a few
+        // bytes behind it: the reader fails at the end of the input
+        // instead of reserving the claimed size.
+        let mut bytes = encode(&sample())[..12].to_vec();
+        bytes.extend(u32::MAX.to_le_bytes());
+        bytes.extend(b"abc");
+        let err = read_field(bytes.as_slice()).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "truncated .kfield file: it ends inside the name (after 3 of 4294967295 bytes)"
+        );
+        let mut bytes = encode(&sample())[..35].to_vec();
+        bytes.extend(u64::MAX.to_le_bytes());
+        bytes.extend([0; 12]);
+        let err = read_field(bytes.as_slice()).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(
+            err.to_string()
+                .starts_with("truncated .kfield file: it ends inside the values (after 1 of "),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_names_and_units_that_are_not_utf8() {
+        for (at, what) in [(16, "name"), (34, "unit")] {
+            let mut bytes = encode(&sample());
+            bytes[at] = 0xFF;
+            let err = read_field(bytes.as_slice()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(
+                err.to_string(),
+                format!("the {what} of the .kfield file is not UTF-8")
+            );
+        }
     }
 }

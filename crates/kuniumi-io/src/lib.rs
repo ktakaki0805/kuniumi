@@ -10,17 +10,22 @@
 //!   the `png` crate, for images that both humans and Claude Code look at.
 //! - [`field_file`]: the `.kfield` binary format for one per-cell field, and a
 //!   bit-exact fingerprint used by reproducibility tests.
-//! - [`world_dir`]: a world as a directory: a `.kfield` file and a PNG map
-//!   per field, the validation metrics (`metrics.txt` and `hypsometry.png`,
-//!   from `kuniumi_sim::metrics`), and `world.json` with the metadata
-//!   (through `serde_json`).
+//! - [`grid_file`]: the `.kgrid` binary format for the cell grid, every
+//!   array bit for bit.
+//! - [`world_dir`]: a world as a directory, written and read back: the grid
+//!   (`grid.kgrid`), a `.kfield` file and a PNG map per field, the
+//!   validation metrics (`metrics.txt` and `hypsometry.png`, from
+//!   `kuniumi_sim::metrics`), and `world.json` with the metadata (through
+//!   `serde_json`).
 //!
 //! Everything that touches the file system lives in this crate (and the CLI),
 //! never in `kuniumi-sim`.
 
+mod binary;
 pub mod chart;
 pub mod colormap;
 pub mod field_file;
+pub mod grid_file;
 pub mod png;
 pub mod render;
 pub mod world_dir;

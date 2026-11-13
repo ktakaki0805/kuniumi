@@ -263,6 +263,27 @@ section: every change after which an existing seed produces a different world
   warnings as errors (`RUSTDOCFLAGS="-D warnings"`). `mise run check`, and
   so `mise run ci`, runs it, and so does the `lint` job of the CI workflow
   (M2-09).
+- `kuniumi_io::world_dir::read` and `ReadError`: a world directory read
+  back into the `World` that was written, bit for bit: the metadata from
+  `world.json`, the grid from `grid.kgrid`, every listed field from its
+  `.kfield` with the kind of `world.json`. Every file is checked, and each
+  error names it: `Io` (missing or unreadable), `Version` (a format version
+  this build does not read) or `Invalid` (`world.json` not JSON of the
+  layout written, with an object for each struct, a string for each enum
+  and no unknown keys, with serde_json's line and column; invalid or
+  repeated field
+  names; truncated files, naming the part; bytes after the end; a field
+  file with another name, unit or number of values, or a class field with
+  values that are not class ids; an invalid grid). Parameters, settings and
+  the generator version are not checked. A 650,000-cell world reads in
+  0.15 to 0.17 s (release, page cache warm), against 2.85 s to rebuild
+  its grid (MV-01).
+- `kuniumi_io::grid_file`: the `.kgrid` format (magic `KUNIGRD\0`, version
+  1), every array of a `SphereGrid` bit for bit; `read_grid` validates the
+  grid with `SphereGrid::from_parts` (MV-01).
+- The example `read_world` of `kuniumi-io`: the load time of a world
+  directory, and with a second directory the world written again and
+  compared file by file (MV-01).
 
 ### Changed
 
@@ -439,6 +460,18 @@ section: every change after which an existing seed produces a different world
   +43,957 m. Both functions panic for a water world whose highest height
   lies at or below the planet's centre, which `PlanetParams::validate`
   excludes; below the brim nothing changes (M2-17).
+
+- World directories hold the grid, `grid.kgrid`, written first (101 MB,
+  156 bytes per cell, for 650,000 cells, beside 5.2 MB per field), and
+  `world.json` has `format_version` 2; `kuniumi generate` prints its
+  `wrote` line too. The mirror structs of `world.json` reject unknown keys
+  when parsed (writing is unchanged) and convert back
+  (`PlanetJson::to_params`, `SettingsJson::to_settings`,
+  `KindJson::to_kind`) (MV-01).
+- `field_file::read_field` names the part of a truncated file and the
+  version it does not read (`io::ErrorKind::Unsupported`), and reads strings
+  and values in chunks, so a corrupt length no longer allocates up to
+  4 GiB (MV-01).
 
 ### Removed
 

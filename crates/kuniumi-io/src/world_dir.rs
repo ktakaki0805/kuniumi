@@ -1,6 +1,12 @@
-//! World directories: a [`World`] as files.
+//! World directories: a [`World`] as files, written by [`write()`] and read
+//! back by [`read()`].
 //!
-//! [`write()`] puts into one directory, for every field in the world's order:
+//! [`write()`] puts into one directory, first the grid:
+//!
+//! - `grid.kgrid` ([`GRID_FILE`]): the cell grid, every array bit for bit
+//!   ([`grid_file`]);
+//!
+//! then, for every field in the world's order:
 //!
 //! - `<name>.kfield`: the values, bit for bit ([`field_file`]);
 //! - `<name>.png`: an equirectangular map, [`MAP_WIDTH_PX`] × 1024 pixels
@@ -21,14 +27,38 @@
 //!   histogram as a bar chart, [`CHART_WIDTH_PX`] × [`CHART_HEIGHT_PX`],
 //!   whose axes `metrics.txt` describes;
 //!
-//! and last `world.json` ([`METADATA_FILE`]), the metadata: generator
-//! version, seed, settings, planet parameters, sea level, the stages that
-//! have run and the field list. An existing `world.json`, `metrics.txt` and
-//! `hypsometry.png` are removed before the first field is written, and the
-//! new `world.json` is written last, so a directory with a `world.json`
-//! holds every file it lists, from the same world, even after a write that
-//! failed halfway, and no metrics of another world. Other files in the
-//! directory are left alone.
+//! and last `world.json` ([`METADATA_FILE`]), the metadata: format version,
+//! generator version, seed, settings, planet parameters, sea level, the
+//! stages that have run and the field list. An existing `world.json`,
+//! `metrics.txt` and `hypsometry.png` are removed before the grid is
+//! written, and the new `world.json` is written last, so a directory with a
+//! `world.json` holds every file it lists, from the same world, even after a
+//! write that failed halfway, and no metrics of another world. Other files
+//! in the directory are left alone.
+//!
+//! [`read()`] rebuilds the [`World`] from `world.json`, `grid.kgrid` and the
+//! `.kfield` files, bit for bit, and checks every file on the way
+//! ([`ReadError`]); the maps and the metrics follow from these and are not
+//! read.
+//!
+//! # Why the grid is stored
+//!
+//! The grid could be rebuilt from the settings and the seed
+//! ([`SphereGrid::fibonacci`]) instead of stored. Ticket MV-01 measured both
+//! for 650,000 cells (release build, files in the page cache): rebuilding
+//! takes 2.8 s; reading `grid.kgrid`, 101 MB (156 bytes per cell, about as
+//! much as 19 fields), takes 0.15 s, of which 0.10 s is
+//! [`SphereGrid::validate`]; writing it 0.04 to 0.2 s. The grid is stored:
+//! a viewer opens a world about 19 times sooner, every grid reads back (not
+//! only the Fibonacci grid of the world's settings and seed: test grids,
+//! later regional ones), worlds stay readable after a change of the grid's
+//! algorithm, and the directory holds all a consumer needs, such as a tool
+//! in another language or a game engine's importer, without the in-house
+//! Delaunay triangulation (the design keeps every layer on the spherical
+//! grid, 高解像度化と出力 / ゲームへの出力). The positions and the
+//! neighbour lists alone (34 MB) would not do: the areas, edge lengths and
+//! centre distances are reproducible bit for bit only by repeating the
+//! internal order of operations of `kuniumi-sphere`'s Voronoi dual.
 //!
 //! # `world.json`
 //!
@@ -43,7 +73,7 @@
 //!
 //! ```json
 //! {
-//!   "format_version": 1,
+//!   "format_version": 2,
 //!   "generator_version": "0.0.1",
 //!   "seed": 1,
 //!   "settings": {
@@ -84,9 +114,13 @@
 //! }
 //! ```
 //!
-//! The grid itself is not stored; reading worlds back is ticket MV-01.
+//! [`read()`] requires the layout that [`write()`] writes: an object for
+//! each struct and a string for each enum (serde would also accept an array
+//! of a struct's values and an object for a unit variant), and no unknown
+//! keys.
 
-use std::io::{self, BufWriter, Write};
+use std::fs::File;
+use std::io::{self, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use kuniumi_sim::metrics::{
@@ -94,6 +128,7 @@ use kuniumi_sim::metrics::{
     earth,
 };
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
+use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
     Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings, TectonicRegime,
     World,
@@ -102,13 +137,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::chart::{self, Axes, Bar, Marker};
 use crate::colormap::{Colormap, Range};
-use crate::{Rgb8, field_file, png, render};
+use crate::{Rgb8, field_file, grid_file, png, render};
 
-/// The version of the `world.json` layout, its key `format_version`.
-pub const FORMAT_VERSION: u32 = 1;
+/// The version of the layout of a world directory, the key
+/// `format_version` of `world.json`: 1 (ticket M2-01) had no grid file, 2
+/// (ticket MV-01) adds [`GRID_FILE`]. [`read()`] reads only this version.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The name of the metadata file.
 pub const METADATA_FILE: &str = "world.json";
+
+/// The name of the grid file ([`grid_file`]).
+pub const GRID_FILE: &str = "grid.kgrid";
 
 /// The width of the maps in pixels; they are half as high.
 pub const MAP_WIDTH_PX: u32 = 2048;
@@ -135,6 +175,7 @@ pub const EARTH_MARKER: Rgb8 = [200, 0, 0];
 
 /// The contents of `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WorldJson {
     /// [`FORMAT_VERSION`].
     pub format_version: u32,
@@ -158,6 +199,7 @@ pub struct WorldJson {
 
 /// [`Settings`] in `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SettingsJson {
     /// [`Settings::cells`].
     pub cells: u32,
@@ -169,6 +211,7 @@ pub struct SettingsJson {
 
 /// [`PlanetParams`] in `world.json`, SI as in the code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PlanetJson {
     /// [`PlanetParams::radius_m`] (m).
     pub radius_m: f64,
@@ -219,6 +262,7 @@ pub enum TectonicsJson {
 
 /// One entry of the field list of `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FieldJson {
     /// [`Field::name`].
     pub name: String,
@@ -285,6 +329,15 @@ impl SettingsJson {
             allow_partial: settings.allow_partial,
         }
     }
+
+    /// The settings this mirrors, the inverse of [`of`](Self::of).
+    pub fn to_settings(&self) -> Settings {
+        Settings {
+            cells: self.cells,
+            plate_count: self.plate_count,
+            allow_partial: self.allow_partial,
+        }
+    }
 }
 
 impl PlanetJson {
@@ -311,6 +364,30 @@ impl PlanetJson {
             },
         }
     }
+
+    /// The parameters this mirrors, the inverse of [`of`](Self::of).
+    pub fn to_params(&self) -> PlanetParams {
+        PlanetParams {
+            radius_m: self.radius_m,
+            surface_gravity_m_s2: self.surface_gravity_m_s2,
+            rotation_period_s: self.rotation_period_s,
+            obliquity_rad: self.obliquity_rad,
+            orbital_period_s: self.orbital_period_s,
+            orbital_eccentricity: self.orbital_eccentricity,
+            stellar_flux_w_m2: self.stellar_flux_w_m2,
+            ocean_volume_m3: self.ocean_volume_m3,
+            surface_pressure_pa: self.surface_pressure_pa,
+            continental_crust_fraction: self.continental_crust_fraction,
+            rotation: match self.rotation {
+                RotationJson::Free => RotationRegime::Free,
+                RotationJson::TidallyLocked => RotationRegime::TidallyLocked,
+            },
+            tectonics: match self.tectonics {
+                TectonicsJson::PlateTectonics => TectonicRegime::PlateTectonics,
+                TectonicsJson::StagnantLid => TectonicRegime::StagnantLid,
+            },
+        }
+    }
 }
 
 impl FieldJson {
@@ -323,6 +400,16 @@ impl FieldJson {
                 FieldKind::Quantity => KindJson::Quantity,
                 FieldKind::Class => KindJson::Class,
             },
+        }
+    }
+}
+
+impl KindJson {
+    /// The kind this mirrors.
+    pub fn to_kind(self) -> FieldKind {
+        match self {
+            Self::Quantity => FieldKind::Quantity,
+            Self::Class => FieldKind::Class,
         }
     }
 }
@@ -600,9 +687,10 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 }
 
 /// Writes `world` into the directory `dir`, creating it if needed (module
-/// documentation), and returns the paths written, in order: `<name>.kfield`
-/// and `<name>.png` of every field, `metrics.txt` and `hypsometry.png` if
-/// the world has a `surface_height`, then `world.json`.
+/// documentation), and returns the paths written, in order: `grid.kgrid`,
+/// `<name>.kfield` and `<name>.png` of every field, `metrics.txt` and
+/// `hypsometry.png` if the world has a `surface_height`, then `world.json`.
+/// [`read()`] reads the directory back into the same world.
 ///
 /// The world is checked before anything is written.
 ///
@@ -642,8 +730,12 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
         }
     }
 
+    let mut written = Vec::with_capacity(2 * world.fields.len() + 4);
+    let path = dir.join(GRID_FILE);
+    write_grid_file(&path, &world.grid).map_err(|e| with_path(&path, e))?;
+    written.push(path);
+
     let cells = render::equirect_cells(&world.grid, width_px);
-    let mut written = Vec::with_capacity(2 * world.fields.len() + 3);
     for field in &world.fields {
         let path = dir.join(format!("{}.kfield", field.name));
         write_kfield(&path, field).map_err(|e| with_path(&path, e))?;
@@ -760,6 +852,12 @@ fn write_kfield(path: &Path, field: &Field) -> io::Result<()> {
     file.flush()
 }
 
+/// Writes `grid` as a `.kgrid` file at `path` ([`grid_file::write_grid`]
+/// buffers it).
+fn write_grid_file(path: &Path, grid: &SphereGrid) -> io::Result<()> {
+    grid_file::write_grid(std::fs::File::create(path)?, grid)
+}
+
 /// The pixels of `field`'s map in `world`, whose metrics are `metrics`,
 /// given the cell under each pixel ([`map_colours`]).
 fn map_pixels(
@@ -782,5 +880,298 @@ fn with_path(path: &Path, error: io::Error) -> io::Error {
     io::Error::new(error.kind(), format!("{}: {error}", path.display()))
 }
 
+/// Why a world directory cannot be read ([`read()`]). Every variant names
+/// the file; `Display` writes `<path>: <message>`.
+#[derive(Debug)]
+pub enum ReadError {
+    /// The file is missing or cannot be read: the error of the file system.
+    Io {
+        /// The file.
+        path: PathBuf,
+        /// The error of the file system.
+        source: io::Error,
+    },
+    /// The file has a format version that this build does not read: a
+    /// `world.json` of another [`FORMAT_VERSION`], a `.kfield` or `.kgrid`
+    /// file of another version of its format.
+    Version {
+        /// The file.
+        path: PathBuf,
+        /// What was found and what this build reads.
+        message: String,
+    },
+    /// The file's contents are malformed, truncated or inconsistent with the
+    /// rest of the directory.
+    Invalid {
+        /// The file.
+        path: PathBuf,
+        /// What is wrong.
+        message: String,
+    },
+}
+
+impl ReadError {
+    /// The file the error is about.
+    pub fn path(&self) -> &Path {
+        match self {
+            Self::Io { path, .. } | Self::Version { path, .. } | Self::Invalid { path, .. } => path,
+        }
+    }
+}
+
+impl std::fmt::Display for ReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
+            Self::Version { path, message } | Self::Invalid { path, message } => {
+                write!(f, "{}: {message}", path.display())
+            }
+        }
+    }
+}
+
+impl std::error::Error for ReadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io { source, .. } => Some(source),
+            Self::Version { .. } | Self::Invalid { .. } => None,
+        }
+    }
+}
+
+/// Reads the world in the directory `dir` that [`write()`] wrote: the
+/// metadata from `world.json`, the grid from [`GRID_FILE`] and every field
+/// listed in `world.json` from its `<name>.kfield`, with the kind that
+/// `world.json` gives. The world read back equals the one written, bit for
+/// bit. The maps, `metrics.txt` and `hypsometry.png` are not read (they
+/// follow from the rest), nor are other files in `dir`.
+///
+/// The planet parameters and the settings are returned as stored, not
+/// validated ([`PlanetParams::validate`], [`Settings::validate`]), as
+/// [`write()`] does not validate them either; the generator version is not
+/// checked (the grid is stored, so a world reads back whatever generator
+/// wrote it, as long as the format versions are the ones this build reads).
+///
+/// # Errors
+///
+/// Each names its file ([`ReadError::path`]):
+///
+/// - [`ReadError::Io`] if a file is missing or cannot be read, `world.json`
+///   first (a directory that does not exist);
+/// - [`ReadError::Version`] if `format_version` in `world.json` is not
+///   [`FORMAT_VERSION`] (it is checked before the rest of the file, which
+///   needs only to be JSON with an object at the top level), or a
+///   `.kfield` or `.kgrid` file has another version of its format
+///   ([`field_file::FORMAT_VERSION`], [`grid_file::FORMAT_VERSION`]);
+/// - [`ReadError::Invalid`] if `world.json` is not JSON in the layout of
+///   [`WorldJson`] (a missing, unknown or ill-typed key, a number out of
+///   range, text after the object: serde_json's message, with line and
+///   column), lists a field name that is not valid ([`Field::is_valid_name`],
+///   which also keeps every path inside `dir`) or a name twice; if a
+///   `.kfield` or `.kgrid` file is not in its format, is truncated, or has
+///   bytes after its end; if the grid is not valid
+///   ([`grid_file::read_grid`]); or if a `.kfield` file holds another name
+///   or unit than `world.json` lists, not one value per cell of the grid,
+///   or, for a class field, a value that is not a class id
+///   ([`Field::is_class_value`]).
+pub fn read(dir: &Path) -> Result<World, ReadError> {
+    let path = dir.join(METADATA_FILE);
+    let bytes = std::fs::read(&path).map_err(|source| ReadError::Io {
+        path: path.clone(),
+        source,
+    })?;
+    let json = parse_world_json(&bytes).map_err(|problem| problem.at(&path))?;
+
+    let grid = read_binary(&dir.join(GRID_FILE), ".kgrid", |r| grid_file::read_grid(r))?;
+    let mut fields = Vec::with_capacity(json.fields.len());
+    for entry in &json.fields {
+        let path = dir.join(format!("{}.kfield", entry.name));
+        let field = read_binary(&path, ".kfield", |r| field_file::read_field(r))?;
+        check_field(&field, entry, grid.len()).map_err(|problem| problem.at(&path))?;
+        fields.push(Field {
+            kind: entry.kind.to_kind(),
+            ..field
+        });
+    }
+    Ok(World {
+        params: json.planet.to_params(),
+        settings: json.settings.to_settings(),
+        seed: json.seed,
+        grid,
+        sea_level_m: json.sea_level_m,
+        stages: json.stages,
+        fields,
+    })
+}
+
+/// What is wrong with a file, before the path is known.
+enum Problem {
+    /// [`ReadError::Version`].
+    Version(String),
+    /// [`ReadError::Invalid`].
+    Invalid(String),
+}
+
+impl Problem {
+    /// The error of the file at `path`.
+    fn at(self, path: &Path) -> ReadError {
+        let path = path.to_path_buf();
+        match self {
+            Self::Version(message) => ReadError::Version { path, message },
+            Self::Invalid(message) => ReadError::Invalid { path, message },
+        }
+    }
+}
+
+/// Parses `world.json`: as JSON first, an object at the top level; then its
+/// format version alone, so that a file of another version gives
+/// [`Problem::Version`] whatever its other keys and the shape of their
+/// values; then the shapes of this version ([`check_shapes`]), the whole
+/// file as [`WorldJson`], and the field list.
+fn parse_world_json(bytes: &[u8]) -> Result<WorldJson, Problem> {
+    let not_valid =
+        |message: String| Problem::Invalid(format!("not valid world metadata: {message}"));
+    let value: serde_json::Value =
+        serde_json::from_slice(bytes).map_err(|e| not_valid(e.to_string()))?;
+    let Some(top) = value.as_object() else {
+        return Err(not_valid("the top level is not a JSON object".into()));
+    };
+    let version = match top.get("format_version") {
+        None => return Err(not_valid("missing field `format_version`".into())),
+        Some(v) => v.as_u64().ok_or_else(|| {
+            not_valid(format!("`format_version` is {v}, not an unsigned integer"))
+        })?,
+    };
+    if version != u64::from(FORMAT_VERSION) {
+        return Err(Problem::Version(format!(
+            "world directory format version {version} is not supported: this build reads only \
+             version {FORMAT_VERSION} (generate the world again)"
+        )));
+    }
+    check_shapes(top).map_err(not_valid)?;
+    let json: WorldJson = serde_json::from_slice(bytes).map_err(|e| not_valid(e.to_string()))?;
+    for (k, entry) in json.fields.iter().enumerate() {
+        if !Field::is_valid_name(&entry.name) {
+            return Err(Problem::Invalid(format!(
+                "`{}` is not a valid field name",
+                entry.name
+            )));
+        }
+        if json.fields[..k].iter().any(|e| e.name == entry.name) {
+            return Err(Problem::Invalid(format!(
+                "the field `{}` is listed twice",
+                entry.name
+            )));
+        }
+    }
+    Ok(json)
+}
+
+/// Checks that the values of the top-level object `top` of a `world.json`
+/// of this [`FORMAT_VERSION`] that hold a struct are JSON objects
+/// (`settings`, `planet` and every entry of `fields`) and that those holding
+/// an enum are strings (`rotation` and `tectonics` of `planet`, `kind` of
+/// every field). serde's derive would also accept a struct as an array of
+/// its values in their order, and a unit variant as an object
+/// (`{"free": null}`), neither of which [`write()`] writes. Missing keys
+/// are left to the typed parse, which names them.
+fn check_shapes(top: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    use serde_json::Value;
+    let not_object = |what: &str| format!("{what} is not a JSON object");
+    let not_string = |what: &str| format!("{what} is not a JSON string");
+    for key in ["settings", "planet"] {
+        if top.get(key).is_some_and(|v| !v.is_object()) {
+            return Err(not_object(&format!("`{key}`")));
+        }
+    }
+    if let Some(planet) = top.get("planet").and_then(Value::as_object) {
+        for key in ["rotation", "tectonics"] {
+            if planet.get(key).is_some_and(|v| !v.is_string()) {
+                return Err(not_string(&format!("`planet.{key}`")));
+            }
+        }
+    }
+    if let Some(fields) = top.get("fields").and_then(Value::as_array) {
+        for (k, entry) in fields.iter().enumerate() {
+            let Some(entry) = entry.as_object() else {
+                return Err(not_object(&format!("entry {k} of `fields`")));
+            };
+            if entry.get("kind").is_some_and(|v| !v.is_string()) {
+                return Err(not_string(&format!("`kind` of entry {k} of `fields`")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Checks that `field`, read from its `.kfield` file, is the field `entry`
+/// of `world.json` on a grid of `cells` cells.
+fn check_field(field: &Field, entry: &FieldJson, cells: usize) -> Result<(), Problem> {
+    if field.name != entry.name {
+        return Err(Problem::Invalid(format!(
+            "holds the field `{}`, but {METADATA_FILE} lists `{}`",
+            field.name, entry.name
+        )));
+    }
+    if field.unit != entry.unit {
+        return Err(Problem::Invalid(format!(
+            "has the unit `{}`, but {METADATA_FILE} gives `{}`",
+            field.unit, entry.unit
+        )));
+    }
+    if field.values.len() != cells {
+        return Err(Problem::Invalid(format!(
+            "has {} values for the {cells} cells of the grid",
+            field.values.len()
+        )));
+    }
+    if entry.kind == KindJson::Class {
+        if let Some(cell) = field.values.iter().position(|&v| !Field::is_class_value(v)) {
+            return Err(Problem::Invalid(format!(
+                "class field `{}` has the value {} at cell {cell}, not a class id",
+                field.name, field.values[cell]
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Reads the binary file at `path`, of the format `format` (`".kfield"` or
+/// `".kgrid"`), with `parse`, and checks that nothing follows its end.
+fn read_binary<T>(
+    path: &Path,
+    format: &str,
+    parse: impl FnOnce(&mut BufReader<File>) -> io::Result<T>,
+) -> Result<T, ReadError> {
+    let io_error = |source| ReadError::Io {
+        path: path.to_path_buf(),
+        source,
+    };
+    let mut r = BufReader::new(File::open(path).map_err(io_error)?);
+    let value = parse(&mut r).map_err(|e| match e.kind() {
+        io::ErrorKind::Unsupported => Problem::Version(e.to_string()).at(path),
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => {
+            Problem::Invalid(e.to_string()).at(path)
+        }
+        _ => io_error(e),
+    })?;
+    let rest = io::copy(&mut r, &mut io::sink()).map_err(io_error)?;
+    if rest > 0 {
+        let (bytes, follow) = if rest == 1 {
+            ("byte", "follows")
+        } else {
+            ("bytes", "follow")
+        };
+        return Err(Problem::Invalid(format!(
+            "{rest} {bytes} {follow} the end of the {format} data"
+        ))
+        .at(path));
+    }
+    Ok(value)
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod read_tests;

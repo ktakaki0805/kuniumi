@@ -54,9 +54,9 @@ struct GenerateArgs {
     /// Random seed
     #[arg(long, value_name = "N")]
     seed: u64,
-    /// Output directory for world.json, a .kfield file and a .png map per
-    /// field, and metrics.txt and hypsometry.png once the Crust stage has
-    /// run (created if missing)
+    /// Output directory for world.json, grid.kgrid (the cell grid), a
+    /// .kfield file and a .png map per field, and metrics.txt and
+    /// hypsometry.png once the Crust stage has run (created if missing)
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
     /// Settings file (TOML, as `kuniumi params` prints) with the planet's

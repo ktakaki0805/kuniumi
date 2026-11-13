@@ -47,11 +47,12 @@ given in a human unit instead (`radius_km`, `obliquity_deg`,
 file's.
 
 `generate` runs the stages that exist so far and writes the world into the
-output directory: a `.kfield` file and a PNG map per field; once the Crust
-stage has run, `metrics.txt` (land fraction and hypsometry against Earth's
-values) and `hypsometry.png` (the elevation histogram); and `world.json`
-with the metadata. While later stages are missing it then exits with code
-2, naming the first of them.
+output directory: the cell grid (`grid.kgrid`); a `.kfield` file and a PNG
+map per field; once the Crust stage has run, `metrics.txt` (land fraction
+and hypsometry against Earth's values) and `hypsometry.png` (the elevation
+histogram); and `world.json` with the metadata. While later stages are
+missing it then exits with code 2, naming the first of them. The directory
+can be read back into the same world (`kuniumi_io::world_dir::read`).
 
 For development, the toolchains and tools are pinned in `mise.toml` for
 [mise](https://mise.jdx.dev):

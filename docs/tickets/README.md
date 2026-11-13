@@ -64,6 +64,7 @@ planned once the code they build on exists.
 | [M1-10](M1-10-exact-operations.md) | Exact operations in the determinism rules | — |
 | [M1-11](M1-11-jitter-cell-shape.md) | Default jitter and the spread of cell areas | M1-06 |
 | [M1-12](M1-12-survey-slope-test.md) | Slope normalisation test of the jitter survey | M1-11 |
+| [M1-13](M1-13-validate-linear-time.md) | Grid validation in linear time for any input | MV-01 |
 
 ### M2 — One-shot plates and initial relief
 
@@ -87,6 +88,7 @@ planned once the code they build on exists.
 | [M2-16](M2-16-workspace-lists.md) | Crate lists of the decisions and the design | M2-07 |
 | [M2-17](M2-17-deep-water-worlds.md) | Sea level of deep water worlds | M2-08 |
 | [M2-18](M2-18-histogram-span.md) | Elevation spans beyond the histogram in world directories | M2-15 |
+| [M2-19](M2-19-reserved-field-names.md) | Field names that collide with the files of a world directory | MV-01 |
 
 ### MV — Viewer
 

@@ -104,13 +104,16 @@ const WORLD_FIELDS: [&str; 13] = [
 ];
 
 /// The files of a world stopped after the Crust stage, in the order
-/// `generate` writes them: `<name>.kfield` and `<name>.png` of each field,
-/// the metrics (ticket M2-06), then `world.json`.
+/// `generate` writes them: the grid (ticket MV-01), `<name>.kfield` and
+/// `<name>.png` of each field, the metrics (ticket M2-06), then
+/// `world.json`.
 fn world_files() -> Vec<String> {
-    let mut files: Vec<String> = WORLD_FIELDS
-        .iter()
-        .flat_map(|f| [format!("{f}.kfield"), format!("{f}.png")])
-        .collect();
+    let mut files = vec!["grid.kgrid".to_owned()];
+    files.extend(
+        WORLD_FIELDS
+            .iter()
+            .flat_map(|f| [format!("{f}.kfield"), format!("{f}.png")]),
+    );
     files.extend(["metrics.txt".into(), "hypsometry.png".into()]);
     files.push("world.json".into());
     files
@@ -354,6 +357,54 @@ fn generate_writes_the_same_bytes_twice() {
         let bytes = |dir: &Path| std::fs::read(dir.join(&file)).expect("written");
         assert!(bytes(&a) == bytes(&b), "{file} differs");
     }
+}
+
+#[test]
+fn generate_writes_a_world_that_reads_back() {
+    // `world_dir::read` gives the world of `kuniumi_sim::generate` with the
+    // same seed and settings (those of `generate`: Earth, the default
+    // settings with `--cells` and `allow_partial`), bit for bit.
+    let dir = scratch("generate_reads_back");
+    let out = dir.to_str().expect("UTF-8 path");
+    let o = kuniumi(&["generate", "--seed", "5", "--cells", "1200", "--out", out]);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    let back = kuniumi_io::world_dir::read(&dir).unwrap_or_else(|e| panic!("{e}"));
+    let settings = kuniumi_world::Settings {
+        cells: 1_200,
+        allow_partial: true,
+        ..kuniumi_world::Settings::default()
+    };
+    let world = kuniumi_sim::generate(
+        &kuniumi_world::PlanetParams::earth(),
+        &settings,
+        5,
+        &mut |_| {},
+    )
+    .expect("the partial world");
+    assert_eq!(back, world);
+    assert_eq!(back.sea_level_m.to_bits(), world.sea_level_m.to_bits());
+    let names: Vec<_> = back.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, WORLD_FIELDS);
+    for (a, b) in back.fields.iter().zip(&world.fields) {
+        assert_eq!(a.kind, b.kind, "{}", a.name);
+        let bits =
+            |f: &kuniumi_world::Field| f.values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        assert!(bits(a) == bits(b), "{}", a.name);
+    }
+    let grid_bits = |w: &kuniumi_world::World| {
+        (0..w.grid.len() as u32)
+            .flat_map(|i| {
+                let p = w.grid.position(i);
+                [p.x, p.y, p.z, w.grid.area_sr(i)]
+                    .into_iter()
+                    .chain(w.grid.edge_lengths_rad(i).iter().copied())
+                    .chain(w.grid.centre_distances_rad(i).iter().copied())
+                    .map(f64::to_bits)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(grid_bits(&back) == grid_bits(&world));
 }
 
 /// Fingerprints of the fields for 10,000 cells, seed 1, as `kuniumi

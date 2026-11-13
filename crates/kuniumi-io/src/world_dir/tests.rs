@@ -27,6 +27,9 @@
 //!   `huge_elevations_have_finite_metrics` (ticket M2-15);
 //! - `rejects_elevations_beyond_the_histogram_before_writing_anything` and
 //!   `accepts_elevations_at_the_bound` (ticket M2-18).
+//!
+//! Reading directories back (ticket MV-01) is tested in `read_tests.rs`,
+//! with the worlds of this file.
 
 use std::path::PathBuf;
 
@@ -43,7 +46,7 @@ use crate::chart;
 use crate::colormap::{Colormap, Range};
 
 /// A world on a 1,000-cell grid with a quantity field and a class field.
-fn world() -> World {
+pub(super) fn world() -> World {
     let grid = SphereGrid::fibonacci(1_000, 1).expect("a valid grid");
     let n = grid.len();
     let mut world = World {
@@ -68,7 +71,7 @@ fn world() -> World {
 
 /// A world whose metadata holds awkward numbers: subnormals, the extremes,
 /// −0, values that need 17 digits, the v2 regimes.
-fn awkward_world() -> World {
+pub(super) fn awkward_world() -> World {
     World {
         params: PlanetParams {
             radius_m: f64::MIN_POSITIVE,
@@ -143,7 +146,7 @@ fn world_json_parses_back_bit_exactly() {
         let back: WorldJson = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back, WorldJson::of(&world));
         assert_eq!(json_floats(&back), world_floats(&world));
-        assert_eq!(back.format_version, 1);
+        assert_eq!(back.format_version, 2);
         assert_eq!(back.generator_version, kuniumi_world::GENERATOR_VERSION);
         assert_eq!(back.seed, world.seed);
         let s = &back.settings;
@@ -238,7 +241,7 @@ fn serde_json_round_trips_every_finite_f64() {
 /// Python 3 (0.40910517666747087). It is the example in the module
 /// documentation.
 const EARTH_JSON: &str = r#"{
-  "format_version": 1,
+  "format_version": 2,
   "generator_version": "0.0.1",
   "seed": 1,
   "settings": {
@@ -319,7 +322,7 @@ fn earth_world_json_has_the_documented_layout() {
 /// serde_json's float formatter, whose digit writers differ between
 /// targets, on subnormals, 17-digit values, the extremes and −0.
 const AWKWARD_JSON: &str = r#"{
-  "format_version": 1,
+  "format_version": 2,
   "generator_version": "0.0.1",
   "seed": 18446744073709551615,
   "settings": {
@@ -376,7 +379,7 @@ fn the_same_world_gives_the_same_bytes() {
     let world = world();
     let written_a = write_maps_of_width(&a, &world, 64).unwrap();
     let written_b = write_maps_of_width(&b, &world.clone(), 64).unwrap();
-    assert_eq!(written_a.len(), 5);
+    assert_eq!(written_a.len(), 6);
     for (pa, pb) in written_a.iter().zip(&written_b) {
         assert_eq!(pa.file_name(), pb.file_name());
         assert_eq!(read(pa), read(pb), "{}", pa.display());
@@ -483,6 +486,7 @@ fn writes_every_field_and_world_json_last() {
     assert_eq!(
         names,
         [
+            "grid.kgrid",
             "height.kfield",
             "height.png",
             "zone.kfield",
@@ -491,6 +495,8 @@ fn writes_every_field_and_world_json_last() {
         ]
     );
     assert!(written.iter().all(|p| p.parent() == Some(dir.as_path())));
+    let grid = grid_file::read_grid(read(&dir.join(GRID_FILE)).as_slice()).unwrap();
+    assert_eq!(grid, world.grid);
     for field in &world.fields {
         let back =
             field_file::read_field(read(&dir.join(format!("{}.kfield", field.name))).as_slice())
@@ -534,6 +540,18 @@ fn file_system_errors_name_the_path() {
     // The files before it are written, world.json is not.
     assert!(dir.join("height.png").exists());
     assert!(!dir.join("world.json").exists());
+    remove(&dir);
+    // The grid's file is a directory: nothing after it is written.
+    let dir = scratch("kgrid_is_a_dir");
+    std::fs::create_dir_all(dir.join(GRID_FILE)).unwrap();
+    let err = write_maps_of_width(&dir, &world(), 64).unwrap_err();
+    let path = dir.join(GRID_FILE);
+    assert!(
+        err.to_string()
+            .starts_with(&format!("{}: ", path.display())),
+        "{err}"
+    );
+    assert!(!dir.join("height.kfield").exists());
     remove(&dir);
     // A rewrite that fails halfway leaves no world.json of the earlier
     // world beside the new world's files.
@@ -864,7 +882,7 @@ fn writes_maps_of_2048_by_1024() {
 
 /// A world on the octahedron grid whose six cells stand at −4,500, −3,500,
 /// +700 (twice), +1,500 and +3,000 m above a sea level of −500 m.
-fn octahedron_world() -> World {
+pub(super) fn octahedron_world() -> World {
     let mut world = World {
         grid: SphereGrid::octahedron(),
         sea_level_m: -500.0,
@@ -1115,7 +1133,7 @@ fn hypsometry_chart_draws_the_bins_and_the_markers() {
 
 /// [`world`] with a surface 5 km · z − 600 m high and the sea level at
 /// −700 m.
-fn world_with_relief() -> World {
+pub(super) fn world_with_relief() -> World {
     let mut world = world();
     let heights = world
         .grid
@@ -1140,6 +1158,7 @@ fn writes_metrics_and_the_chart_before_world_json() {
     assert_eq!(
         names,
         [
+            "grid.kgrid",
             "height.kfield",
             "height.png",
             "zone.kfield",
@@ -1179,7 +1198,7 @@ fn no_metrics_without_a_surface_height_and_none_left_over() {
     assert!(dir.join(METRICS_FILE).exists() && dir.join(HYPSOMETRY_FILE).exists());
     // A world without a surface height removes the earlier world's metrics.
     let written = write_maps_of_width(&dir, &world(), 64).unwrap();
-    assert_eq!(written.len(), 5);
+    assert_eq!(written.len(), 6);
     assert!(!dir.join(METRICS_FILE).exists());
     assert!(!dir.join(HYPSOMETRY_FILE).exists());
     assert!(

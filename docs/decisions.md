@@ -82,7 +82,8 @@ maintained crate may be used when it clearly saves work or improves quality:
 Clear cases may be added by Claude Code without asking; little-known or
 borderline crates need the owner's approval first. Kept in-house on purpose:
 the random number generator (frozen algorithm), the spherical Delaunay
-triangulation (the owner's choice), the FFT (D-17) and the `.kfield` format.
+triangulation (the owner's choice), the FFT (D-17) and the `.kfield` and
+`.kgrid` formats (MV-01).
 
 | Crate | Used in | Purpose | Pinned | Added by |
 | --- | --- | --- | --- | --- |
