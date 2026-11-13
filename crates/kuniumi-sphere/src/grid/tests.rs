@@ -27,16 +27,21 @@
 //! - `rejects_*` (also `fibonacci_rejects_more_than_max_cells_before_generating_points`),
 //!   `coplanar_ring_steps_are_not_counter_clockwise`, `errors_display`,
 //!   `compensated_sum_*`.
-//! - `wheels_are_valid`, `validate_matches_the_reference` (tickets M1-13
-//!   and M1-14: a grid whose hub lists every other cell, and the results
-//!   of `validate` against its previous, quadratic implementation with the
-//!   turns of each ring counted by summing angles, for grids changed in
+//! - `wheels_fit_together_only_with_four_cells`, `bipyramids_are_valid`,
+//!   `validate_matches_the_reference` (tickets M1-13 to M1-15: grids whose
+//!   hubs list every other cell, and the results of `validate` against
+//!   its previous, quadratic implementation with the turns of each ring
+//!   counted by summing angles, the fans compared with `position` and the
+//!   components counted by a breadth-first search, for grids changed in
 //!   many ways).
 //! - `rejects_rings_that_do_not_turn_once`, `ring_turns_counts_exactly`
 //!   (ticket M1-14: rings that are empty, list a neighbour twice or turn
 //!   around their cell more than once; hand counts of turns).
+//! - `rejects_rings_that_do_not_form_one_sphere`, `fans_cover_the_sphere_once`
+//!   (ticket M1-15: fans that do not fit together or cover the sphere more
+//!   than once; the fan steps over points of the sphere, counted).
 //! - `fingerprints_match_recorded`.
-//! - `timing_650k`, `timing_wheel_100k` (ignored): run with
+//! - `timing_650k`, `timing_bipyramid_100k` (ignored): run with
 //!   `cargo test -p kuniumi-sphere --release grid -- --ignored --nocapture`.
 //!
 //! Run with `--nocapture` to see the measured values.
@@ -1200,6 +1205,22 @@ fn errors_display() {
         GridError::Winding { cell: 4, turns: 2 }.to_string(),
         "neighbours of cell 4 go around it 2 times, not once"
     );
+    assert_eq!(
+        GridError::Fan {
+            cell: 1,
+            neighbor: 2
+        }
+        .to_string(),
+        "neighbours of cells 1 and 2 do not fit together"
+    );
+    assert_eq!(
+        GridError::Covering { times: 0 }.to_string(),
+        "the grid has no cells"
+    );
+    assert_eq!(
+        GridError::Covering { times: 2 }.to_string(),
+        "the cells cover the sphere 2 times, not once"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,8 +1259,12 @@ fn from_rings(positions: Vec<Vec3>, rings: &[Vec<u32>], areas_sr: Vec<f64>) -> S
 /// k + 1, the hub and k − 1 (cyclically), counter-clockwise seen from
 /// outside. The centres are the vertices of a pyramid with a flat
 /// (n − 1)-gon as its base, so every ring turns counter-clockwise and
-/// `validate` accepts the grid, although the hub's ring has n − 1 entries.
-/// Areas 4π/n; edge data as in `from_rings`.
+/// once, and the rules of ticket M1-14 accept the grid, although the hub's
+/// ring has n − 1 entries. `validate` accepts only the wheel of four cells
+/// (the tetrahedron): for more, the triangles the rim cells close their
+/// rings with across the base do not fit together (ticket M1-15,
+/// `wheels_fit_together_only_with_four_cells`). Areas 4π/n; edge data as
+/// in `from_rings`.
 fn wheel(n: u32) -> SphereGrid {
     assert!(n >= 4, "a wheel needs a hub and three rim cells");
     let rim = n - 1;
@@ -1287,15 +1312,59 @@ fn reference_turns(g: &SphereGrid, cell: u32) -> u32 {
     (total_rad / core::f64::consts::TAU).round() as u32
 }
 
+/// The number of connected components of the neighbour graph of `g`, by
+/// a breadth-first search from each cell not yet reached, in index order
+/// (ticket M1-15: independent of the Euler count of `validate`). The
+/// neighbours must be valid cell indices.
+fn reference_components(g: &SphereGrid) -> u32 {
+    let n = g.len();
+    let mut reached = vec![false; n];
+    let mut components = 0;
+    for start in 0..n {
+        if reached[start] {
+            continue;
+        }
+        components += 1;
+        reached[start] = true;
+        let mut queue = std::collections::VecDeque::from([start as u32]);
+        while let Some(cell) = queue.pop_front() {
+            for &j in g.neighbors(cell) {
+                if !reached[j as usize] {
+                    reached[j as usize] = true;
+                    queue.push_back(j);
+                }
+            }
+        }
+    }
+    components
+}
+
+/// The rules of `validate_reference`, each including the ones before it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Rules {
+    /// Ticket M1-13: `SphereGrid::validate` as it was then.
+    Symmetric,
+    /// Ticket M1-14: also every ring turning once around its cell.
+    OneTurn,
+    /// Ticket M1-15: also the fans fitting together into one sphere.
+    OneSphere,
+}
+
 /// The reference of `validate_matches_the_reference`. With
-/// `count_turns = false`, `SphereGrid::validate` as it was before ticket
+/// `Rules::Symmetric`, `SphereGrid::validate` as it was before ticket
 /// M1-13 (commit 5ef3a4c): the symmetry with `contains` and the reverse
 /// entries with `position`, in time proportional to the sum of the
 /// squared ring sizes; the other checks are the same code as today's.
-/// With `count_turns = true`, also the rule of ticket M1-14: after the
+/// With `Rules::OneTurn`, also the rule of ticket M1-14: after the
 /// counter-clockwise check, `Winding` unless the ring turns once around
-/// its cell (`reference_turns`).
-fn validate_reference(g: &SphereGrid, count_turns: bool) -> Result<(), GridError> {
+/// its cell (`reference_turns`). With `Rules::OneSphere`, also the rules
+/// of ticket M1-15, after every cell's checks and before the areas: for
+/// each cell in index order and each entry `j` of its ring in order,
+/// `Fan` unless the entry after the cell in the ring of `j` (found with
+/// `position`) is the entry before `j` in the ring of the cell; then
+/// `Covering` unless the neighbour graph is connected
+/// (`reference_components`).
+fn validate_reference(g: &SphereGrid, rules: Rules) -> Result<(), GridError> {
     use super::{AREA_TOLERANCE, DISTANCE_TOLERANCE_RAD, UNIT_TOLERANCE};
     use crate::coords::great_circle_rad;
     use crate::predicates::in_exact_range;
@@ -1349,7 +1418,7 @@ fn validate_reference(g: &SphereGrid, count_turns: bool) -> Result<(), GridError
         if !g.ring_is_counter_clockwise(cell) {
             return Err(GridError::Orientation { cell });
         }
-        if count_turns {
+        if rules >= Rules::OneTurn {
             let turns = reference_turns(g, cell);
             if turns != 1 {
                 return Err(GridError::Winding { cell, turns });
@@ -1376,6 +1445,28 @@ fn validate_reference(g: &SphereGrid, count_turns: bool) -> Result<(), GridError
             {
                 return Err(GridError::CentreDistance { cell, neighbor: j });
             }
+        }
+    }
+    if rules >= Rules::OneSphere {
+        for cell in 0..n as u32 {
+            let ring = g.neighbors(cell);
+            let d = ring.len();
+            for k in 0..d {
+                let j = ring[k];
+                let before = ring[(k + d - 1) % d];
+                let other = g.neighbors(j);
+                let f = other
+                    .iter()
+                    .position(|&c| c == cell)
+                    .expect("the adjacency is symmetric");
+                if other[(f + 1) % other.len()] != before {
+                    return Err(GridError::Fan { cell, neighbor: j });
+                }
+            }
+        }
+        let components = reference_components(g);
+        if components != 1 {
+            return Err(GridError::Covering { times: components });
         }
     }
     let full_sphere = 4.0 * PI;
@@ -1574,20 +1665,40 @@ fn outcome(result: &Result<(), GridError>) -> &'static str {
         Err(GridError::Winding { .. }) => "Winding",
         Err(GridError::EdgeLength { .. }) => "EdgeLength",
         Err(GridError::CentreDistance { .. }) => "CentreDistance",
+        Err(GridError::Fan { .. }) => "Fan",
+        Err(GridError::Covering { .. }) => "Covering",
         Err(GridError::Area) => "Area",
     }
 }
 
 #[test]
-fn wheels_are_valid() {
+fn wheels_fit_together_only_with_four_cells() {
+    // Ticket M1-15: rim cell k closes its ring k + 1, hub, k − 1 with the
+    // triangle (k, k − 1, k + 1) across the base, which is in the fan of
+    // neither k − 1 nor k + 1 unless the rim has three cells. By hand:
+    // rim cell 1 lists 2, 0, n − 1; in the ring 3, 0, 1 of cell 2 the entry
+    // after 1 is 3, not n − 1. The rules of M1-14 accept every wheel.
     for n in [4, 5, 1_000, 100_000] {
         let g = wheel(n);
         let m = 4 * (n as usize - 1);
         assert_eq!(g.neighbors.len(), m, "n = {n}");
         assert_eq!(g.neighbors(0).len(), n as usize - 1, "n = {n}");
-        assert_eq!(g.validate(), Ok(()), "n = {n}");
+        let expected = if n == 4 {
+            Ok(())
+        } else {
+            Err(GridError::Fan {
+                cell: 1,
+                neighbor: 2,
+            })
+        };
+        assert_eq!(g.validate(), expected, "n = {n}");
         if n <= 1_000 {
-            assert_eq!(validate_reference(&g, true), Ok(()), "n = {n}");
+            assert_eq!(validate_reference(&g, Rules::OneTurn), Ok(()), "n = {n}");
+            assert_eq!(
+                validate_reference(&g, Rules::OneSphere),
+                expected,
+                "n = {n}"
+            );
         }
     }
     // Four cells: the tetrahedron's graph, every cell next to the others.
@@ -1600,6 +1711,46 @@ fn wheels_are_valid() {
     }
 }
 
+/// The bipyramid of `n ≥ 5` cells (ticket M1-15), not validated: cell 0
+/// at +Z and cell 1 at −Z list every rim cell 2 … n − 1, which lie on
+/// the equator in increasing longitude, counter-clockwise seen from
+/// outside (increasing longitude around +Z, decreasing around −Z); rim
+/// cell k lists k + 1, 0, k − 1 and 1 (cyclically). The surface of a
+/// convex bipyramid, so a valid grid whose two poles list n − 2 cells
+/// each, with 6n − 12 entries. Areas 4π/n; edge data as in `from_rings`.
+fn bipyramid(n: u32) -> SphereGrid {
+    assert!(n >= 5, "a bipyramid needs two poles and three rim cells");
+    let rim = n - 2;
+    let mut positions = vec![Vec3::Z, -Vec3::Z];
+    positions.extend((0..rim).map(|k| {
+        let longitude = 2.0 * core::f64::consts::PI * f64::from(k) / f64::from(rim);
+        unit(longitude.cos(), longitude.sin(), 0.0)
+    }));
+    let next = |k: u32| if k == n - 1 { 2 } else { k + 1 };
+    let previous = |k: u32| if k == 2 { n - 1 } else { k - 1 };
+    let mut rings: Vec<Vec<u32>> = vec![(2..n).collect(), (2..n).rev().collect()];
+    rings.extend((2..n).map(|k| vec![next(k), 0, previous(k), 1]));
+    from_rings(
+        positions,
+        &rings,
+        vec![FULL_SPHERE_SR / f64::from(n); n as usize],
+    )
+}
+
+#[test]
+fn bipyramids_are_valid() {
+    for n in [5, 6, 1_000, 100_000] {
+        let g = bipyramid(n);
+        assert_eq!(g.neighbors.len(), 6 * n as usize - 12, "n = {n}");
+        assert_eq!(g.neighbors(0).len(), n as usize - 2, "n = {n}");
+        assert_eq!(g.neighbors(1).len(), n as usize - 2, "n = {n}");
+        assert_eq!(g.validate(), Ok(()), "n = {n}");
+        if n <= 1_000 {
+            assert_eq!(validate_reference(&g, Rules::OneSphere), Ok(()), "n = {n}");
+        }
+    }
+}
+
 /// `wheel(n)` with the hub's ring replaced by `hub_ring`, not validated;
 /// edge data as in `from_rings`.
 fn wheel_with_hub_ring(n: u32, hub_ring: &[u32]) -> SphereGrid {
@@ -1609,9 +1760,11 @@ fn wheel_with_hub_ring(n: u32, hub_ring: &[u32]) -> SphereGrid {
     from_rings(w.positions, &rings, w.areas_sr)
 }
 
-/// Grids whose only defect is a ring that does not turn once around its
-/// cell (ticket M1-14), each with the error `validate` must return; every
-/// one passes the checks of ticket M1-13.
+/// Grids whose first defect, in the order of `validate`, is a ring that
+/// does not turn once around its cell (ticket M1-14), each with the error
+/// `validate` must return; every one passes the checks of ticket M1-13.
+/// (The pentagram and heptagram hubs belong to wheels, whose fans do not
+/// fit together either: ticket M1-15.)
 fn rings_that_do_not_turn_once() -> Vec<(&'static str, SphereGrid, GridError)> {
     let octahedron = SphereGrid::octahedron();
     let mut doubled = octahedron.clone();
@@ -1659,9 +1812,13 @@ fn rings_that_do_not_turn_once() -> Vec<(&'static str, SphereGrid, GridError)> {
 #[test]
 fn rejects_rings_that_do_not_turn_once() {
     for (name, g, error) in rings_that_do_not_turn_once() {
-        assert_eq!(validate_reference(&g, false), Ok(()), "{name}: M1-13 rules");
         assert_eq!(
-            validate_reference(&g, true),
+            validate_reference(&g, Rules::Symmetric),
+            Ok(()),
+            "{name}: M1-13 rules"
+        );
+        assert_eq!(
+            validate_reference(&g, Rules::OneSphere),
             Err(error),
             "{name}: reference"
         );
@@ -1748,21 +1905,324 @@ fn ring_turns_counts_exactly() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Fans that fit together into one sphere (ticket M1-15)
+
+/// The rings of `g`, one list per cell.
+fn ring_lists(g: &SphereGrid) -> Vec<Vec<u32>> {
+    (0..g.len() as u32)
+        .map(|i| g.neighbors(i).to_vec())
+        .collect()
+}
+
+/// The cells of `parts`, each given by its centres and rings, as one grid,
+/// not validated: the rings of each part renumbered after the cells of
+/// the parts before it; areas 4π/n for all n cells; edge data as in
+/// `from_rings`.
+fn side_by_side(parts: &[(Vec<Vec3>, Vec<Vec<u32>>)]) -> SphereGrid {
+    let mut positions = Vec::new();
+    let mut rings = Vec::new();
+    for (centres, part_rings) in parts {
+        let first = positions.len() as u32;
+        positions.extend_from_slice(centres);
+        rings.extend(
+            part_rings
+                .iter()
+                .map(|ring| ring.iter().map(|&j| j + first).collect::<Vec<u32>>()),
+        );
+    }
+    let n = positions.len();
+    from_rings(positions, &rings, vec![FULL_SPHERE_SR / n as f64; n])
+}
+
+/// The octahedron's centres rotated by `angle` about `axis` (with
+/// `Vec3::rotate_about`), and its rings.
+fn rotated_octahedron(axis: Vec3, angle: f64) -> (Vec<Vec3>, Vec<Vec<u32>>) {
+    let g = SphereGrid::octahedron();
+    let centres = g
+        .positions()
+        .iter()
+        .map(|p| p.rotate_about(axis, angle))
+        .collect();
+    (centres, ring_lists(&g))
+}
+
+/// The ring of every cell of `positions` for the undirected `edges`: its
+/// neighbours sorted counter-clockwise seen from outside, by the angle
+/// (std `atan2`) of their projections onto the plane perpendicular to the
+/// centre, measured from the neighbour with the lowest index, which comes
+/// first.
+fn rings_from_edges(positions: &[Vec3], edges: &[(u32, u32)]) -> Vec<Vec<u32>> {
+    let mut neighbours = vec![Vec::new(); positions.len()];
+    for &(a, b) in edges {
+        neighbours[a as usize].push(b);
+        neighbours[b as usize].push(a);
+    }
+    neighbours
+        .into_iter()
+        .enumerate()
+        .map(|(cell, mut ring)| {
+            let p = positions[cell];
+            let flat = |j: u32| {
+                let a = positions[j as usize];
+                a - p * a.dot(p)
+            };
+            ring.sort_unstable();
+            let Some(&lowest) = ring.first() else {
+                return ring;
+            };
+            let u = flat(lowest);
+            let angle = |j: u32| {
+                let v = flat(j);
+                let a = u.cross(v).dot(p).atan2(u.dot(v));
+                if a < 0.0 {
+                    a + core::f64::consts::TAU
+                } else {
+                    a
+                }
+            };
+            ring.sort_by(|&a, &b| angle(a).total_cmp(&angle(b)));
+            ring
+        })
+        .collect()
+}
+
+/// One diagonal per face of the cube of `cube_points` (cells 0 = (+, +, +),
+/// 1 = (+, +, −), 2 = (+, −, +), …, 7 = (−, −, −)), each through the
+/// face's lowest-numbered corner: faces x > 0, x < 0, y > 0, y < 0, z > 0,
+/// z < 0.
+const CUBE_DIAGONALS: [(u32, u32); 6] = [(0, 3), (4, 7), (0, 5), (2, 7), (0, 6), (1, 7)];
+
+/// The grid on the corners of the cube with its twelve edges and the
+/// given face diagonals, the rings from `rings_from_edges`, areas π/2;
+/// not validated.
+fn cube_from_edges(diagonals: &[(u32, u32)]) -> SphereGrid {
+    let positions = cube_points();
+    let mut edges: Vec<(u32, u32)> = (0..8u32)
+        .flat_map(|a| (a + 1..8).map(move |b| (a, b)))
+        .filter(|&(a, b)| (a ^ b).count_ones() == 1)
+        .collect();
+    assert_eq!(edges.len(), 12);
+    edges.extend_from_slice(diagonals);
+    let rings = rings_from_edges(&positions, &edges);
+    from_rings(positions, &rings, vec![FULL_SPHERE_SR / 8.0; 8])
+}
+
+/// Grids whose rings each turn once around their cell (they pass the
+/// rules of ticket M1-14) but whose fans do not fit together or do not
+/// cover the sphere once (ticket M1-15), each with the error `validate`
+/// must return.
+fn rings_that_do_not_form_one_sphere() -> Vec<(&'static str, SphereGrid, GridError)> {
+    let octahedron = SphereGrid::octahedron();
+    let plain = (octahedron.positions.clone(), ring_lists(&octahedron));
+    let first_turn = rotated_octahedron(unit(1.0, 2.0, 3.0), 0.7);
+    let second_turn = rotated_octahedron(unit(-3.0, 1.0, 2.0), 2.1);
+    let tetrahedron = from_points_ok(&tetrahedron_points());
+    let tetrahedron = (tetrahedron.positions.clone(), ring_lists(&tetrahedron));
+    // Both diagonals of the face x > 0, and the same without the diagonal
+    // of the opposite face, so that m = 6n − 12.
+    let mut both: Vec<(u32, u32)> = CUBE_DIAGONALS.to_vec();
+    both.push((1, 2));
+    let mut both_and_none = both.clone();
+    both_and_none.retain(|&d| d != (4, 7));
+    let covering = |times: u32| GridError::Covering { times };
+    // By hand (test `wheels_fit_together_only_with_four_cells`).
+    let wheel_fan = GridError::Fan {
+        cell: 1,
+        neighbor: 2,
+    };
+    // By hand: the ring of cell 0 is 1, 5, 4, 6, 2, 3 and that of cell 1
+    // is 0, 2, 3, 7, 5 (the diagonals 0–3 and 1–2 of the face x > 0 both
+    // present); the entry before 1 in the first is 3, the entry after 0 in
+    // the second is 2.
+    let cube_fan = GridError::Fan {
+        cell: 0,
+        neighbor: 1,
+    };
+    vec![
+        (
+            "two octahedra, the second rotated",
+            side_by_side(&[plain.clone(), first_turn.clone()]),
+            covering(2),
+        ),
+        (
+            "three octahedra",
+            side_by_side(&[plain.clone(), first_turn, second_turn]),
+            covering(3),
+        ),
+        (
+            "an octahedron and a tetrahedron",
+            side_by_side(&[plain, tetrahedron]),
+            covering(2),
+        ),
+        ("wheel of 5 cells", wheel(5), wheel_fan),
+        ("wheel of 9 cells", wheel(9), wheel_fan),
+        (
+            "cube, both diagonals of one face",
+            cube_from_edges(&both),
+            cube_fan,
+        ),
+        (
+            "cube, both diagonals of one face and none of the opposite face",
+            cube_from_edges(&both_and_none),
+            cube_fan,
+        ),
+    ]
+}
+
+#[test]
+fn rejects_rings_that_do_not_form_one_sphere() {
+    // The helper builds valid grids: the cube with one diagonal per face.
+    let cube = cube_from_edges(&CUBE_DIAGONALS);
+    assert_eq!(cube.neighbors.len(), 36);
+    assert_eq!(cube.validate(), Ok(()));
+    assert_eq!(validate_reference(&cube, Rules::OneSphere), Ok(()));
+    for (name, g, error) in rings_that_do_not_form_one_sphere() {
+        let (n, m) = (g.len(), g.neighbors.len());
+        println!(
+            "{name}: {n} cells, {m} entries (6n − 12 = {}): {error}",
+            6 * n - 12
+        );
+        assert_eq!(
+            validate_reference(&g, Rules::OneTurn),
+            Ok(()),
+            "{name}: M1-14 rules"
+        );
+        assert_eq!(
+            validate_reference(&g, Rules::OneSphere),
+            Err(error),
+            "{name}: reference"
+        );
+        assert_eq!(g.validate(), Err(error), "{name}");
+        let SphereGrid {
+            positions,
+            neighbor_offsets,
+            neighbors,
+            areas_sr,
+            edge_lengths_rad,
+            centre_distances_rad,
+        } = g;
+        assert_eq!(
+            SphereGrid::from_parts(
+                positions,
+                neighbor_offsets,
+                neighbors,
+                areas_sr,
+                edge_lengths_rad,
+                centre_distances_rad,
+            ),
+            Err(error),
+            "{name}: from_parts"
+        );
+    }
+    // The cube whose fans do not fit has the entry count of one sphere,
+    // so the count alone would not reject it; the two octahedra fit
+    // together, so the fan check alone would not.
+    let mut diagonals = CUBE_DIAGONALS.to_vec();
+    diagonals.push((1, 2));
+    diagonals.retain(|&d| d != (4, 7));
+    assert_eq!(cube_from_edges(&diagonals).neighbors.len(), 6 * 8 - 12);
+}
+
+/// How many fan steps `(p, a_k, a_{k+1})` of `g` hold `x` strictly inside
+/// their spherical triangle, decided by the signs of `det[p, a, x]`,
+/// `det[a, b, x]` and `det[b, p, x]` in std floating point (all three
+/// positive: `x` is a positive combination of `p`, `a` and `b`); `None`
+/// if `x` lies within 1e-12 of a side of a triangle it may be in.
+fn fan_steps_containing(g: &SphereGrid, x: Vec3) -> Option<u32> {
+    let mut count = 0;
+    for cell in 0..g.len() as u32 {
+        let p = g.position(cell);
+        let ring = g.neighbors(cell);
+        for k in 0..ring.len() {
+            let a = g.position(ring[k]);
+            let b = g.position(ring[(k + 1) % ring.len()]);
+            let sides = [p.cross(a).dot(x), a.cross(b).dot(x), b.cross(p).dot(x)];
+            if sides.iter().any(|&s| s < -1e-12) {
+                continue;
+            }
+            if sides.iter().any(|&s| s <= 1e-12) {
+                return None;
+            }
+            count += 1;
+        }
+    }
+    Some(count)
+}
+
+#[test]
+fn fans_cover_the_sphere_once() {
+    // Ticket M1-15, independent of `validate`: where the fans fit
+    // together, each triangle is a step of its three corners, so a once
+    // covered sphere has 3 fan steps over every point, and `times` sheets
+    // have 3 times as many.
+    let nodes = quadrature_nodes(1_000);
+    let histogram = |g: &SphereGrid| {
+        let mut counts = std::collections::BTreeMap::new();
+        let mut skipped = 0;
+        for &x in &nodes {
+            match fan_steps_containing(g, x) {
+                Some(c) => *counts.entry(c).or_insert(0u32) += 1,
+                None => skipped += 1,
+            }
+        }
+        (counts, skipped)
+    };
+    let valid = [
+        ("Fibonacci 500", grid(500, 1)),
+        ("icosahedron", from_points_ok(&icosahedron_points())),
+        ("cube", from_points_ok(&cube_points())),
+        ("cube from its edges", cube_from_edges(&CUBE_DIAGONALS)),
+        ("bipyramid 40", bipyramid(40)),
+    ];
+    for (name, g) in &valid {
+        assert_eq!(g.validate(), Ok(()), "{name}");
+        let (counts, skipped) = histogram(g);
+        println!("{name}: fan steps over a node {counts:?}, {skipped} nodes skipped");
+        assert_eq!(counts.keys().copied().collect::<Vec<_>>(), [3], "{name}");
+        assert!(skipped <= 10, "{name}: {skipped} skipped");
+    }
+    for (name, g, error) in rings_that_do_not_form_one_sphere() {
+        let (counts, skipped) = histogram(&g);
+        println!("{name}: fan steps over a node {counts:?}, {skipped} nodes skipped");
+        assert!(skipped <= 10, "{name}: {skipped} skipped");
+        match error {
+            GridError::Covering { times } => assert_eq!(
+                counts.keys().copied().collect::<Vec<_>>(),
+                [3 * times],
+                "{name}"
+            ),
+            _ => assert_ne!(counts.keys().copied().collect::<Vec<_>>(), [3], "{name}"),
+        }
+    }
+}
+
 #[test]
 fn validate_matches_the_reference() {
     // Tickets M1-13 and M1-14: the same result, `Ok` or the same error
     // with the same cells, as the code of commit 5ef3a4c with the turns
-    // counted by summing angles, for grids changed in every way `Change`
-    // describes and for the grids of `rings_that_do_not_turn_once`; the
-    // counts show that each check is reached.
+    // counted by summing angles, and (ticket M1-15) the fans compared with
+    // `position` and the components counted by a breadth-first search, for
+    // grids changed in every way `Change` describes and for the grids of
+    // `rings_that_do_not_turn_once` and `rings_that_do_not_form_one_sphere`;
+    // the counts show that each check is reached.
     let mut counts = std::collections::BTreeMap::new();
     let mut compare = |g: &SphereGrid, what: &dyn Fn() -> String| {
         let result = g.validate();
-        assert_eq!(result, validate_reference(g, true), "{}", what());
+        assert_eq!(
+            result,
+            validate_reference(g, Rules::OneSphere),
+            "{}",
+            what()
+        );
         *counts.entry(outcome(&result)).or_insert(0u32) += 1;
     };
-    for (name, g, _) in rings_that_do_not_turn_once() {
-        compare(&g, &|| name.to_string());
+    let hand_made: Vec<_> = rings_that_do_not_turn_once()
+        .into_iter()
+        .chain(rings_that_do_not_form_one_sphere())
+        .collect();
+    for (name, g, _) in &hand_made {
+        compare(g, &|| name.to_string());
     }
     let octahedron = SphereGrid::octahedron();
     let singles = every_single_change(&octahedron);
@@ -1780,16 +2240,35 @@ fn validate_matches_the_reference() {
         centre_distances_rad: Vec::new(),
     };
     compare(&empty, &|| "the grid without cells".to_string());
+    // Valid bases, and two whose fans do not fit together or cover the
+    // sphere twice (ticket M1-15), with the result `validate` gives them.
+    let two_octahedra = side_by_side(&[
+        (octahedron.positions.clone(), ring_lists(&octahedron)),
+        rotated_octahedron(unit(1.0, 2.0, 3.0), 0.7),
+    ]);
     let grids = [
-        ("octahedron", octahedron),
-        ("icosahedron", from_points_ok(&icosahedron_points())),
-        ("Fibonacci 60", grid(60, 1)),
-        ("wheel 9", wheel(9)),
-        ("wheel 40", wheel(40)),
+        ("octahedron", octahedron, Ok(())),
+        ("icosahedron", from_points_ok(&icosahedron_points()), Ok(())),
+        ("Fibonacci 60", grid(60, 1), Ok(())),
+        ("bipyramid 9", bipyramid(9), Ok(())),
+        ("bipyramid 40", bipyramid(40), Ok(())),
+        (
+            "wheel 9",
+            wheel(9),
+            Err(GridError::Fan {
+                cell: 1,
+                neighbor: 2,
+            }),
+        ),
+        (
+            "two octahedra",
+            two_octahedra,
+            Err(GridError::Covering { times: 2 }),
+        ),
     ];
     let mut rng = Rng::for_stream(1, "test/validate");
-    for (name, base) in &grids {
-        assert_eq!(base.validate(), Ok(()), "{name}");
+    for (name, base, expected) in &grids {
+        assert_eq!(base.validate(), *expected, "{name}");
         for _ in 0..2_000 {
             // One to three changes, the kinds in the order of `Change`, so
             // that the offsets are still valid where a change needs them.
@@ -1807,9 +2286,11 @@ fn validate_matches_the_reference() {
         }
     }
     println!(
-        "6 rings that do not turn once, {} single changes of the octahedron, the grid without \
-         cells, then 10,000 random changes: {counts:?}",
-        singles.len()
+        "{} hand-made grids, {} single changes of the octahedron, the grid without cells, then \
+         {} random changes: {counts:?}",
+        hand_made.len(),
+        singles.len(),
+        2_000 * grids.len()
     );
     for name in [
         "Ok",
@@ -1820,6 +2301,8 @@ fn validate_matches_the_reference() {
         "Winding",
         "EdgeLength",
         "CentreDistance",
+        "Fan",
+        "Covering",
         "Area",
     ] {
         assert!(counts.contains_key(name), "no grid gave {name}: {counts:?}");
@@ -1926,22 +2409,24 @@ fn best_validate_s(g: &SphereGrid) -> f64 {
 
 #[test]
 #[ignore = "timing; run in release with --ignored --nocapture"]
-fn timing_wheel_100k() {
-    // Ticket M1-13: a wheel, whose hub lists every other cell, validates
-    // in time comparable to the Fibonacci grid of the same size (before
-    // the ticket: 1.136 s against 0.0149 s, growing as n²).
+fn timing_bipyramid_100k() {
+    // Ticket M1-13: a grid whose hub lists every other cell validates in
+    // time comparable to the Fibonacci grid of the same size (before the
+    // ticket, the wheel took 1.136 s against 0.0149 s, growing as n²).
+    // Ticket M1-15: the wheel's fans do not fit together, so the valid
+    // bipyramid, whose two poles list every rim cell, takes its place.
     let n = 100_000;
-    let t_wheel = best_validate_s(&wheel(n));
+    let t_bipyramid = best_validate_s(&bipyramid(n));
     let t_fibonacci = best_validate_s(&grid(n, 1));
-    let t_wheel_650k = best_validate_s(&wheel(650_000));
+    let t_bipyramid_650k = best_validate_s(&bipyramid(650_000));
     println!(
-        "validate, best of 5: wheel of 100,000 cells {t_wheel:.4} s, \
+        "validate, best of 5: bipyramid of 100,000 cells {t_bipyramid:.4} s, \
          SphereGrid::fibonacci(100_000, 1) {t_fibonacci:.4} s (ratio {:.2}); \
-         wheel of 650,000 cells {t_wheel_650k:.4} s",
-        t_wheel / t_fibonacci
+         bipyramid of 650,000 cells {t_bipyramid_650k:.4} s",
+        t_bipyramid / t_fibonacci
     );
     assert!(
-        t_wheel <= 2.0 * t_fibonacci,
-        "wheel {t_wheel} s, Fibonacci grid {t_fibonacci} s"
+        t_bipyramid <= 2.0 * t_fibonacci,
+        "bipyramid {t_bipyramid} s, Fibonacci grid {t_fibonacci} s"
     );
 }

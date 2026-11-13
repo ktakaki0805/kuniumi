@@ -117,6 +117,27 @@ pub enum GridError {
         /// The neighbour.
         neighbor: u32,
     },
+    /// The fans of two neighbouring cells do not fit together (ticket
+    /// M1-15): the neighbour `x` listed before `neighbor` in the ring of
+    /// `cell` is not the one listed after `cell` in the ring of
+    /// `neighbor`, so the triangle `(cell, x, neighbor)` of the fan of
+    /// `cell` is not a triangle of the fan of `neighbor`. Checked after
+    /// every ring has passed the checks of the variants above.
+    Fan {
+        /// Cell index.
+        cell: u32,
+        /// The neighbour whose fan does not fit.
+        neighbor: u32,
+    },
+    /// The fans fit together but cover the sphere `times` times, not once
+    /// (ticket M1-15): the grid is `times` separate tilings of the
+    /// sphere, as its `m = 6n − 12 times` neighbour entries for `n` cells
+    /// show (Euler's formula, see [`SphereGrid::validate`]); 0 for a grid
+    /// without cells.
+    Covering {
+        /// How many times the fans cover the sphere.
+        times: u32,
+    },
     /// A cell's area is not positive and finite, or the areas do not add up
     /// to 4π within 1e-12 relative.
     Area,
@@ -155,6 +176,16 @@ impl fmt::Display for GridError {
                     f,
                     "invalid centre distance between cells {cell} and {neighbor}"
                 )
+            }
+            Self::Fan { cell, neighbor } => {
+                write!(
+                    f,
+                    "neighbours of cells {cell} and {neighbor} do not fit together"
+                )
+            }
+            Self::Covering { times: 0 } => write!(f, "the grid has no cells"),
+            Self::Covering { times } => {
+                write!(f, "the cells cover the sphere {times} times, not once")
             }
             Self::Area => write!(
                 f,
@@ -313,7 +344,7 @@ impl SphereGrid {
     /// [`BuildError::Degenerate`] when a point's cell has no positive area,
     /// else [`BuildError::Invalid`] if the grid fails
     /// [`validate`](Self::validate), which every returned grid has passed
-    /// (0.12 s of about 2.8 s for 650,000 cells in release).
+    /// (0.13 s of about 2.8 s for 650,000 cells in release).
     pub fn from_points(points: &[Vec3], seed: u64) -> Result<Self, BuildError> {
         check_cell_count(points.len())?;
         let triangulation = delaunay::triangulate(points, seed)?;
@@ -346,7 +377,9 @@ impl SphereGrid {
     ///   `neighbors[offsets[i]..offsets[i + 1]]`;
     /// - `neighbors`: symmetric adjacency, counter-clockwise seen from
     ///   outside, each ring going once around its cell (so listing each
-    ///   neighbour once);
+    ///   neighbour once), the triangles from each centre to consecutive
+    ///   neighbours fitting together and covering the sphere once (so
+    ///   `6n − 12` entries for `n` cells);
     /// - `areas_sr`: Voronoi cell areas in steradians, summing to 4π;
     /// - `edge_lengths_rad`: per entry of `neighbors`, the length of the
     ///   Voronoi edge between the two cells, in radians;
@@ -475,21 +508,64 @@ impl SphereGrid {
     /// cell in index order: the neighbours' indices and symmetry, the
     /// counter-clockwise order, the number of times the ring goes around
     /// the cell, and per neighbour its edge length and centre distance;
-    /// finally the areas. The orientation test is the exact predicate with
-    /// which [`delaunay::triangulate`] checks its triangles, so a grid from
+    /// then cell by cell whether its fan fits those of its neighbours; then
+    /// whether the fans cover the sphere once; finally the areas. The
+    /// orientation test is the exact predicate with which
+    /// [`delaunay::triangulate`] checks its triangles, so a grid from
     /// [`from_points`](Self::from_points) never fails it, even for nearly
     /// hemispherical inputs. Every ring must go around its cell exactly
     /// once (ticket M1-14), which rules out an empty ring, a ring that
     /// lists a neighbour twice and one that turns more than once; the turns
-    /// are counted exactly, with the same predicate. A grid from
-    /// `from_points` never fails this either: its rings are the triangle
-    /// fans of the convex hull of the centres, every triangle positive seen
-    /// from the centre of the sphere, and the hull, a closed surface around
-    /// that centre, projects onto the sphere once, so the angles of the
-    /// fan around each centre add up to one turn. The areas must be
+    /// are counted exactly, with the same predicate. The areas must be
     /// positive and sum to 4π within 1e-12 relative. The sum is taken in
     /// index order with Neumaier's compensated summation, so that its own
     /// rounding stays far below the tolerance.
+    ///
+    /// # One sphere
+    ///
+    /// The fans must fit together into one tiling of the sphere (ticket
+    /// M1-15). Every step `(p, a_k, a_{k+1})` of the ring of a cell `p` is
+    /// a triangle, positive seen from the centre of the sphere (the
+    /// counter-clockwise check). The fan of `p` fits those of its
+    /// neighbours when, for every entry `a_k`, the entry after `p` in the
+    /// ring of `a_k` is `a_{k−1}` ([`GridError::Fan`] otherwise). With
+    /// rings that list each neighbour once, this holds at every entry of
+    /// every ring exactly when every triangle of a fan is also a step of
+    /// the fans of its other two corners: at the entry `a_{k+1}` of the
+    /// ring of `p` it gives the step `(a_{k+1}, p, a_k)`, and at the entry
+    /// `p` of the ring of `a_k`, where `b` comes before `p`, that the entry
+    /// after `a_k` in the ring of `p`, `a_{k+1}`, is `b`: the step
+    /// `(a_k, a_{k+1}, p)`. Because it looks at the neighbours' rings, it
+    /// runs after every ring has passed its own checks, so that a defect of
+    /// one ring is reported at that ring.
+    ///
+    /// The triangles then form a closed oriented surface: each edge lies
+    /// in two triangles, on opposite sides of the plane through the edge
+    /// and the centre of the sphere, and around each centre the fan's
+    /// angles, each in (0, π), follow each other counter-clockwise and add
+    /// up to one turn. Its central projection onto the sphere,
+    /// `x ↦ x / |x|`, is therefore a local homeomorphism of a compact
+    /// surface, hence a covering, and as the sphere is simply connected,
+    /// each of its `c` connected components covers the sphere exactly
+    /// once and is itself a sphere, of Euler characteristic 2. With `n`
+    /// cells, `m/2` edges and `m/3` triangles for `m` neighbour entries,
+    /// `n − m/2 + m/3 = 2c`, that is `m = 6n − 12c`: the fans cover the
+    /// sphere once exactly when `m = 6n − 12`, an exact integer comparison
+    /// ([`GridError::Covering`] with `c = (6n − m)/12` otherwise, 0 for a
+    /// grid without cells). Neither check is enough alone: two octahedra
+    /// side by side fit together and cover the sphere twice, and a cube
+    /// with both diagonals of one face and neither of the opposite face
+    /// has `6n − 12` entries and does not fit together.
+    ///
+    /// A grid from `from_points` passes the checks of its rings and fans:
+    /// its rings are the triangle fans of one triangulation of the convex
+    /// hull of the centres, every triangle positive seen from the centre
+    /// of the sphere, and the hull is one closed surface around that
+    /// centre, which projects onto the sphere once; so the fans fit
+    /// together, the angles of the fan around each centre add up to one
+    /// turn, and there are `6n − 12` entries.
+    ///
+    /// # Cost
     ///
     /// Time and memory are linear in the size of the grid for every input,
     /// including arrays read from a file (ticket M1-13), however long a
@@ -500,7 +576,9 @@ impl SphereGrid {
     /// grid (39 MB for 650,000 cells, whose grid holds 101 MB), freed on
     /// return. Counting the turns of a ring of `d` entries takes `d − 1`
     /// exact predicates besides the `d` of the counter-clockwise check, and
-    /// no memory.
+    /// no memory. The fans take a second pass over the grouped entries,
+    /// one comparison per entry and no memory; the count of the coverings
+    /// none. In all, 0.13 s for 650,000 cells (release).
     pub fn validate(&self) -> Result<(), GridError> {
         let n = self.positions.len();
         if self.neighbor_offsets.len() != n + 1 {
@@ -572,6 +650,25 @@ impl SphereGrid {
                 return Err(GridError::Winding { cell, turns });
             }
             self.validate_edges(cell, &back)?;
+        }
+        // Every ring has passed its own checks, so it lists each neighbour
+        // once and `back[j]` is the only entry of ring j that lists `cell`.
+        for cell in 0..n as u32 {
+            for &(j, f) in incoming.listing(cell) {
+                back[j as usize] = f;
+            }
+            self.fan_fits(cell, &back)?;
+        }
+        // The fans form closed surfaces, each covering the sphere once, so
+        // m = 6n − 12c for c of them: one exactly when m = 6n − 12. The
+        // subtraction saturates only so that no input could make it wrap;
+        // by that argument 6n − m is 12c ≥ 0. Both fit u64: n and m are
+        // at most u32::MAX.
+        let six_n = 6 * n as u64;
+        let m = self.neighbors.len() as u64;
+        if m + 12 != six_n {
+            let times = (six_n.saturating_sub(m) / 12) as u32;
+            return Err(GridError::Covering { times });
         }
         let full_sphere = 4.0 * PI;
         // Written so that NaN fails, including a NaN sum (inf − inf when
@@ -652,6 +749,34 @@ impl SphereGrid {
             turns += 1;
         }
         turns
+    }
+
+    /// Whether the fan of `cell` fits those of its neighbours (ticket
+    /// M1-15): for every entry `a_k` of its ring `a₀, …, a_{d−1}`, the
+    /// entry after `cell` in the ring of `a_k`, cyclically, is `a_{k−1}`
+    /// (`a_{d−1}` for `k = 0`); [`GridError::Fan`] at the first `a_k` for
+    /// which it is not. `back[j]` is the entry of ring `j` that lists
+    /// `cell`, for every neighbour `j`. One comparison per entry.
+    fn fan_fits(&self, cell: u32, back: &[u32]) -> Result<(), GridError> {
+        let ring = self.neighbors(cell);
+        let Some(&last) = ring.last() else {
+            return Ok(());
+        };
+        let mut before = last;
+        for &j in ring {
+            let range = self.range(j);
+            let f = back[j as usize] as usize;
+            let after = if f + 1 == range.end {
+                range.start
+            } else {
+                f + 1
+            };
+            if self.neighbors[after] != before {
+                return Err(GridError::Fan { cell, neighbor: j });
+            }
+            before = j;
+        }
+        Ok(())
     }
 
     /// The edge-length and centre-distance checks of

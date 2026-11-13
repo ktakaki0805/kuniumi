@@ -527,6 +527,23 @@ section: every change after which an existing seed produces a different world
   `SphereGrid::from_points` builds is unchanged and passes; the
   650,000-cell Fibonacci grid validates in 0.12 s instead of 0.08 to
   0.09 s, and the 100,000-cell wheel of M1-13 in 0.012 s (M1-14).
+- `SphereGrid::validate`, and with it `SphereGrid::from_parts`,
+  `kuniumi_io::grid_file::read_grid` and `world_dir::read`, rejects a grid
+  whose rings each go once around their cell but whose triangles do not
+  fit together into one tiling of the sphere, with the new
+  `GridError::Fan { cell, neighbor }` ("neighbours of cells A and B do not
+  fit together") and `GridError::Covering { times }` ("the cells cover the
+  sphere K times, not once", or "the grid has no cells"). Before, two
+  octahedra side by side as one grid of 12 cells, and the wheels of M1-13
+  with five or more cells, whose rim cells close their rings with
+  triangles across the base that no neighbour shares, were accepted. After
+  every ring has passed its own checks, each neighbour entry is compared
+  once with the ring of that neighbour, and the coverings are counted by
+  Euler's formula (`m = 6n − 12` entries for one sphere); no memory is
+  added. The grid without cells now gives `Covering` instead of `Area`.
+  Every grid `SphereGrid::from_points` builds is unchanged and passes; the
+  650,000-cell Fibonacci grid validates in 0.13 s instead of 0.12 s
+  (M1-15).
 
 ### World-breaking
 

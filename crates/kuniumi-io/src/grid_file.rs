@@ -4,8 +4,8 @@
 //!
 //! Layout (all integers little-endian, as in [`crate::field_file`]), for a
 //! grid of `n` cells with `m` neighbour entries (each neighbour pair is
-//! listed twice, once in each cell's ring; `m = 6n − 12` for a grid that
-//! tiles the sphere):
+//! listed twice, once in each cell's ring; `m = 6n − 12`, since a valid
+//! grid tiles the sphere once, [`SphereGrid::validate`]):
 //!
 //! | bytes      | content                                                   |
 //! | ---------- | --------------------------------------------------------- |
@@ -200,6 +200,26 @@ mod tests {
         }
     }
 
+    /// The centres of `SphereGrid::octahedron`: +X, −X, +Y, −Y, +Z, −Z.
+    const OCTAHEDRON_CENTRES: [[f64; 3]; 6] = [
+        [1.0, 0.0, 0.0],
+        [-1.0, -0.0, -0.0],
+        [0.0, 1.0, 0.0],
+        [-0.0, -1.0, -0.0],
+        [0.0, 0.0, 1.0],
+        [-0.0, -0.0, -1.0],
+    ];
+
+    /// The rings of `SphereGrid::octahedron`.
+    const OCTAHEDRON_RINGS: [&[u32]; 6] = [
+        &[2, 4, 3, 5],
+        &[2, 5, 3, 4],
+        &[4, 0, 5, 1],
+        &[4, 1, 5, 0],
+        &[0, 2, 1, 3],
+        &[0, 3, 1, 2],
+    ];
+
     /// The bytes of the octahedron grid, written out by hand from the
     /// layout in the module documentation and the arrays documented at
     /// `SphereGrid::octahedron`.
@@ -209,16 +229,7 @@ mod tests {
         b.extend(1u32.to_le_bytes());
         b.extend(6u64.to_le_bytes());
         b.extend(24u64.to_le_bytes());
-        // +X, −X, +Y, −Y, +Z, −Z.
-        let centres: [[f64; 3]; 6] = [
-            [1.0, 0.0, 0.0],
-            [-1.0, -0.0, -0.0],
-            [0.0, 1.0, 0.0],
-            [-0.0, -1.0, -0.0],
-            [0.0, 0.0, 1.0],
-            [-0.0, -0.0, -1.0],
-        ];
-        for c in centres.iter().flatten() {
+        for c in OCTAHEDRON_CENTRES.iter().flatten() {
             b.extend(c.to_bits().to_le_bytes());
         }
         for k in 0..=6u32 {
@@ -395,15 +406,26 @@ mod tests {
         }
     }
 
-    /// The bytes of a file with the octahedron's centres and areas and the
-    /// given rings, laid out as in the module documentation; every entry
-    /// with the octahedron's edge length and centre distance.
-    fn octahedron_file_with_rings(rings: &[&[u32]]) -> Vec<u8> {
-        let header_and_centres = &octahedron_bytes()[..172];
+    /// The bytes of a file with the given centres, rings and areas, laid
+    /// out as in the module documentation: every entry with the edge
+    /// length `edge_rad`, and the entry of `j` in the ring of `i` with the
+    /// centre distance `distance_rad(i, j)`.
+    fn file_with(
+        centres: &[[f64; 3]],
+        rings: &[&[u32]],
+        areas_sr: &[f64],
+        edge_rad: f64,
+        distance_rad: impl Fn(u32, u32) -> f64,
+    ) -> Vec<u8> {
         let m: usize = rings.iter().map(|r| r.len()).sum();
-        let mut b = header_and_centres[..20].to_vec();
+        let mut b = Vec::new();
+        b.extend(b"KUNIGRD\0");
+        b.extend(1u32.to_le_bytes());
+        b.extend((centres.len() as u64).to_le_bytes());
         b.extend((m as u64).to_le_bytes());
-        b.extend(&header_and_centres[28..]);
+        for c in centres.iter().flatten() {
+            b.extend(c.to_bits().to_le_bytes());
+        }
         let mut offset = 0u32;
         b.extend(offset.to_le_bytes());
         for ring in rings {
@@ -413,16 +435,31 @@ mod tests {
         for j in rings.iter().copied().flatten() {
             b.extend(j.to_le_bytes());
         }
-        for _ in 0..6 {
-            b.extend(2.094_395_102_393_195_7f64.to_bits().to_le_bytes());
+        for area in areas_sr {
+            b.extend(area.to_bits().to_le_bytes());
         }
         for _ in 0..m {
-            b.extend(1.230_959_417_340_774_7f64.to_bits().to_le_bytes());
+            b.extend(edge_rad.to_bits().to_le_bytes());
         }
-        for _ in 0..m {
-            b.extend((PI / 2.0).to_bits().to_le_bytes());
+        for (i, ring) in rings.iter().enumerate() {
+            for &j in *ring {
+                b.extend(distance_rad(i as u32, j).to_bits().to_le_bytes());
+            }
         }
         b
+    }
+
+    /// The bytes of a file with the octahedron's centres and areas and the
+    /// given rings, laid out as in the module documentation; every entry
+    /// with the octahedron's edge length and centre distance.
+    fn octahedron_file_with_rings(rings: &[&[u32]]) -> Vec<u8> {
+        file_with(
+            &OCTAHEDRON_CENTRES,
+            rings,
+            &[2.094_395_102_393_195_7; 6],
+            1.230_959_417_340_774_7,
+            |_, _| PI / 2.0,
+        )
     }
 
     #[test]
@@ -430,14 +467,7 @@ mod tests {
         // Ticket M1-14: a file whose cells list no neighbours, and one
         // whose ring of +Z goes around it twice, were read as valid grids
         // before.
-        let rings: [&[u32]; 6] = [
-            &[2, 4, 3, 5],
-            &[2, 5, 3, 4],
-            &[4, 0, 5, 1],
-            &[4, 1, 5, 0],
-            &[0, 2, 1, 3],
-            &[0, 3, 1, 2],
-        ];
+        let rings = OCTAHEDRON_RINGS;
         assert!(octahedron_file_with_rings(&rings) == octahedron_bytes());
         let mut doubled = rings;
         doubled[4] = &[0, 2, 1, 3, 0, 2, 1, 3];
@@ -451,6 +481,87 @@ mod tests {
                 octahedron_file_with_rings(&doubled),
                 "neighbours of cell 4 go around it 2 times, not once",
             ),
+        ];
+        for (bytes, message) in cases {
+            let err = read_grid(bytes.as_slice()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{message}");
+            assert_eq!(
+                err.to_string(),
+                format!("the .kgrid file does not hold a valid grid: {message}")
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_rings_that_do_not_form_one_sphere() {
+        // Ticket M1-15: two octahedra in one file, and the wheel of five
+        // cells, whose rings each go once around their cell, were read as
+        // valid grids before.
+        // The second octahedron rotated by 0.7 rad about (1, 2, 3)/√14;
+        // neighbours stay π/2 apart. Areas π/3 (`FRAC_PI_3`, the double
+        // nearest to 1.0471975511965977462…, 1.0471975511965979 by
+        // mpmath).
+        let axis = Vec3::new(1.0, 2.0, 3.0);
+        let axis = axis / axis.length();
+        let mut centres = OCTAHEDRON_CENTRES.to_vec();
+        centres.extend(OCTAHEDRON_CENTRES.iter().map(|&[x, y, z]| {
+            let p = Vec3::new(x, y, z).rotate_about(axis, 0.7);
+            [p.x, p.y, p.z]
+        }));
+        let shifted: Vec<Vec<u32>> = OCTAHEDRON_RINGS
+            .iter()
+            .map(|ring| ring.iter().map(|&j| j + 6).collect())
+            .collect();
+        let mut rings = OCTAHEDRON_RINGS.to_vec();
+        rings.extend(shifted.iter().map(Vec::as_slice));
+        let two_octahedra = file_with(
+            &centres,
+            &rings,
+            &[core::f64::consts::FRAC_PI_3; 12],
+            1.230_959_417_340_774_7,
+            |_, _| PI / 2.0,
+        );
+        // The wheel of ticket M1-13: the hub at +Z lists the four rim
+        // cells on the circle z = −1/2 (at longitudes 0°, 90°, 180°,
+        // 270°), rim cell k lists k + 1, the hub and k − 1. Centre
+        // distances 2π/3 from the hub and acos(1/4) between rim cells,
+        // areas 4π/5: the doubles nearest to 2.0943951023931954923,
+        // 1.3181160716528179657 and 2.5132741228718345908 (mpmath);
+        // √3/2 the double nearest to 0.86602540378443864676.
+        let r = 0.866_025_403_784_438_6;
+        let wheel_centres = [
+            [0.0, 0.0, 1.0],
+            [r, 0.0, -0.5],
+            [0.0, r, -0.5],
+            [-r, 0.0, -0.5],
+            [0.0, -r, -0.5],
+        ];
+        let wheel_rings: [&[u32]; 5] = [
+            &[1, 2, 3, 4],
+            &[2, 0, 4],
+            &[3, 0, 1],
+            &[4, 0, 2],
+            &[1, 0, 3],
+        ];
+        let wheel = file_with(
+            &wheel_centres,
+            &wheel_rings,
+            &[2.513_274_122_871_834_5; 5],
+            1.0,
+            |i, j| {
+                if i == 0 || j == 0 {
+                    2.094_395_102_393_195_7
+                } else {
+                    1.318_116_071_652_818
+                }
+            },
+        );
+        let cases: [(Vec<u8>, &str); 2] = [
+            (
+                two_octahedra,
+                "the cells cover the sphere 2 times, not once",
+            ),
+            (wheel, "neighbours of cells 1 and 2 do not fit together"),
         ];
         for (bytes, message) in cases {
             let err = read_grid(bytes.as_slice()).unwrap_err();
