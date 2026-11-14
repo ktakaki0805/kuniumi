@@ -54,6 +54,20 @@ histogram); and `world.json` with the metadata. While later stages are
 missing it then exits with code 2, naming the first of them. The directory
 can be read back into the same world (`kuniumi_io::world_dir::read`).
 
+A world directory can be explored as a 3D globe (Rust 1.87 or later, and a
+GPU with Vulkan, Metal or Direct3D 12):
+
+```sh
+cargo run --release -p kuniumi-viewer -- out/world
+cargo run --release -p kuniumi-viewer -- out/world --layer plate_id --screenshot out/plates.png
+```
+
+Drag to turn the globe and use the wheel to zoom; Left and Right choose the
+field shown, in the colours of its PNG map; Up and Down change the relief
+exaggeration; S shows or hides the sea surface; R resets the view; Esc or Q
+quits. `--help` lists the options (start view, screenshots without a window,
+a frame-time benchmark).
+
 For development, the toolchains and tools are pinned in `mise.toml` for
 [mise](https://mise.jdx.dev):
 
@@ -73,6 +87,7 @@ mise run ci     # formatting, lints, docs, tests, MSRV build and licence checks
 | `kuniumi-sim` | The generation pipeline (no I/O) |
 | `kuniumi-io` | File formats and images |
 | `kuniumi-cli` | The `kuniumi` command |
+| `kuniumi-viewer` | The `kuniumi-viewer` command: a world as a 3D globe |
 
 Documentation: [design](docs/design-ja.md) (Japanese) ·
 [conventions](docs/conventions.md) · [decisions](docs/decisions.md) ·

@@ -23,7 +23,7 @@
 | 名前 | kuniumi（国生み） | D-01 |
 | ライセンス | MIT OR Apache-2.0。著作権者は Kousuke Takaki | D-02 |
 | 公開 | 1.0 までは private リポジトリ。crates.io への公開も 1.0 以降 | D-03 |
-| 言語・構成 | Rust の cargo workspace（math / sphere / world / config / sim / io / cli） | D-06 |
+| 言語・構成 | Rust の cargo workspace（math / sphere / world / config / sim / io / cli / viewer） | D-06 |
 | 生成 API | I/O を持たない純粋な関数。v1 はファイル出力のみで、エンジン連携は後から追加できる | D-07 |
 | 再現性 | CPU 経路は f64 でビット一致。将来の GPU 経路（f32）は統計的な同等性のみ保証 | D-08 |
 | 依存 | 少なく保つがゼロにはしない。生成結果に関わる crate は純 Rust に限り、バージョンを固定 | D-10 |

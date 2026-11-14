@@ -1,0 +1,39 @@
+[package]
+name = "kuniumi-viewer"
+description = "Interactive 3D globe viewer for kuniumi world directories"
+version.workspace = true
+edition.workspace = true
+# wgpu 30 needs Rust 1.87, above the workspace's 1.85, so the viewer has its
+# own minimum version and the `msrv` task leaves it out (D-24).
+rust-version = "1.87"
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kuniumi-viewer"
+path = "src/main.rs"
+
+[dependencies]
+kuniumi-io.workspace = true
+kuniumi-math.workspace = true
+kuniumi-sim.workspace = true
+kuniumi-sphere.workspace = true
+kuniumi-world.workspace = true
+# GPU rendering and windows (D-10, D-19). Not on the generation path: nothing
+# the viewer computes reaches world data, so neither is pinned to an exact
+# version.
+wgpu = "30.0.2"
+# Without winit's default `wayland-csd-adwaita`, which draws the title text of
+# Wayland client-side decorations through `ab_glyph` and `ttf-parser` (marked
+# unmaintained in the RustSec advisory database, so cargo-deny fails); the
+# `notitle` variant keeps the decorations without the font stack.
+winit = { version = "0.30.13", default-features = false, features = [
+    "rwh_06",
+    "x11",
+    "wayland",
+    "wayland-dlopen",
+    "wayland-csd-adwaita-notitle",
+] }
+
+[lints]
+workspace = true

@@ -47,7 +47,8 @@ description = "Build with the minimum supported Rust version (D-24)"
 tools = { rust = "1.85.0" }
 # A separate target directory, so switching compilers does not rebuild target/.
 env = { CARGO_TARGET_DIR = "target/msrv" }
-run = "cargo check --workspace --all-targets --locked"
+# kuniumi-viewer needs Rust 1.87 for wgpu and is left out (D-24).
+run = "cargo check --workspace --exclude kuniumi-viewer --all-targets --locked"
 
 [tasks.deny]
 description = "Licences, banned crates and sources (D-10)"

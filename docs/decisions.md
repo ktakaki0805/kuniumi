@@ -41,10 +41,13 @@ Japanese.
 | `kuniumi-sim` | the generation pipeline (no I/O) |
 | `kuniumi-io` | file formats, images, fingerprints |
 | `kuniumi-cli` | the `kuniumi` command |
+| `kuniumi-viewer` | the `kuniumi-viewer` command: worlds as a 3D globe (D-19) |
 
-`kuniumi-sim` never depends on `kuniumi-io`. Planned crates: `kuniumi-viewer`
-(D-19), `kuniumi-gpu` (D-08), `kuniumi-ffi` (engine bindings, D-07).
+`kuniumi-sim` never depends on `kuniumi-io`. Planned crates: `kuniumi-gpu`
+(D-08), `kuniumi-ffi` (engine bindings, D-07).
 (changed 2026-11-13: `kuniumi-config`, built by M2-07, moved from the planned
+crates into the table)
+(changed 2026-11-14: `kuniumi-viewer`, built by MV-02, moved from the planned
 crates into the table)
 
 **D-07 Generation API and output.** `kuniumi_sim::generate` does no I/O and
@@ -189,7 +192,12 @@ rustfmt changes arrive with it; a toolchain change must not change any golden
 value (D-08).
 
 **D-24 MSRV.** `rust-version = "1.85"` (the edition 2024 minimum), checked by
-`mise run msrv`. Raising it is recorded here.
+`mise run msrv`. Raising it is recorded here. `kuniumi-viewer` is the
+exception: its minimum follows `wgpu` (Rust 1.87 for wgpu 30), it declares
+its own `rust-version`, and `mise run msrv` leaves it out, so the library
+crates and the CLI keep 1.85 (chosen with the owner in MV-02). The viewer's
+minimum is declared, not checked: no task builds it with Rust 1.87.
+(changed 2026-11-14: the viewer's exception)
 
 **D-25 CI.** In a private repository Actions minutes are billed against the
 account's included amount (GitHub Free: USD 12 per month; macOS minutes cost

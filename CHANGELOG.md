@@ -284,6 +284,18 @@ section: every change after which an existing seed produces a different world
 - The example `read_world` of `kuniumi-io`: the load time of a world
   directory, and with a second directory the world written again and
   compared file by file (MV-01).
+- `kuniumi-viewer`, a new crate and command: a world directory as an
+  interactive 3D globe through `wgpu` 30 and `winit` 0.30. Each Voronoi cell
+  is a fan of triangles from its centre to its Voronoi vertices (Voronoi
+  vertices shared bit for bit, so the surface has no cracks; 3.9 million
+  triangles for 650,000 cells), coloured as the field's PNG map
+  (`world_dir::map_colours`). Drag to turn, wheel to zoom, Left/Right for
+  the field, Up/Down for the relief exaggeration (0 to 100, default 20), S
+  for the translucent sea-level surface, R to reset, Esc or Q to quit.
+  `--screenshot` renders one frame into a PNG without a window and
+  `--benchmark` times the frames, in the window or `--offscreen`. A
+  650,000-cell world loads in 0.3 s and is drawn in 1.0 ms on an RTX 3060
+  Ti, presented at the display's 60 Hz (MV-02).
 
 ### Changed
 
@@ -472,6 +484,9 @@ section: every change after which an existing seed produces a different world
   version it does not read (`io::ErrorKind::Unsupported`), and reads strings
   and values in chunks, so a corrupt length no longer allocates up to
   4 GiB (MV-01).
+- `mise run msrv` leaves out `kuniumi-viewer`, whose minimum Rust version
+  follows `wgpu` (1.87); the library crates and the CLI keep 1.85 (D-24,
+  MV-02).
 
 ### Removed
 
