@@ -48,12 +48,12 @@ kuniumi-config  TOML settings files: load and write PlanetParams, Settings
 kuniumi-sim     the pipeline and its stages (no I/O)
 kuniumi-io      .kfield files, world directories, PNG, fingerprints
 kuniumi-cli     the `kuniumi` binary
-kuniumi-viewer  the `kuniumi-viewer` binary: worlds as a 3D globe (wgpu, winit)
+kuniumi-viewer  the `kuniumi-viewer` binary: worlds as a 3D globe (wgpu, winit),
+                also built for the browser (`mise run web`, wasm-bindgen)
 ```
 
 Dependencies point downwards. `kuniumi-sim` never depends on `kuniumi-io` and
-never touches the file system, clock or environment. Planned: `kuniumi-gpu`;
-the browser build of the viewer.
+never touches the file system, clock or environment. Planned: `kuniumi-gpu`.
 
 ## Non-negotiable rules
 

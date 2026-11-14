@@ -7,7 +7,9 @@ use kuniumi_math::units::deg_to_rad;
 
 use crate::view::MAX_RELIEF;
 
-/// The usage text printed by `--help`.
+/// The usage text printed by `--help` (native only: the page shows its own
+/// help).
+#[cfg(not(target_arch = "wasm32"))]
 pub const USAGE: &str = "\
 Usage: kuniumi-viewer <world dir> [options]
 
@@ -105,6 +107,18 @@ const DEFAULT_LAT_DEG: f64 = 20.0;
 pub const DEFAULT_DISTANCE: f64 = 3.0;
 /// The largest window or screenshot side (px).
 const MAX_SIDE_PX: u32 = 16_384;
+
+/// The arguments of a command line that gives only the world directory
+/// `world_dir`, whatever its name: the page's view (ticket MV-03), which
+/// has no command line. A name such as `-old` or `--help` would be read as
+/// a flag by [`parse`], so the defaults are parsed for a fixed name.
+#[cfg(any(test, target_arch = "wasm32"))]
+pub fn default_for(world_dir: PathBuf) -> Args {
+    match parse(["world".to_owned()]) {
+        Ok(Parsed::Run(args)) => Args { world_dir, ..args },
+        other => unreachable!("a lone directory name is a command line: {other:?}"),
+    }
+}
 
 /// Parses the arguments after the program name.
 ///
@@ -268,6 +282,23 @@ mod tests {
         assert_eq!((a.width_px, a.height_px), (1280, 800));
         assert_eq!(a.cursor, None);
         assert_eq!(a.mode, Mode::Window);
+    }
+
+    /// The page's arguments (review R1-1 of MV-03): the default view for a
+    /// directory of any name, even one the parser would take for a flag.
+    #[test]
+    fn default_view_for_any_directory_name() {
+        for name in ["650k", "-old", "--help", "--relief", "-h", ""] {
+            let a = default_for(PathBuf::from(name));
+            assert_eq!(
+                a,
+                Args {
+                    world_dir: PathBuf::from(name),
+                    ..args(&["out/world"])
+                },
+                "{name}"
+            );
+        }
     }
 
     #[test]

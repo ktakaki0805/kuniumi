@@ -144,7 +144,9 @@ tolerances.
   owner before adding anything little known or borderline.
 - Development tools are pinned in `mise.toml` (D-23). Run checks through
   `mise run` so they use the pinned toolchains.
-- Python is allowed only under `tools/`, for development (D-11).
+- Python is allowed only under `tools/`, for development (D-11); the one
+  other use is `mise run web-serve`, which serves the browser viewer's build
+  with the pinned Python's `http.server` (D-11).
 - Ported code must come from permissively licensed sources (MIT, Apache-2.0,
   BSD, public domain), with its origin noted in a comment at the top of the
   ported code and in `THIRD_PARTY.md`. Never port from GPL or non-commercial

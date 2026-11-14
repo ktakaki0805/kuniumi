@@ -39,7 +39,8 @@
 //! [`read()`] rebuilds the [`World`] from `world.json`, `grid.kgrid` and the
 //! `.kfield` files, bit for bit, and checks every file on the way
 //! ([`ReadError`]); the maps and the metrics follow from these and are not
-//! read.
+//! read. [`read_with`] does the same with files from any reader, such as
+//! those a browser hands over (ticket MV-03).
 //!
 //! # Field names
 //!
@@ -134,7 +135,7 @@
 //! keys.
 
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Write};
+use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use kuniumi_sim::metrics::{
@@ -1023,18 +1024,41 @@ impl std::error::Error for ReadError {
 ///   per cell of the grid, or, for a class field, a value that is not a
 ///   class id ([`Field::is_class_value`]).
 pub fn read(dir: &Path) -> Result<World, ReadError> {
+    read_with(dir, |path| File::open(path).map(BufReader::new))
+}
+
+/// Reads the world in the directory `dir` as [`read()`] does, opening each
+/// file through `open`, which is given the file's path (`dir` joined with
+/// the file's name) and returns a reader of its bytes (ticket MV-03: the
+/// browser hands over the files chosen by the user, which no path on a
+/// file system reaches). `open` is asked for `world.json`, then
+/// [`GRID_FILE`], then the `.kfield` file of each field in the order of
+/// `world.json`, and for nothing else; it stops at the first error.
+///
+/// # Errors
+///
+/// As [`read()`]'s; an error of `open`, or of reading what it returned, is
+/// [`ReadError::Io`] with the file's path.
+pub fn read_with<R: Read>(
+    dir: &Path,
+    mut open: impl FnMut(&Path) -> io::Result<R>,
+) -> Result<World, ReadError> {
     let path = dir.join(METADATA_FILE);
-    let bytes = std::fs::read(&path).map_err(|source| ReadError::Io {
-        path: path.clone(),
-        source,
-    })?;
+    let mut bytes = Vec::new();
+    open(&path)
+        .and_then(|mut r| r.read_to_end(&mut bytes))
+        .map_err(|source| ReadError::Io {
+            path: path.clone(),
+            source,
+        })?;
     let json = parse_world_json(&bytes).map_err(|problem| problem.at(&path))?;
 
-    let grid = read_binary(&dir.join(GRID_FILE), ".kgrid", |r| grid_file::read_grid(r))?;
+    let path = dir.join(GRID_FILE);
+    let grid = read_binary(&path, open(&path), ".kgrid", |r| grid_file::read_grid(r))?;
     let mut fields = Vec::with_capacity(json.fields.len());
     for entry in &json.fields {
         let path = dir.join(format!("{}.kfield", entry.name));
-        let field = read_binary(&path, ".kfield", |r| field_file::read_field(r))?;
+        let field = read_binary(&path, open(&path), ".kfield", |r| field_file::read_field(r))?;
         check_field(&field, entry, grid.len()).map_err(|problem| problem.at(&path))?;
         fields.push(Field {
             kind: entry.kind.to_kind(),
@@ -1188,17 +1212,19 @@ fn check_field(field: &Field, entry: &FieldJson, cells: usize) -> Result<(), Pro
 }
 
 /// Reads the binary file at `path`, of the format `format` (`".kfield"` or
-/// `".kgrid"`), with `parse`, and checks that nothing follows its end.
-fn read_binary<T>(
+/// `".kgrid"`), from `opened` (the reader of its bytes, or the error of
+/// opening it) with `parse`, and checks that nothing follows its end.
+fn read_binary<R: Read, T>(
     path: &Path,
+    opened: io::Result<R>,
     format: &str,
-    parse: impl FnOnce(&mut BufReader<File>) -> io::Result<T>,
+    parse: impl FnOnce(&mut R) -> io::Result<T>,
 ) -> Result<T, ReadError> {
     let io_error = |source| ReadError::Io {
         path: path.to_path_buf(),
         source,
     };
-    let mut r = BufReader::new(File::open(path).map_err(io_error)?);
+    let mut r = opened.map_err(io_error)?;
     let value = parse(&mut r).map_err(|e| match e.kind() {
         io::ErrorKind::Unsupported => Problem::Version(e.to_string()).at(path),
         io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => {

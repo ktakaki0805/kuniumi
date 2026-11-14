@@ -314,6 +314,19 @@ section: every change after which an existing seed produces a different world
   hides it; `--screenshot` with `--cursor` draws it at scale 1, and
   screenshots without `--cursor` are unchanged. `tools/font8x8_table.py`
   prints the font's tables from their source (MV-06).
+- `kuniumi-viewer` in the browser: built for `wasm32-unknown-unknown`
+  (`mise run web`, with `wasm-bindgen-cli` 0.2.130 and the wasm32 target
+  pinned in `mise.toml`) and served on `http://127.0.0.1:8000/` by
+  `mise run web-serve`, a page opens the world directory the user picks or
+  drops, read in the browser, and shows it with the native viewer's layers,
+  relief, sea, picking and panel, through WebGPU or, where the browser has
+  none, WebGL2 (`?backend=webgl` or `webgpu` forces one). A 650,000-cell
+  world loads in 1.0–1.5 s and takes 0.54 GB (WebGPU) to 0.59 GB (WebGL2) of
+  WebAssembly memory. `mise run web-check`, part of `mise run check`, lints
+  and documents the browser build (MV-03).
+- `world_dir::read_with`: reads a world directory through any reader of its
+  files, such as the bytes a browser hands over; `world_dir::read` is
+  `read_with` on the file system (MV-03).
 
 ### Changed
 

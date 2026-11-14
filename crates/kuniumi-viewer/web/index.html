@@ -1,0 +1,160 @@
+<!doctype html>
+<!--
+  kuniumi-viewer in the browser (ticket MV-03). `mise run web` copies this
+  page next to the module built by wasm-bindgen (kuniumi-viewer.js and
+  kuniumi-viewer_bg.wasm) into target/web; `mise run web-serve` serves it
+  on http://127.0.0.1:8000/. The page reads the files of the world the
+  user chooses and hands them to the module; nothing leaves the browser.
+  `?backend=webgl` or `?backend=webgpu` in the address forces a backend.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kuniumi-viewer</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #303030; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; outline: none; }
+  #bar {
+    position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 12px;
+    background: rgba(0, 0, 0, 0.65); color: #ddd; font: 13px/1.5 system-ui, sans-serif;
+  }
+  #status { white-space: pre-wrap; }
+  #choose { display: inline-block; margin-right: 12px; padding: 4px 10px; border: 1px solid #888;
+            border-radius: 4px; cursor: pointer; color: #fff; }
+  #choose input { display: none; }
+  body.open #choose { display: none; }
+  body.dragging #bar { outline: 2px dashed #8cf; }
+  #help { color: #aaa; }
+</style>
+</head>
+<body>
+<canvas id="globe"></canvas>
+<div id="bar">
+  <label id="choose">Choose a world directory<input id="picker" type="file" webkitdirectory></label>
+  <span id="status">Loading the viewer…</span>
+  <div id="help">Drag to turn the globe, wheel to zoom. Left/Right: layer, Up/Down: relief,
+    S: sea, P: panel, R: reset view. The cell under the pointer is shown in the panel; a click
+    writes it to the browser's console. To open another world, reload the page.</div>
+</div>
+<script type="module">
+import init, { wanted_files, open_world } from "./kuniumi-viewer.js";
+
+const canvas = document.getElementById("globe");
+const picker = document.getElementById("picker");
+const status = document.getElementById("status");
+const backend = new URLSearchParams(location.search).get("backend") ?? "";
+const show = (text) => { status.textContent = text; };
+let busy = false;
+
+// A panic or a trap stops the module for good. The panic's own message is
+// already in the status line, written by the module's panic hook, and is
+// kept; any other status is replaced.
+const stopped = (what) => {
+  if (!status.textContent.startsWith("error: the viewer stopped")) {
+    show(`error: the viewer stopped: ${what}; see the browser's console and reload the page`);
+  }
+};
+window.addEventListener("error", (event) => stopped(event.message));
+window.addEventListener("unhandledrejection", (event) => stopped(String(event.reason)));
+
+// Keys with Ctrl, Alt or Meta and the function keys are the browser's
+// (reload, find, zoom, full screen): winit prevents the default action of
+// every key the canvas receives, so they are kept from reaching it. The
+// viewer uses none of them.
+for (const type of ["keydown", "keyup"]) {
+  window.addEventListener(type, (event) => {
+    if (event.ctrlKey || event.altKey || event.metaKey || /^F\d+$/.test(event.key)) {
+      event.stopPropagation();
+    }
+  }, true);
+}
+
+// Reads the world among `entries` ({path, file}: the files chosen, with
+// their paths relative to what was chosen) and opens it on the canvas.
+async function load(entries, chosenMs) {
+  if (busy) return;
+  busy = true;
+  try {
+    const paths = entries.map((e) => e.path);
+    const wanted = wanted_files(paths);
+    show(`Reading ${wanted.length} files…`);
+    const names = [], files = [];
+    for (const k of wanted) {
+      names.push(paths[k]);
+      files.push(new Uint8Array(await entries[k].file.arrayBuffer()));
+    }
+    show("Building the globe…");
+    // Let the status be drawn before the module takes the thread.
+    await new Promise((done) => requestAnimationFrame(() => setTimeout(done, 0)));
+    show(await open_world(canvas, names, files, backend, chosenMs, show));
+    document.body.classList.add("open");
+  } catch (e) {
+    // After a panic the module is gone: its message stays, nothing reloads.
+    if (status.textContent.startsWith("error: the viewer stopped")) return;
+    show(`error: ${e}`);
+    busy = false;
+  }
+}
+
+// The files under a dropped entry, walked depth first.
+async function walk(entry, out) {
+  if (entry.isFile) {
+    const file = await new Promise((done, fail) => entry.file(done, fail));
+    out.push({ path: entry.fullPath.replace(/^\//, ""), file });
+  } else if (entry.isDirectory) {
+    const reader = entry.createReader();
+    for (;;) {
+      const batch = await new Promise((done, fail) => reader.readEntries(done, fail));
+      if (batch.length === 0) break;
+      for (const child of batch) await walk(child, out);
+    }
+  }
+}
+
+picker.addEventListener("change", () => {
+  const chosenMs = performance.now();
+  const entries = Array.from(picker.files, (file) => ({
+    path: file.webkitRelativePath || file.name,
+    file,
+  }));
+  load(entries, chosenMs);
+});
+
+document.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  if (!busy) document.body.classList.add("dragging");
+});
+document.addEventListener("dragleave", () => document.body.classList.remove("dragging"));
+document.addEventListener("drop", async (event) => {
+  event.preventDefault();
+  document.body.classList.remove("dragging");
+  if (busy) return;
+  const chosenMs = performance.now();
+  // The entries must be taken before the first await.
+  const roots = Array.from(event.dataTransfer.items ?? [], (item) => item.webkitGetAsEntry?.())
+    .filter(Boolean);
+  let entries = [];
+  try {
+    if (roots.length > 0) {
+      for (const root of roots) await walk(root, entries);
+    } else {
+      entries = Array.from(event.dataTransfer.files, (file) => ({ path: file.name, file }));
+    }
+  } catch (e) {
+    // The viewer is untouched: another drop may do.
+    show(`error: the dropped files cannot be read: ${e}`);
+    return;
+  }
+  load(entries, chosenMs);
+});
+
+try {
+  await init();
+  show("Choose a world directory written by `kuniumi generate`, or drop it on the page.");
+} catch (e) {
+  show(`error: the viewer did not load: ${e}`);
+}
+</script>
+</body>
+</html>

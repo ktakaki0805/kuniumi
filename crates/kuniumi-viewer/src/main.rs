@@ -14,7 +14,12 @@
 //! one frame into a PNG without a window (with `--cursor`, the cell under a
 //! pixel picked, highlighted, printed and shown in the panel);
 //! `--benchmark` times the frames of a spinning globe. The usage is in
-//! [`args::USAGE`].
+//! `args::USAGE`.
+//!
+//! Built for `wasm32-unknown-unknown` (ticket MV-03), the same viewer runs
+//! in a browser page (`web/index.html`) through WebGPU or WebGL2: the page
+//! hands over the files of the world the user chose (`page`) and the
+//! module's `open_world` (`web`) shows them on the page's canvas.
 
 // The GPU works in `f32`. D-19 and rule 1 of docs/conventions.md,
 // "Determinism", let this crate (and kuniumi-gpu) use `f32` through this
@@ -30,21 +35,32 @@ mod gpu;
 mod inspect;
 mod layers;
 mod mesh;
+#[cfg(any(test, target_arch = "wasm32"))]
+mod page;
 mod panel;
 mod pick;
 mod view;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::process::ExitCode;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use kuniumi_io::Rgb8;
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
 use kuniumi_world::World;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::app::FrameStats;
-use crate::args::{Args, Mode, Parsed, USAGE};
+use crate::args::Args;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::args::{Mode, Parsed, USAGE};
 use crate::camera::{OrbitCamera, cursor_ndc};
+#[cfg(not(target_arch = "wasm32"))]
 use crate::gpu::Offscreen;
 use crate::layers::Layers;
 use crate::mesh::GlobeMesh;
@@ -135,9 +151,20 @@ impl Scene {
     }
 }
 
+/// Writes `line` where the viewer's messages go: the terminal, or the
+/// browser's console.
+pub fn say(line: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    println!("{line}");
+    #[cfg(target_arch = "wasm32")]
+    web_sys::console::log_1(&line.into());
+}
+
 /// The length of each arm of [`crosshair`] (px), from the pixel to its end.
+#[cfg(not(target_arch = "wasm32"))]
 const CROSSHAIR_END_PX: i64 = 12;
 /// The distance from the marked pixel at which the arms start (px).
+#[cfg(not(target_arch = "wasm32"))]
 const CROSSHAIR_START_PX: i64 = 3;
 
 /// Marks the pixel `(x_px, y_px)` of the row-major image `pixels`
@@ -145,6 +172,7 @@ const CROSSHAIR_START_PX: i64 = 3;
 /// [`CROSSHAIR_START_PX`] to [`CROSSHAIR_END_PX`] pixels away, outlined in
 /// black, clipped at the image's edges. The pixel and its eight neighbours
 /// are left as drawn, so the cell under it stays visible.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn crosshair(pixels: &mut [Rgb8], width_px: u32, height_px: u32, x_px: u32, y_px: u32) {
     const WHITE: Rgb8 = [255, 255, 255];
     const BLACK: Rgb8 = [0, 0, 0];
@@ -209,6 +237,15 @@ pub fn relief_note(asked: f64, given: f64, relief: &Relief) -> Option<String> {
     })
 }
 
+/// In a browser, `wasm-bindgen` calls `main` when the module starts; it
+/// only installs the panic hook (`web::install_panic_hook`), and the page
+/// then calls `web::wanted_files` and `web::open_world`.
+#[cfg(target_arch = "wasm32")]
+fn main() {
+    web::install_panic_hook();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> ExitCode {
     match args::parse(std::env::args().skip(1)) {
         Err(message) => {
@@ -229,6 +266,7 @@ fn main() -> ExitCode {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn run(args: &Args) -> Result<(), String> {
     let start = Instant::now();
     let world = kuniumi_io::world_dir::read(&args.world_dir).map_err(|e| e.to_string())?;

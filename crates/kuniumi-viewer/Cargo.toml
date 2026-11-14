@@ -35,5 +35,26 @@ winit = { version = "0.30.13", default-features = false, features = [
     "wayland-csd-adwaita-notitle",
 ] }
 
+# The browser build (ticket MV-03; D-10, D-19): wgpu with its WebGL2
+# fallback, and the web platform glue. Only for wasm32, so the native build
+# is unchanged. `wasm-bindgen` must be the version of the `wasm-bindgen-cli`
+# pinned in mise.toml (the CLI refuses another), so it alone is pinned
+# exactly; the others are not on the generation path either and are not.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { version = "30.0.2", features = ["webgl"] }
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-futures = "0.4.80"
+js-sys = "0.3.107"
+web-sys = { version = "0.3.107", features = [
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "Node",
+    "Performance",
+    "Window",
+    "console",
+] }
+
 [lints]
 workspace = true

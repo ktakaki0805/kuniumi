@@ -6,8 +6,13 @@
 //!   (`world.json`);
 //! - `rejects_a_listed_reserved_name_even_with_its_file` (ticket M2-19);
 //! - `rejects_bad_kfield_files` and `rejects_bad_grid_files`;
-//! - `a_missing_directory_is_an_io_error` and `errors_name_their_file`.
+//! - `a_missing_directory_is_an_io_error` and `errors_name_their_file`;
+//! - `reads_through_any_opener`, `opener_errors_name_their_file` and
+//!   `spoiled_files_read_from_memory_fail_as_from_disk` ([`read_with`],
+//!   ticket MV-03).
 
+use std::collections::BTreeMap;
+use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use kuniumi_world::{Field, PlanetParams, Settings, World};
@@ -824,4 +829,154 @@ fn errors_name_their_file() {
     assert_eq!(err.path(), path);
     assert_eq!(err.to_string(), "some/dir/zone.kfield: no disk");
     assert!(std::error::Error::source(&err).is_some());
+}
+
+/// The files of the directory `dir`, by name, in memory.
+fn files_of(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let name = path.file_name().unwrap().to_str().unwrap().to_owned();
+            (name, bytes_of(&path))
+        })
+        .collect()
+}
+
+/// Reads the world of the directory `dir` named in memory from `files`
+/// through [`read_with`], recording each path asked for in `asked`.
+fn read_from_memory(
+    dir: &Path,
+    files: &BTreeMap<String, Vec<u8>>,
+    asked: &mut Vec<PathBuf>,
+) -> Result<World, ReadError> {
+    read_with(dir, |path| {
+        asked.push(path.to_path_buf());
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        match files.get(name) {
+            Some(bytes) if path.parent() == Some(dir) => Ok(Cursor::new(bytes.clone())),
+            _ => Err(io::Error::new(io::ErrorKind::NotFound, "not in memory")),
+        }
+    })
+}
+
+#[test]
+fn reads_through_any_opener() {
+    let settings = Settings {
+        cells: 1_000,
+        allow_partial: true,
+        ..Settings::default()
+    };
+    let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 3, &mut |_| {}).unwrap();
+    assert_eq!(world.fields.len(), 13);
+    let disk = scratch("read_with");
+    write_maps_of_width(&disk, &world, 64).unwrap();
+    let files = files_of(&disk);
+    // The maps, the metrics and the chart are there but not read.
+    assert!(files.contains_key("plate_id.png") && files.contains_key(METRICS_FILE));
+    // A directory that exists only in memory.
+    let memory = Path::new("in/memory/world");
+    let mut asked = Vec::new();
+    let back = read_from_memory(memory, &files, &mut asked).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, world);
+    assert!(contents(&back) == contents(&world), "not the same bits");
+    assert!(contents(&back) == contents(&read(&disk).unwrap()));
+    // world.json, the grid and each field listed, in order, nothing else.
+    let mut expected = vec![memory.join(METADATA_FILE), memory.join(GRID_FILE)];
+    for field in &world.fields {
+        expected.push(memory.join(format!("{}.kfield", field.name)));
+    }
+    assert_eq!(asked, expected);
+    remove(&disk);
+}
+
+#[test]
+fn opener_errors_name_their_file() {
+    let disk = scratch("read_with_missing");
+    write_maps_of_width(&disk, &world(), 64).unwrap();
+    let all = files_of(&disk);
+    let memory = Path::new("chosen");
+    let listed = world().fields[1].name.clone();
+    for missing in [
+        METADATA_FILE.to_owned(),
+        GRID_FILE.to_owned(),
+        format!("{listed}.kfield"),
+    ] {
+        let mut files = all.clone();
+        files.remove(&missing);
+        let mut asked = Vec::new();
+        let err = read_from_memory(memory, &files, &mut asked).unwrap_err();
+        let path = memory.join(&missing);
+        assert!(
+            matches!(&err, ReadError::Io { path: p, source }
+                if *p == path && source.kind() == io::ErrorKind::NotFound),
+            "{missing}: {err}"
+        );
+        assert_eq!(
+            err.to_string(),
+            format!("{}: not in memory", path.display())
+        );
+        // Nothing is asked for after the file that is missing.
+        assert_eq!(asked.last(), Some(&path));
+    }
+    // A reader that fails while it is read: the error of the reader.
+    struct Failing;
+    impl io::Read for Failing {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("the disk went away"))
+        }
+    }
+    let err = read_with(memory, |_| Ok(Failing)).unwrap_err();
+    let path = memory.join(METADATA_FILE);
+    assert!(
+        matches!(&err, ReadError::Io { path: p, source }
+            if *p == path && source.kind() == io::ErrorKind::Other),
+        "{err}"
+    );
+    assert_eq!(
+        err.to_string(),
+        format!("{}: the disk went away", path.display())
+    );
+    remove(&disk);
+}
+
+#[test]
+fn spoiled_files_read_from_memory_fail_as_from_disk() {
+    let field = world().fields[0].clone();
+    let file = format!("{}.kfield", field.name);
+    let full = kfield(&field);
+    // Each spoiled the same way on disk, and the directory then read from
+    // disk with `read` and from memory with `read_with`.
+    let spoil = |case: &str, dir: &Path| match case {
+        "truncated" => put(dir, &file, &full[..full.len() - 3]),
+        "trailing" => put(dir, &file, &[full.as_slice(), &[0]].concat()),
+        "version" => edit_world_json(dir, |t| {
+            t.replace("\"format_version\": 2", "\"format_version\": 9")
+        }),
+        "grid" => {
+            let bytes = bytes_of(&dir.join(GRID_FILE));
+            put(dir, GRID_FILE, &bytes[..bytes.len() / 2]);
+        }
+        _ => unreachable!(),
+    };
+    let cases = [
+        ("truncated", "invalid"),
+        ("trailing", "invalid"),
+        ("version", "version"),
+        ("grid", "invalid"),
+    ];
+    for (case, kind) in cases {
+        let (disk, from_disk) = read_spoiled(&format!("read_with_{case}"), |dir| spoil(case, dir));
+        let files = files_of(&disk);
+        let memory = Path::new("chosen");
+        let err = read_from_memory(memory, &files, &mut Vec::new()).unwrap_err();
+        let file = from_disk.path().file_name().unwrap().to_str().unwrap();
+        let message = from_disk
+            .to_string()
+            .strip_prefix(&format!("{}: ", from_disk.path().display()))
+            .unwrap()
+            .to_owned();
+        assert_error(case, &err, memory, file, kind, &message);
+        remove(&disk);
+    }
 }

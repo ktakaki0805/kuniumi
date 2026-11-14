@@ -6,9 +6,12 @@ min_version = "2026.11.0"
 [tools]
 # Development toolchain. Pinned so that new clippy and rustdoc lints and
 # rustfmt changes arrive only when the pin is raised on purpose, in its own
-# commit.
-rust = { version = "1.97.0", components = ["rustfmt", "clippy"] }
+# commit. The wasm32 target builds the viewer for the browser (MV-03).
+rust = { version = "1.97.0", components = ["rustfmt", "clippy"], targets = ["wasm32-unknown-unknown"] }
 cargo-deny = "0.20.2"
+# The JavaScript glue of the browser viewer (MV-03). Must be the version of
+# the `wasm-bindgen` crate, which kuniumi-viewer pins exactly to it.
+"cargo:wasm-bindgen-cli" = "0.2.130"
 # Python for the development scripts under tools/ only (D-11); their packages
 # are pinned in tools/requirements.txt. Never part of the build.
 python = "3.14.10"
@@ -54,9 +57,33 @@ run = "cargo check --workspace --exclude kuniumi-viewer --all-targets --locked"
 description = "Licences, banned crates and sources (D-10)"
 run = "cargo deny check"
 
+[tasks.web-check]
+description = "Lint and document the browser build of the viewer, warnings are errors"
+env = { RUSTDOCFLAGS = "-D warnings" }
+# The web code is compiled only for wasm32, so the native tasks never see it.
+run = [
+    "cargo clippy -p kuniumi-viewer --target wasm32-unknown-unknown --locked -- -D warnings",
+    "cargo doc -p kuniumi-viewer --no-deps --target wasm32-unknown-unknown --locked",
+]
+
+[tasks.web]
+description = "Build the browser viewer into target/web (MV-03)"
+run = [
+    "cargo build --release --locked -p kuniumi-viewer --target wasm32-unknown-unknown",
+    "wasm-bindgen --target web --no-typescript --out-dir target/web target/wasm32-unknown-unknown/release/kuniumi-viewer.wasm",
+    "cp crates/kuniumi-viewer/web/index.html target/web/index.html",
+]
+
+[tasks.web-serve]
+description = "Build the browser viewer and serve it on http://127.0.0.1:8000/"
+depends = ["web"]
+# The pinned Python's standard library, for development only (D-11): a
+# browser does not load a WebAssembly module from a file:// page.
+run = "python -m http.server --bind 127.0.0.1 --directory target/web 8000"
+
 [tasks.check]
-description = "fmt, clippy, doc and tests in debug and release"
-run = [{ task = "fmt" }, { task = "clippy" }, { task = "doc" }, { task = "test" }]
+description = "fmt, clippy, doc, the browser build's lints and tests in debug and release"
+run = [{ task = "fmt" }, { task = "clippy" }, { task = "doc" }, { task = "web-check" }, { task = "test" }]
 
 [tasks.ci]
 description = "The gate for every change: check, msrv, deny"

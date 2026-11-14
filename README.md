@@ -73,6 +73,12 @@ terminal. `--help` lists the options
 (start view, screenshots without a window, with `--cursor` the cell under a
 pixel and the panel, a frame-time benchmark).
 
+The same viewer runs in a web browser (WebGPU, or WebGL2 where the browser
+has no WebGPU) and opens a world directory chosen on the machine:
+`mise run web-serve` builds the page and serves it on
+`http://127.0.0.1:8000/`; see
+[crates/kuniumi-viewer/README.md](crates/kuniumi-viewer/README.md).
+
 For development, the toolchains and tools are pinned in `mise.toml` for
 [mise](https://mise.jdx.dev):
 
@@ -92,7 +98,7 @@ mise run ci     # formatting, lints, docs, tests, MSRV build and licence checks
 | `kuniumi-sim` | The generation pipeline (no I/O) |
 | `kuniumi-io` | File formats and images |
 | `kuniumi-cli` | The `kuniumi` command |
-| `kuniumi-viewer` | The `kuniumi-viewer` command: a world as a 3D globe |
+| `kuniumi-viewer` | The `kuniumi-viewer` command and its browser page: a world as a 3D globe |
 
 Documentation: [design](docs/design-ja.md) (Japanese) ·
 [conventions](docs/conventions.md) · [decisions](docs/decisions.md) ·

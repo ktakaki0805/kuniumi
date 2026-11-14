@@ -96,7 +96,7 @@ triangulation (the owner's choice), the FFT (D-17) and the `.kfield` and
 | `clap` | kuniumi-cli | command-line parsing | no | M1-09 |
 | `serde`, `serde_json` | kuniumi-io | `world.json` | no | M2-01 |
 | `toml`, `serde` | kuniumi-config | settings files | no | M2-07 |
-| `wgpu`, `winit`, `wasm-bindgen` family | kuniumi-viewer | viewer | no | MV-02, MV-03 |
+| `wgpu`, `winit`, `wasm-bindgen` family | kuniumi-viewer | viewer, natively and in the browser | `wasm-bindgen` exact (equal to `wasm-bindgen-cli`), the others no | MV-02, MV-03 |
 
 Also acceptable when a ticket needs them: `rayon` (parallel loops, following
 the determinism rules for parallel code), `thiserror` (error types) and
@@ -107,7 +107,12 @@ for development only: converting reference data (NetCDF, GeoTIFF) into simple
 formats the Rust code reads, and computing independent reference values for
 tests. They are never part of the build. The Python version is pinned in
 `mise.toml` (D-23) and packages in `tools/requirements.txt`, both added with
-the first script.
+the first script. The pinned Python's standard library also serves the
+browser viewer's build on this machine (`mise run web-serve`, MV-03; no
+script and no package), as a browser does not load a WebAssembly module from
+a `file://` page.
+(changed 2026-11-15: serving the browser viewer, chosen with the owner in
+MV-03)
 
 ## Scope
 
@@ -189,7 +194,12 @@ the tests in debug and release; `mise run ci` adds the MSRV build and
 cargo-deny and is the gate for every change. The development toolchain is
 raised on purpose, in its own commit, because new clippy and rustdoc lints and
 rustfmt changes arrive with it; a toolchain change must not change any golden
-value (D-08).
+value (D-08). For the browser viewer (MV-03) the development toolchain has the
+`wasm32-unknown-unknown` target and `wasm-bindgen-cli` is pinned to the
+version of the `wasm-bindgen` crate; `mise run web` builds the page into
+`target/web/`, `mise run web-serve` serves it (D-11), and `mise run
+web-check`, part of `check`, lints and documents the viewer for wasm32.
+(changed 2026-11-15: the browser build's target, tool and tasks)
 
 **D-24 MSRV.** `rust-version = "1.85"` (the edition 2024 minimum), checked by
 `mise run msrv`. Raising it is recorded here. `kuniumi-viewer` is the

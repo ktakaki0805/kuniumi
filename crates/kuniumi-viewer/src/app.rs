@@ -1,24 +1,34 @@
 //! The window: winit's event loop, the mouse and keyboard, the cell under
 //! the cursor (highlighted, shown in the panel, printed on a click), and the
 //! benchmark that spins the globe and times the frames.
+//!
+//! In a browser (ticket MV-03) the window is the page's canvas, whose GPU
+//! side the page prepares first ([`prepare`], asynchronously); the event
+//! loop is then spawned (`spawn`) rather than run, Q and Esc do nothing,
+//! the title goes to the page's title and the printed lines to the console
+//! ([`crate::say`]).
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use kuniumi_math::units::RADIANS_PER_DEGREE;
 use winit::application::ApplicationHandler;
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::PhysicalPosition;
+#[cfg(not(target_arch = "wasm32"))]
+use winit::dpi::PhysicalSize;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowAttributes, WindowId};
 
-use crate::Scene;
-use crate::gpu::{Renderer, block_on, request_device};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::gpu::block_on;
+use crate::gpu::{Renderer, request_device, surface_config};
 use crate::inspect::{NO_CELL, cell_text};
 use crate::layers::highlight;
 use crate::panel::{self, text_scale};
 use crate::view::{View, relief_down, relief_line, relief_text, relief_up};
+use crate::{Scene, say};
 
 /// How far the benchmark turns the globe per frame (rad): 0.5°.
 pub const BENCHMARK_STEP_RAD: f64 = 0.5 * RADIANS_PER_DEGREE;
@@ -48,6 +58,7 @@ pub fn is_click(press: (f64, f64), release: (f64, f64)) -> bool {
 /// # Errors
 ///
 /// If no window or GPU can be opened.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn run(
     scene: Scene,
     view: View,
@@ -55,28 +66,87 @@ pub fn run(
     benchmark: Option<u32>,
 ) -> Result<(), String> {
     let event_loop = EventLoop::new().map_err(|e| format!("cannot open a window: {e}"))?;
-    let mut app = App {
-        scene,
-        start: view,
-        view,
-        size_px,
-        benchmark: benchmark.map(|frames| Benchmark {
-            frames,
-            presented: Vec::with_capacity(frames as usize + 1),
-        }),
-        gfx: None,
-        error: None,
-        dragging: false,
-        cursor: None,
-        pressed_at: None,
-        picked: None,
-        panel: true,
-        text_scale: 1,
-    };
+    let attributes =
+        Window::default_attributes().with_inner_size(PhysicalSize::new(size_px.0, size_px.1));
+    let mut app = App::new(scene, view, attributes, None);
+    app.benchmark = benchmark.map(|frames| Benchmark {
+        frames,
+        presented: Vec::with_capacity(frames as usize + 1),
+    });
     event_loop
         .run_app(&mut app)
         .map_err(|e| format!("the window failed: {e}"))?;
     app.error.map_or(Ok(()), Err)
+}
+
+/// Starts the event loop of the page's window, made with `attributes` (on
+/// the canvas that `prepared` draws into), and returns at once: the
+/// browser runs the loop. `first_frame` is called after the first frame is
+/// presented; `failed` with the message of an error that stops the window.
+///
+/// # Errors
+///
+/// If winit's event loop cannot be made (a second one in the same page).
+#[cfg(target_arch = "wasm32")]
+pub fn spawn(
+    scene: Scene,
+    view: View,
+    attributes: WindowAttributes,
+    prepared: Prepared,
+    first_frame: Box<dyn FnOnce()>,
+    failed: Report,
+) -> Result<(), String> {
+    use winit::platform::web::EventLoopExtWebSys;
+    let event_loop = EventLoop::new().map_err(|e| format!("cannot start the viewer: {e}"))?;
+    let mut app = App::new(scene, view, attributes, Some(prepared));
+    app.first_frame = Some(first_frame);
+    app.failed = Some(failed);
+    event_loop.spawn_app(app);
+    Ok(())
+}
+
+/// A function told the message of an error that stops the window.
+type Report = Box<dyn Fn(&str)>;
+
+/// The GPU's side of a window: its surface, configured, and the globe's
+/// renderer. In a browser it is prepared before the window exists, as it
+/// needs to wait for the browser ([`prepare`]).
+pub struct Prepared {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    /// The sRGB view format of the surface's textures.
+    view_format: wgpu::TextureFormat,
+    /// The largest side of the surface (px), the adapter's.
+    max_side_px: u32,
+    renderer: Renderer,
+}
+
+/// The GPU's side of a window for `scene`'s globe: the device of `adapter`,
+/// `surface` configured for `width_px` × `height_px` ([`surface_config`])
+/// and the renderer with the colours of the layer shown.
+///
+/// # Errors
+///
+/// If the device cannot be created or cannot draw into the surface.
+pub async fn prepare(
+    adapter: &wgpu::Adapter,
+    surface: wgpu::Surface<'static>,
+    width_px: u32,
+    height_px: u32,
+    scene: &Scene,
+) -> Result<Prepared, String> {
+    let (device, queue) = request_device(adapter, &scene.mesh).await?;
+    let (config, view_format) = surface_config(&surface, adapter, width_px, height_px)?;
+    surface.configure(&device, &config);
+    let colours = scene.vertex_colours();
+    let renderer = Renderer::new(adapter, device, queue, view_format, &scene.mesh, &colours);
+    Ok(Prepared {
+        surface,
+        config,
+        view_format,
+        max_side_px: adapter.limits().max_texture_dimension_2d.max(1),
+        renderer,
+    })
 }
 
 /// The frame times of a benchmark.
@@ -135,11 +205,7 @@ impl FrameStats {
 /// The window and its GPU state.
 struct Gfx {
     window: Arc<Window>,
-    surface: wgpu::Surface<'static>,
-    config: wgpu::SurfaceConfiguration,
-    /// The sRGB view format of the surface's textures.
-    view_format: wgpu::TextureFormat,
-    renderer: Renderer,
+    gpu: Prepared,
 }
 
 struct App {
@@ -147,10 +213,19 @@ struct App {
     /// The view at start, restored by R.
     start: View,
     view: View,
-    size_px: (u32, u32),
+    /// The window's attributes, until it is made.
+    attributes: Option<WindowAttributes>,
+    /// The GPU's side of the window, if prepared before it (in a browser).
+    prepared: Option<Prepared>,
     benchmark: Option<Benchmark>,
     gfx: Option<Gfx>,
+    /// The error that stopped the window, returned by `run`.
     error: Option<String>,
+    /// Called after the first frame is presented (in a browser).
+    first_frame: Option<Box<dyn FnOnce()>>,
+    /// Called with an error that stops the window (in a browser, where
+    /// nothing returns it).
+    failed: Option<Report>,
     dragging: bool,
     /// The cursor's position in the window, if it is inside.
     cursor: Option<PhysicalPosition<f64>>,
@@ -165,21 +240,66 @@ struct App {
 }
 
 impl App {
-    fn open(&self, event_loop: &ActiveEventLoop) -> Result<Gfx, String> {
-        let attributes = Window::default_attributes()
-            .with_title(self.title())
-            .with_inner_size(PhysicalSize::new(self.size_px.0, self.size_px.1));
+    fn new(
+        scene: Scene,
+        view: View,
+        attributes: WindowAttributes,
+        prepared: Option<Prepared>,
+    ) -> Self {
+        App {
+            scene,
+            start: view,
+            view,
+            attributes: Some(attributes),
+            prepared,
+            benchmark: None,
+            gfx: None,
+            error: None,
+            first_frame: None,
+            failed: None,
+            dragging: false,
+            cursor: None,
+            pressed_at: None,
+            picked: None,
+            panel: true,
+            text_scale: 1,
+        }
+    }
+
+    fn open(&mut self, event_loop: &ActiveEventLoop) -> Result<Gfx, String> {
+        let attributes = self
+            .attributes
+            .take()
+            .ok_or("the window was already made")?
+            .with_title(self.title());
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
                 .map_err(|e| format!("cannot open a window: {e}"))?,
         );
+        let gpu = match self.prepared.take() {
+            Some(gpu) => gpu,
+            #[cfg(not(target_arch = "wasm32"))]
+            None => self.prepare_window(event_loop, &window)?,
+            #[cfg(target_arch = "wasm32")]
+            None => return Err("no GPU was prepared for the canvas".into()),
+        };
+        Ok(Gfx { window, gpu })
+    }
+
+    /// The GPU's side of the native `window`.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn prepare_window(
+        &self,
+        event_loop: &ActiveEventLoop,
+        window: &Arc<Window>,
+    ) -> Result<Prepared, String> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(
                 Box::new(event_loop.owned_display_handle()),
             ));
         let surface = instance
-            .create_surface(Arc::clone(&window))
+            .create_surface(Arc::clone(window))
             .map_err(|e| format!("cannot draw into the window: {e}"))?;
         let adapter = block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -188,43 +308,27 @@ impl App {
         }))
         .map_err(|e| format!("no GPU adapter for the window: {e}"))?;
         let info = adapter.get_info();
-        println!(
+        say(&format!(
             "GPU: {} ({:?}, {:?})",
             info.name, info.backend, info.device_type
-        );
-        let (device, queue) = request_device(&adapter, &self.scene.mesh)?;
+        ));
         let size = window.inner_size();
-        let mut config = surface
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .ok_or("the GPU cannot draw into this window")?;
-        let formats = surface.get_capabilities(&adapter).formats;
-        config.format = formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(config.format);
-        let view_format = config.format.add_srgb_suffix();
-        if view_format != config.format {
-            config.view_formats = vec![view_format];
-        }
-        config.present_mode = wgpu::PresentMode::Fifo;
-        surface.configure(&device, &config);
-        let colours = self.scene.vertex_colours();
-        let renderer = Renderer::new(
+        block_on(prepare(
             &adapter,
-            device,
-            queue,
-            view_format,
-            &self.scene.mesh,
-            &colours,
-        );
-        Ok(Gfx {
-            window,
             surface,
-            config,
-            view_format,
-            renderer,
-        })
+            size.width,
+            size.height,
+            &self.scene,
+        ))
+    }
+
+    /// Stops the window with the error `message`.
+    fn fail(&mut self, event_loop: &ActiveEventLoop, message: String) {
+        if let Some(failed) = &self.failed {
+            failed(&message);
+        }
+        self.error = Some(message);
+        event_loop.exit();
     }
 
     fn title(&self) -> String {
@@ -254,15 +358,15 @@ impl App {
     /// panel's legend.
     fn show_layer(&mut self) {
         if let Some(layer) = self.scene.layers.current() {
-            println!(
+            say(&format!(
                 "layer {}/{}: {}",
                 self.scene.layers.current_index() + 1,
                 self.scene.layers.len(),
                 layer.legend()
-            );
+            ));
         }
         if let Some(gfx) = &self.gfx {
-            gfx.renderer.set_colours(&self.scene.vertex_colours());
+            gfx.gpu.renderer.set_colours(&self.scene.vertex_colours());
         }
         if let Some(cell) = self.picked {
             self.paint(cell, true);
@@ -277,7 +381,7 @@ impl App {
         let Some(gfx) = &mut self.gfx else { return };
         let quads = if self.panel {
             let lines = panel::lines(&self.scene.world, &self.scene.layers, self.picked);
-            let viewport = (gfx.config.width, gfx.config.height);
+            let viewport = (gfx.gpu.config.width, gfx.gpu.config.height);
             panel::layout(
                 &lines,
                 self.scene.layers.current(),
@@ -287,7 +391,7 @@ impl App {
         } else {
             Vec::new()
         };
-        gfx.renderer.set_overlay(&quads);
+        gfx.gpu.renderer.set_overlay(&quads);
         gfx.window.request_redraw();
     }
 
@@ -300,7 +404,8 @@ impl App {
             } else {
                 colour
             };
-            gfx.renderer
+            gfx.gpu
+                .renderer
                 .set_cell_colour(self.scene.mesh.cell_vertices(cell), colour);
         }
     }
@@ -310,7 +415,7 @@ impl App {
     /// the benchmark runs).
     fn repick(&mut self) {
         let Some(gfx) = &self.gfx else { return };
-        let (width, height) = (gfx.config.width, gfx.config.height);
+        let (width, height) = (gfx.gpu.config.width, gfx.gpu.config.height);
         let cell = match (self.cursor, &self.benchmark) {
             (Some(cursor), None) => self
                 .scene
@@ -335,15 +440,17 @@ impl App {
         match self.picked {
             Some(cell) => {
                 for line in cell_text(&self.scene.world, &self.scene.layers, cell) {
-                    println!("{line}");
+                    say(&line);
                 }
             }
-            None => println!("{NO_CELL}"),
+            None => say(NO_CELL),
         }
     }
 
     fn key(&mut self, key: &Key, event_loop: &ActiveEventLoop) {
         match press(key, &mut self.scene, &mut self.view, &self.start) {
+            // A page is closed by the browser, not by a key.
+            Action::Quit if cfg!(target_arch = "wasm32") => {}
             Action::Quit => event_loop.exit(),
             Action::Layer => {
                 self.show_layer();
@@ -364,39 +471,47 @@ impl App {
     /// Something visible changed: new title, new frame.
     fn changed(&self) {
         if let Some(gfx) = &self.gfx {
-            gfx.window.set_title(&self.title());
+            let title = self.title();
+            gfx.window.set_title(&title);
+            // winit puts a canvas's title into its `alt` attribute only.
+            #[cfg(target_arch = "wasm32")]
+            crate::web::set_title(&title);
             gfx.window.request_redraw();
         }
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let Some(gfx) = &mut self.gfx else { return };
-        let texture = match gfx.surface.get_current_texture() {
+        let texture = match gfx.gpu.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => texture,
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => return,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                gfx.surface.configure(gfx.renderer.device(), &gfx.config);
+                gfx.gpu
+                    .surface
+                    .configure(gfx.gpu.renderer.device(), &gfx.gpu.config);
                 gfx.window.request_redraw();
                 return;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
-                self.error = Some("the window's surface failed validation".into());
-                event_loop.exit();
+                self.fail(event_loop, "the window's surface failed validation".into());
                 return;
             }
         };
         let view = texture.texture.create_view(&wgpu::TextureViewDescriptor {
-            format: Some(gfx.view_format),
+            format: Some(gfx.gpu.view_format),
             ..Default::default()
         });
-        let (width, height) = (gfx.config.width, gfx.config.height);
+        let (width, height) = (gfx.gpu.config.width, gfx.gpu.config.height);
         let frame = self
             .view
             .frame(f64::from(width) / f64::from(height), &self.scene.relief);
-        gfx.renderer.draw(&view, width, height, &frame);
+        gfx.gpu.renderer.draw(&view, width, height, &frame);
         gfx.window.pre_present_notify();
-        gfx.renderer.present(texture);
+        gfx.gpu.renderer.present(texture);
+        if let Some(first_frame) = self.first_frame.take() {
+            first_frame();
+        }
         if let Some(benchmark) = &mut self.benchmark {
             benchmark.presented.push(Instant::now());
             self.view.camera.lon_rad += BENCHMARK_STEP_RAD;
@@ -445,7 +560,7 @@ fn press(key: &Key, scene: &mut Scene, view: &mut View, start: &View) -> Action 
                 relief_down(view.relief)
             };
             view.camera.clamp(top(view));
-            println!("{}", relief_line(view.relief, scene.relief.max_relief()));
+            say(&relief_line(view.relief, scene.relief.max_relief()));
             return Action::Redraw;
         }
         Key::Named(NamedKey::Escape) => return Action::Quit,
@@ -482,10 +597,7 @@ impl ApplicationHandler for App {
                 }
                 self.changed();
             }
-            Err(e) => {
-                self.error = Some(e);
-                event_loop.exit();
-            }
+            Err(e) => self.fail(event_loop, e),
         }
     }
 
@@ -494,9 +606,12 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 if let Some(gfx) = &mut self.gfx {
-                    gfx.config.width = size.width.max(1);
-                    gfx.config.height = size.height.max(1);
-                    gfx.surface.configure(gfx.renderer.device(), &gfx.config);
+                    let side = gfx.gpu.max_side_px;
+                    gfx.gpu.config.width = size.width.clamp(1, side);
+                    gfx.gpu.config.height = size.height.clamp(1, side);
+                    gfx.gpu
+                        .surface
+                        .configure(gfx.gpu.renderer.device(), &gfx.gpu.config);
                     gfx.window.request_redraw();
                 }
                 self.repick();
@@ -526,7 +641,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 if let (true, Some(last), Some(gfx)) = (self.dragging, self.cursor, &self.gfx) {
-                    let height = f64::from(gfx.config.height);
+                    let height = f64::from(gfx.gpu.config.height);
                     self.view
                         .camera
                         .drag(position.x - last.x, position.y - last.y, height);

@@ -12,12 +12,20 @@
 //! vertex buffer, the font's atlas (`R8Unorm`) and a uniform with the
 //! viewport's size. Depth is `Depth32Float`; the colour target is an sRGB
 //! view, with 4× multisampling where the adapter supports it.
+//!
+//! The same code draws in a browser (ticket MV-03), through WebGPU or
+//! WebGL2; there the device is requested asynchronously, and the
+//! screenshots (`Offscreen`, `block_on`) are native only.
 
+#[cfg(not(target_arch = "wasm32"))]
 use core::future::Future;
 use core::num::NonZeroU64;
 use core::ops::Range;
+#[cfg(not(target_arch = "wasm32"))]
 use core::pin::pin;
+#[cfg(not(target_arch = "wasm32"))]
 use core::task::{Context, Poll, Waker};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 
 use kuniumi_io::Rgb8;
@@ -50,6 +58,7 @@ pub const SEA_OPACITY: f64 = 0.55;
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// The format of screenshots: 8-bit RGBA with sRGB encoding.
+#[cfg(not(target_arch = "wasm32"))]
 const SCREENSHOT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 
 /// The size of the uniform block of `shader.wgsl` (bytes): a 4 × 4 matrix,
@@ -65,7 +74,9 @@ const OVERLAY_BUFFER_BYTES: u64 = 1 << 16;
 
 /// Runs `future` to completion on this thread. wgpu's native futures (adapter
 /// and device requests) are ready when first polled, so this spins at most a
-/// few times; no executor crate is needed.
+/// few times; no executor crate is needed. Native only: a browser's futures
+/// wait for the page's event loop, which a spinning thread would block.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = pin!(future);
     let mut context = Context::from_waker(Waker::noop());
@@ -94,7 +105,7 @@ fn srgb_to_linear(channel: u8) -> f64 {
 ///
 /// If a buffer of `mesh` exceeds the adapter's largest buffer, or the device
 /// cannot be created.
-pub fn request_device(
+pub async fn request_device(
     adapter: &wgpu::Adapter,
     mesh: &GlobeMesh,
 ) -> Result<(wgpu::Device, wgpu::Queue), String> {
@@ -106,12 +117,48 @@ pub fn request_device(
             limits.max_buffer_size
         ));
     }
-    block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("kuniumi-viewer"),
-        required_limits: limits,
-        ..Default::default()
-    }))
-    .map_err(|e| format!("cannot open the GPU device: {e}"))
+    adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("kuniumi-viewer"),
+            required_limits: limits,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| format!("cannot open the GPU device: {e}"))
+}
+
+/// The configuration of `surface` (a window's or a canvas's) for drawing
+/// with `adapter` at `width_px` × `height_px`, each side clamped to
+/// [1, `adapter`'s largest texture side], presented with vsync (`Fifo`),
+/// and the sRGB format of the views drawn into its textures: an sRGB
+/// format of the surface if it offers one, else its preferred format
+/// viewed as sRGB (WebGPU canvases offer no sRGB format).
+///
+/// # Errors
+///
+/// If the adapter cannot draw into the surface.
+pub fn surface_config(
+    surface: &wgpu::Surface,
+    adapter: &wgpu::Adapter,
+    width_px: u32,
+    height_px: u32,
+) -> Result<(wgpu::SurfaceConfiguration, wgpu::TextureFormat), String> {
+    let side = adapter.limits().max_texture_dimension_2d.max(1);
+    let mut config = surface
+        .get_default_config(adapter, width_px.clamp(1, side), height_px.clamp(1, side))
+        .ok_or("the GPU cannot draw into this window")?;
+    let formats = surface.get_capabilities(adapter).formats;
+    config.format = formats
+        .iter()
+        .copied()
+        .find(|f| f.is_srgb())
+        .unwrap_or(config.format);
+    let view_format = config.format.add_srgb_suffix();
+    if view_format != config.format {
+        config.view_formats = vec![view_format];
+    }
+    config.present_mode = wgpu::PresentMode::Fifo;
+    Ok((config, view_format))
 }
 
 /// The multisample count for drawing into `format` with depth.
@@ -629,7 +676,8 @@ fn uniform_bytes(frame: &Frame) -> Vec<u8> {
 }
 
 /// The globe drawn without a window, into a texture: for screenshots and
-/// for timing the rendering itself, unpaced by the display.
+/// for timing the rendering itself, unpaced by the display. Native only.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Offscreen {
     renderer: Renderer,
     texture: wgpu::Texture,
@@ -638,6 +686,7 @@ pub struct Offscreen {
     height_px: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Offscreen {
     /// The globe of `mesh` with the vertex colours `colours`, drawn into a
     /// texture of `width_px` × `height_px`.
@@ -663,7 +712,7 @@ impl Offscreen {
             "GPU: {} ({:?}, {:?})",
             info.name, info.backend, info.device_type
         );
-        let (device, queue) = request_device(&adapter, mesh)?;
+        let (device, queue) = block_on(request_device(&adapter, mesh))?;
         let renderer = Renderer::new(&adapter, device, queue, SCREENSHOT_FORMAT, mesh, colours);
         let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("offscreen"),
