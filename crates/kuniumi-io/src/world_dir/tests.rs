@@ -22,6 +22,10 @@
 //! - `chart_axes` and `hypsometry_chart_draws_the_bins_and_the_markers`;
 //! - `writes_metrics_and_the_chart_before_world_json`;
 //! - `no_metrics_without_a_surface_height_and_none_left_over`;
+//! - `rejects_reserved_field_names_before_writing_anything`,
+//!   `reserved_names_by_hand`, `fixed_files_are_every_file_but_the_fields`
+//!   and `fields_may_take_the_stems_of_the_other_fixed_files` (ticket
+//!   M2-19);
 //! - `rejects_non_finite_heights_before_writing_anything`;
 //! - `rejects_elevations_that_overflow_before_writing_anything` and
 //!   `huge_elevations_have_finite_metrics` (ticket M2-15);
@@ -426,10 +430,16 @@ fn rejects_non_finite_metadata() {
 
 #[test]
 fn rejects_bad_fields_before_writing_anything() {
-    let cases: [(Spoil, &str); 6] = [
+    let cases: [(Spoil, &str); 7] = [
         (
             |w| w.fields[1].name = "Zone".into(),
             "`Zone` is not a valid field name",
+        ),
+        (
+            // Reserved in a world without a `surface_height` too (ticket
+            // M2-19).
+            |w| w.fields[1].name = "hypsometry".into(),
+            HYPSOMETRY_RESERVED,
         ),
         (
             |w| w.fields[0].name = "../height".into(),
@@ -1213,6 +1223,170 @@ fn no_metrics_without_a_surface_height_and_none_left_over() {
     for file in [METRICS_FILE, HYPSOMETRY_FILE, METADATA_FILE] {
         assert!(!dir.join(file).exists(), "{file}");
     }
+    remove(&dir);
+}
+
+/// The error of [`write()`] and [`read()`] for a field named `hypsometry`,
+/// written out by hand (ticket M2-19).
+pub(super) const HYPSOMETRY_RESERVED: &str = concat!(
+    "the field name `hypsometry` is reserved: ",
+    "hypsometry.png is a file of the world directory itself"
+);
+
+/// The names and bytes of the files in `dir`, sorted by name.
+fn files_of(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().into_string().unwrap(),
+                read(&entry.path()),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn rejects_reserved_field_names_before_writing_anything() {
+    // The map of a field `hypsometry` would be overwritten by the chart of
+    // the metrics.
+    let mut world = world_with_relief();
+    world.fields[1].name = "hypsometry".into();
+    let dir = scratch("reserved_name");
+    let err = write(&dir, &world).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(err.to_string(), HYPSOMETRY_RESERVED);
+    assert!(!dir.exists(), "nothing is written");
+
+    // Into a directory holding a world: every file stays as it was.
+    write_maps_of_width(&dir, &world_with_relief(), 64).unwrap();
+    let before = files_of(&dir);
+    assert_eq!(before.len(), 10);
+    let err = write_maps_of_width(&dir, &world, 64).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+    assert_eq!(err.to_string(), HYPSOMETRY_RESERVED);
+    assert!(files_of(&dir) == before, "a file changed");
+    assert!(!dir.join("hypsometry.kfield").exists());
+    remove(&dir);
+}
+
+#[test]
+fn reserved_names_by_hand() {
+    // Field names hold no dot, so a fixed file is a field's file only if
+    // it ends in `.kfield` or `.png`: of world.json, grid.kgrid,
+    // metrics.txt and hypsometry.png, only the last.
+    assert_eq!(fixed_file_of_field("hypsometry"), Some("hypsometry.png"));
+    for name in [
+        "world",
+        "grid",
+        "metrics",
+        "hypsometry_map",
+        "hypsometr",
+        "hypsometry1",
+        "kfield",
+        "png",
+        "surface_height",
+    ] {
+        assert_eq!(fixed_file_of_field(name), None, "{name}");
+    }
+}
+
+#[test]
+fn fixed_files_are_every_file_but_the_fields() {
+    // With the metrics, every fixed file is written; without, some. A
+    // fixed file that only some worlds write is seen only if one of these
+    // worlds writes it: a ticket that adds one adds such a world here.
+    for (name, world, every) in [
+        ("fixed_relief", world_with_relief(), true),
+        ("fixed_plain", world(), false),
+    ] {
+        let dir = scratch(name);
+        let written = write_maps_of_width(&dir, &world, 64).unwrap();
+        let of_fields: Vec<String> = world
+            .fields
+            .iter()
+            .flat_map(|f| [format!("{}.kfield", f.name), format!("{}.png", f.name)])
+            .collect();
+        let mut rest: Vec<&str> = written
+            .iter()
+            .map(|p| p.file_name().unwrap().to_str().unwrap())
+            .filter(|file| !of_fields.iter().any(|f| f == file))
+            .collect();
+        rest.sort_unstable();
+        let mut fixed = FIXED_FILES.to_vec();
+        fixed.sort_unstable();
+        if every {
+            assert_eq!(rest, fixed);
+        } else {
+            assert!(rest.iter().all(|file| fixed.contains(file)), "{rest:?}");
+        }
+        remove(&dir);
+    }
+}
+
+#[test]
+fn fields_may_take_the_stems_of_the_other_fixed_files() {
+    // world.json, grid.kgrid and metrics.txt do not collide with
+    // world.kfield, grid.png, metrics.png and the others.
+    let mut world = world_with_relief();
+    world.fields[0].name = "world".into();
+    world.fields[1].name = "grid".into();
+    let x: Vec<f64> = world.grid.positions().iter().map(|p| p.x).collect();
+    world.add_field("metrics", "", x).unwrap();
+    let n = world.grid.len();
+    world
+        .add_class_field("hypsometry_map", (0..n).map(|i| (i % 3) as f64).collect())
+        .unwrap();
+    let dir = scratch("other_stems");
+    let written = write_maps_of_width(&dir, &world, 64).unwrap();
+    let names: Vec<_> = written
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "grid.kgrid",
+            "world.kfield",
+            "world.png",
+            "grid.kfield",
+            "grid.png",
+            "surface_height.kfield",
+            "surface_height.png",
+            "metrics.kfield",
+            "metrics.png",
+            "hypsometry_map.kfield",
+            "hypsometry_map.png",
+            "metrics.txt",
+            "hypsometry.png",
+            "world.json"
+        ]
+    );
+    assert_eq!(read(&dir.join(METADATA_FILE)), world_json(&world).unwrap());
+    let grid = grid_file::read_grid(read(&dir.join(GRID_FILE)).as_slice()).unwrap();
+    assert_eq!(grid, world.grid);
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    assert_eq!(
+        read(&dir.join(METRICS_FILE)),
+        metrics_txt(&world, &metrics).as_bytes()
+    );
+    let (width, height, pixels) = decode_png(&dir.join(HYPSOMETRY_FILE));
+    assert_eq!((width, height), (CHART_WIDTH_PX, CHART_HEIGHT_PX));
+    assert_eq!(pixels, hypsometry_chart(&metrics));
+    let bits = |f: &Field| f.values.iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+    for field in &world.fields {
+        let back =
+            field_file::read_field(read(&dir.join(format!("{}.kfield", field.name))).as_slice())
+                .unwrap();
+        assert_eq!((&back.name, &back.unit), (&field.name, &field.unit));
+        assert_eq!(bits(&back), bits(field));
+        let (width, height, _) = decode_png(&dir.join(format!("{}.png", field.name)));
+        assert_eq!((width, height), (64, 32), "{}", field.name);
+    }
+    assert_eq!(super::read(&dir).unwrap(), world);
     remove(&dir);
 }
 

@@ -36,6 +36,10 @@ impl Field {
     /// one of the device names that Windows reserves even with an extension
     /// (`con`, `prn`, `aux`, `nul`, `com0`–`com9`, `lpt0`–`lpt9`), so that
     /// `<name>.kfield` is a portable file name on every platform.
+    ///
+    /// World directories (`kuniumi_io::world_dir`) also refuse a name whose
+    /// files would be one of their own: `hypsometry`, whose map
+    /// `hypsometry.png` would be the chart of the metrics.
     pub fn is_valid_name(name: &str) -> bool {
         let mut bytes = name.bytes();
         let pattern = bytes.next().is_some_and(|b| b.is_ascii_lowercase())

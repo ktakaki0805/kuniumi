@@ -41,6 +41,20 @@
 //! ([`ReadError`]); the maps and the metrics follow from these and are not
 //! read.
 //!
+//! # Field names
+//!
+//! A field's name must pass [`Field::is_valid_name`] (`[a-z][a-z0-9_]*`,
+//! not a device name of Windows), and its files, `<name>.kfield` and
+//! `<name>.png`, must not be one of the directory's own files,
+//! [`FIXED_FILES`] (ticket M2-19). Field names hold no dot, so only a fixed
+//! file ending in `.kfield` or `.png` can collide: of `world.json`,
+//! `grid.kgrid`, `metrics.txt` and `hypsometry.png`, only the chart, so the
+//! one reserved name is `hypsometry`, whose map the chart would overwrite.
+//! It is reserved in every world, with or without a `surface_height`;
+//! [`write()`] refuses it before writing anything and [`read()`] refuses a
+//! `world.json` that lists it. Names and files are lowercase ASCII, so file
+//! systems that ignore case add no collision.
+//!
 //! # Why the grid is stored
 //!
 //! The grid could be rebuilt from the settings and the seed
@@ -159,6 +173,31 @@ pub const METRICS_FILE: &str = "metrics.txt";
 /// The name of the chart of the elevation histogram.
 pub const HYPSOMETRY_FILE: &str = "hypsometry.png";
 
+/// The files of a world directory that belong to no field: every file
+/// [`write()`] writes besides `<name>.kfield` and `<name>.png` of each
+/// field. A field may not take a name whose files would be one of these
+/// (module documentation, "Field names"). A new fixed file is listed here,
+/// and the test `fixed_files_are_every_file_but_the_fields` given a world
+/// that writes it, so that the test sees it.
+pub const FIXED_FILES: [&str; 4] = [METADATA_FILE, GRID_FILE, METRICS_FILE, HYPSOMETRY_FILE];
+
+/// The file of [`FIXED_FILES`] that a field named `name` would write as
+/// its `<name>.kfield` or `<name>.png`, if any: `hypsometry.png` for
+/// `hypsometry`, none for every other name (ticket M2-19).
+fn fixed_file_of_field(name: &str) -> Option<&'static str> {
+    FIXED_FILES.into_iter().find(|file| {
+        [".kfield", ".png"]
+            .into_iter()
+            .any(|extension| file.strip_suffix(extension) == Some(name))
+    })
+}
+
+/// The message for a field named `name` whose file would be `file`, one of
+/// [`FIXED_FILES`].
+fn reserved_message(name: &str, file: &str) -> String {
+    format!("the field name `{name}` is reserved: {file} is a file of the world directory itself")
+}
+
 /// The width of [`HYPSOMETRY_FILE`] in pixels: 1,040, a plot of 1,000
 /// columns ([`chart::MARGIN_PX`] on each side).
 pub const CHART_WIDTH_PX: u32 = 1_040;
@@ -193,7 +232,7 @@ pub struct WorldJson {
     /// [`World::stages`].
     pub stages: Vec<String>,
     /// The fields, in the world's order; each has the files `<name>.kfield`
-    /// and `<name>.png`.
+    /// and `<name>.png`, neither of them one of [`FIXED_FILES`].
     pub fields: Vec<FieldJson>,
 }
 
@@ -697,14 +736,17 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 /// # Errors
 ///
 /// [`io::ErrorKind::InvalidInput`] if a field name is not valid
-/// ([`Field::is_valid_name`]) or appears twice, if a field does not hold one
-/// value per cell, if a class field holds a value that is not a class id
-/// ([`Field::is_class_value`]), as [`world_json`], if `surface_height`
-/// holds a value that is not finite, one whose elevation above the sea
-/// level, `h − z`, overflows, or elevations that need more bins of 100 m
-/// than the histogram holds, [`MAX_HYPSOMETRY_BINS`] (10⁶, a relief of about
-/// 100,000 km; ticket M2-18); otherwise the error of the file system, with
-/// the path in its message. With these checks every world that passes them
+/// ([`Field::is_valid_name`]), is reserved because a file of the field
+/// would be one of [`FIXED_FILES`] (`hypsometry`, whose map would be the
+/// chart: module documentation, "Field names") or appears twice, if a
+/// field does not hold one value per cell, if a class field holds a value
+/// that is not a class id ([`Field::is_class_value`]), as [`world_json`],
+/// if `surface_height` holds a value that is not finite, one whose
+/// elevation above the sea level, `h − z`, overflows, or elevations that
+/// need more bins of 100 m than the histogram holds,
+/// [`MAX_HYPSOMETRY_BINS`] (10⁶, a relief of about 100,000 km; ticket
+/// M2-18); otherwise the error of the file system, with the path in its
+/// message. With these checks every world that passes them
 /// meets the limits of `kuniumi_sim::metrics` (the grid's areas, summing to
 /// 4π, always meet theirs, and every finite elevation divided by 100 m is
 /// finite), so its metrics are computed without a panic.
@@ -809,8 +851,9 @@ fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
     Ok(ElevationMetrics::of_world(world))
 }
 
-/// Checks that every field has a valid, unique name and one value per cell,
-/// and that every value of a class field is a class id.
+/// Checks that every field has a valid name that is not reserved
+/// ([`FIXED_FILES`]), a unique one, and one value per cell, and that every
+/// value of a class field is a class id.
 fn check_fields(world: &World) -> io::Result<()> {
     for (k, field) in world.fields.iter().enumerate() {
         if !Field::is_valid_name(&field.name) {
@@ -818,6 +861,9 @@ fn check_fields(world: &World) -> io::Result<()> {
                 "`{}` is not a valid field name",
                 field.name
             )));
+        }
+        if let Some(file) = fixed_file_of_field(&field.name) {
+            return Err(invalid_input(reserved_message(&field.name, file)));
         }
         if world.fields[..k].iter().any(|f| f.name == field.name) {
             return Err(invalid_input(format!(
@@ -967,13 +1013,15 @@ impl std::error::Error for ReadError {
 ///   [`WorldJson`] (a missing, unknown or ill-typed key, a number out of
 ///   range, text after the object: serde_json's message, with line and
 ///   column), lists a field name that is not valid ([`Field::is_valid_name`],
-///   which also keeps every path inside `dir`) or a name twice; if a
-///   `.kfield` or `.kgrid` file is not in its format, is truncated, or has
-///   bytes after its end; if the grid is not valid
-///   ([`grid_file::read_grid`]); or if a `.kfield` file holds another name
-///   or unit than `world.json` lists, not one value per cell of the grid,
-///   or, for a class field, a value that is not a class id
-///   ([`Field::is_class_value`]).
+///   which also keeps every path inside `dir`), a reserved name whose files
+///   would be one of [`FIXED_FILES`] (`hypsometry`, which [`write()`]
+///   refuses; a directory written before ticket M2-19 may list it, its map
+///   overwritten by the chart) or a name twice; if a `.kfield` or `.kgrid`
+///   file is not in its format, is truncated, or has bytes after its end;
+///   if the grid is not valid ([`grid_file::read_grid`]); or if a `.kfield`
+///   file holds another name or unit than `world.json` lists, not one value
+///   per cell of the grid, or, for a class field, a value that is not a
+///   class id ([`Field::is_class_value`]).
 pub fn read(dir: &Path) -> Result<World, ReadError> {
     let path = dir.join(METADATA_FILE);
     let bytes = std::fs::read(&path).map_err(|source| ReadError::Io {
@@ -1056,6 +1104,9 @@ fn parse_world_json(bytes: &[u8]) -> Result<WorldJson, Problem> {
                 "`{}` is not a valid field name",
                 entry.name
             )));
+        }
+        if let Some(file) = fixed_file_of_field(&entry.name) {
+            return Err(Problem::Invalid(reserved_message(&entry.name, file)));
         }
         if json.fields[..k].iter().any(|e| e.name == entry.name) {
             return Err(Problem::Invalid(format!(

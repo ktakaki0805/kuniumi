@@ -544,6 +544,16 @@ section: every change after which an existing seed produces a different world
   Every grid `SphereGrid::from_points` builds is unchanged and passes; the
   650,000-cell Fibonacci grid validates in 0.13 s instead of 0.12 s
   (M1-15).
+- `kuniumi_io::world_dir::write` returns `InvalidInput`, before writing
+  anything, for a field named `hypsometry`, instead of writing its map as
+  `hypsometry.png` and then overwriting it with the chart of the metrics
+  (in a world with a `surface_height`); `world_dir::read` returns
+  `ReadError::Invalid` for a `world.json` that lists such a field. The
+  reserved names are those whose `<name>.kfield` or `<name>.png` would be
+  one of the directory's own files, listed in the new
+  `world_dir::FIXED_FILES` (`world.json`, `grid.kgrid`, `metrics.txt`,
+  `hypsometry.png`): only `hypsometry` today. No stage uses the name;
+  every output for an existing seed is unchanged (M2-19).
 
 ### World-breaking
 

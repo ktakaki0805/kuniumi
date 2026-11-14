@@ -4,6 +4,7 @@
 //!   `kuniumi_sim::generate`) and `reads_back_worlds_of_every_shape`;
 //! - `rejects_other_format_versions` and `rejects_malformed_world_json`
 //!   (`world.json`);
+//! - `rejects_a_listed_reserved_name_even_with_its_file` (ticket M2-19);
 //! - `rejects_bad_kfield_files` and `rejects_bad_grid_files`;
 //! - `a_missing_directory_is_an_io_error` and `errors_name_their_file`.
 
@@ -11,7 +12,9 @@ use std::path::{Path, PathBuf};
 
 use kuniumi_world::{Field, PlanetParams, Settings, World};
 
-use super::tests::{awkward_world, octahedron_world, world, world_with_relief};
+use super::tests::{
+    HYPSOMETRY_RESERVED, awkward_world, octahedron_world, world, world_with_relief,
+};
 use super::*;
 
 /// A fresh path for the test `name` under the system's temporary directory
@@ -482,8 +485,8 @@ fn rejects_malformed_world_json() {
         remove(&dir);
     }
     // The field list: names that are not valid (and could leave the
-    // directory), twice the same name.
-    let cases: [(&str, &str, &str); 4] = [
+    // directory), a reserved name (ticket M2-19), twice the same name.
+    let cases: [(&str, &str, &str); 5] = [
         (
             "\"name\": \"zone\"",
             "\"name\": \"../zone\"",
@@ -501,6 +504,11 @@ fn rejects_malformed_world_json() {
         ),
         (
             "\"name\": \"zone\"",
+            "\"name\": \"hypsometry\"",
+            HYPSOMETRY_RESERVED,
+        ),
+        (
+            "\"name\": \"zone\"",
             "\"name\": \"height\"",
             "the field `height` is listed twice",
         ),
@@ -512,6 +520,32 @@ fn rejects_malformed_world_json() {
         assert_error(to, &err, &dir, "world.json", "invalid", message);
         remove(&dir);
     }
+}
+
+#[test]
+fn rejects_a_listed_reserved_name_even_with_its_file() {
+    // A directory as a build before ticket M2-19 wrote a world with a field
+    // `hypsometry` and a `surface_height`: its .kfield intact, its map
+    // overwritten by the chart of the metrics.
+    let dir = scratch("reserved_name");
+    let mut world = world_with_relief();
+    write_maps_of_width(&dir, &world, 64).unwrap();
+    world.fields[1].name = "hypsometry".into();
+    put(&dir, "hypsometry.kfield", &kfield(&world.fields[1]));
+    std::fs::remove_file(dir.join("zone.kfield")).unwrap();
+    edit_world_json(&dir, |text| {
+        text.replacen("\"name\": \"zone\"", "\"name\": \"hypsometry\"", 1)
+    });
+    let err = read(&dir).expect_err("a reserved name is rejected");
+    assert_error(
+        "hypsometry",
+        &err,
+        &dir,
+        "world.json",
+        "invalid",
+        HYPSOMETRY_RESERVED,
+    );
+    remove(&dir);
 }
 
 /// The length of `bytes` without its final newline.
