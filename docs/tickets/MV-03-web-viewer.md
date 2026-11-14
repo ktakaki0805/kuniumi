@@ -2,7 +2,7 @@
 
 - Status: draft
 - Milestone: MV
-- Depends on: MV-02, MV-04
+- Depends on: MV-02, MV-04, MV-06
 - Crates: kuniumi-viewer
 - Design: 実装ロードマップ / 技術スタック
 - Decisions: D-10, D-19

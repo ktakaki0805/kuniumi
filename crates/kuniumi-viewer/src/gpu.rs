@@ -11,6 +11,7 @@
 
 use core::future::Future;
 use core::num::NonZeroU64;
+use core::ops::Range;
 use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 use std::sync::mpsc;
@@ -310,6 +311,17 @@ impl Renderer {
             .write_buffer(&self.colours, 0, colours.as_flattened());
     }
 
+    /// Paints the vertices `vertices` (one cell's range of
+    /// [`GlobeMesh::cell_vertex_offsets`]) in `colour`, opaque: the
+    /// highlight of the cell under the cursor, or its colour restored. Each
+    /// vertex colour is 4 bytes, so the write is aligned as wgpu requires.
+    pub fn set_cell_colour(&self, vertices: Range<u32>, colour: Rgb8) {
+        let [r, g, b] = colour;
+        let offset = 4 * u64::from(vertices.start);
+        let bytes = [r, g, b, 255].repeat(vertices.len());
+        self.queue.write_buffer(&self.colours, offset, &bytes);
+    }
+
     /// Draws `frame` into `view` (of the format given to
     /// [`new`](Self::new)), `width_px` × `height_px`, and submits the work.
     pub fn draw(&mut self, view: &wgpu::TextureView, width_px: u32, height_px: u32, frame: &Frame) {
@@ -475,6 +487,12 @@ impl Offscreen {
             width_px,
             height_px,
         })
+    }
+
+    /// The renderer, for changes to the globe's colours before a
+    /// [`draw`](Self::draw).
+    pub fn renderer(&self) -> &Renderer {
+        &self.renderer
     }
 
     /// Draws `frame` and waits until the GPU has finished it.

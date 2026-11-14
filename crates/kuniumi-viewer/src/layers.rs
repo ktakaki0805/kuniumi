@@ -163,6 +163,35 @@ impl Layers {
             None => vec![NO_FIELD; world.grid.len()],
         }
     }
+
+    /// The colour of `cell` of `world` in the layer shown: entry `cell` of
+    /// [`colours`](Self::colours).
+    ///
+    /// # Panics
+    ///
+    /// If `cell` is not a cell of `world`.
+    pub fn cell_colour(&self, world: &World, cell: u32) -> Rgb8 {
+        match self.current() {
+            Some(layer) => {
+                let field = &world.fields[self.current];
+                debug_assert_eq!(field.name, layer.name, "the layers of another world");
+                layer
+                    .colormap
+                    .colour(field.values[cell as usize], layer.min, layer.max)
+            }
+            None => {
+                assert!((cell as usize) < world.grid.len(), "no cell {cell}");
+                NO_FIELD
+            }
+        }
+    }
+}
+
+/// The colour that marks the cell under the cursor in place of `colour`:
+/// each sRGB channel inverted, `255 − c`, so it stands out in every colour
+/// map.
+pub fn highlight(colour: Rgb8) -> Rgb8 {
+    colour.map(|c| 255 - c)
 }
 
 /// The validation metrics of `world` as `world_dir::write` computes them for
@@ -306,6 +335,24 @@ mod tests {
             (layers.current().unwrap().min, layers.current().unwrap().max),
             Range::Auto.resolve(&field.values)
         );
+    }
+
+    #[test]
+    fn cell_colours_and_the_highlight() {
+        let world = world();
+        let mut layers = Layers::new(&world);
+        for name in [SURFACE_HEIGHT, "plate_id", "crust_age"] {
+            layers.select(name).unwrap();
+            let colours = layers.colours(&world);
+            for cell in 0..world.grid.len() as u32 {
+                assert_eq!(layers.cell_colour(&world, cell), colours[cell as usize]);
+            }
+        }
+        let mut empty = world.clone();
+        empty.fields.clear();
+        assert_eq!(Layers::new(&empty).cell_colour(&empty, 7), NO_FIELD);
+        assert_eq!(highlight([10, 200, 255]), [245, 55, 0]);
+        assert_eq!(highlight([0, 0, 0]), [255, 255, 255]);
     }
 
     #[test]

@@ -94,6 +94,20 @@ impl OrbitCamera {
         columns
     }
 
+    /// The ray from the eye through the point `ndc` of the view (normalised
+    /// device coordinates: x to the right, y up, both from −1 to 1 across
+    /// the viewport) of width/height `aspect`: its origin, the eye (planet
+    /// radii), and its unit direction. The inverse of the perspective of
+    /// [`view_proj`](Self::view_proj): `normalise(f + s·x·a/k + u·y/k)` with
+    /// the forward, right and up vectors `f, s, u`, `a = aspect` and
+    /// `k = 1/tan(FOV_Y/2)`.
+    pub fn ray(&self, aspect: f64, ndc: [f64; 2]) -> (Vec3, Vec3) {
+        let (f, s, u) = self.frame();
+        let k = 1.0 / det::tan(0.5 * FOV_Y_RAD);
+        let dir = f + s * (ndc[0] * aspect / k) + u * (ndc[1] / k);
+        (self.eye(), dir / dir.length())
+    }
+
     /// The direction towards the light, a unit vector: from above and to
     /// the left of the camera, so that relief facing up-left is lit.
     pub fn light_dir(&self) -> Vec3 {
@@ -127,6 +141,17 @@ impl OrbitCamera {
         self.distance = self.distance.clamp(top + MIN_CLEARANCE, MAX_DISTANCE * top);
         self.lat_rad = self.lat_rad.clamp(-MAX_LAT_RAD, MAX_LAT_RAD);
     }
+}
+
+/// The normalised device coordinates `[2x/W − 1, 1 − 2y/H]` of the point
+/// `(x_px, y_px)` of a viewport `width_px` × `height_px` (pixel coordinates
+/// from its top-left corner, y down, as winit reports the cursor; the centre
+/// of pixel `(i, j)` is `(i + ½, j + ½)`).
+pub fn cursor_ndc(x_px: f64, y_px: f64, width_px: u32, height_px: u32) -> [f64; 2] {
+    [
+        2.0 * x_px / f64::from(width_px) - 1.0,
+        1.0 - 2.0 * y_px / f64::from(height_px),
+    ]
 }
 
 /// `m` rounded to `f32`.
@@ -189,6 +214,53 @@ mod tests {
         assert!(far[2] > 0.0 && far[2] <= 1.0);
         let matrix = to_f32(&m);
         assert_eq!(matrix[0][0].to_bits(), (m[0][0] as f32).to_bits());
+    }
+
+    #[test]
+    fn rays_project_back_to_their_screen_point() {
+        let cameras = [
+            START,
+            OrbitCamera {
+                lat_rad: 0.5,
+                lon_rad: -2.0,
+                distance: 4.0,
+            },
+            OrbitCamera {
+                lat_rad: -1.5,
+                lon_rad: 3.0,
+                distance: 1.05,
+            },
+        ];
+        for camera in cameras {
+            for aspect in [1.0, 1.6, 0.5] {
+                let m = camera.view_proj(aspect, 1.0);
+                for ndc in [[0.0, 0.0], [1.0, 1.0], [-1.0, 0.25], [0.3, -0.9]] {
+                    let (origin, dir) = camera.ray(aspect, ndc);
+                    assert_eq!(origin, camera.eye());
+                    assert!(close(dir.length(), 1.0));
+                    for t in [0.5, 2.0, 5.0] {
+                        let p = project(&m, origin + dir * t);
+                        assert!(
+                            close(p[0], ndc[0]) && close(p[1], ndc[1]),
+                            "{camera:?} {aspect} {ndc:?} {t}: {p:?}"
+                        );
+                    }
+                }
+            }
+        }
+        // The ray through the centre of the view points at the planet's centre.
+        let (origin, dir) = START.ray(1.6, [0.0, 0.0]);
+        assert!((dir + origin / origin.length()).length() < 1e-15);
+    }
+
+    #[test]
+    fn cursor_positions_by_hand() {
+        let bits = |ndc: [f64; 2]| ndc.map(f64::to_bits);
+        let at = |x, y| bits(cursor_ndc(x, y, 1280, 800));
+        assert_eq!(at(0.0, 0.0), bits([-1.0, 1.0]));
+        assert_eq!(at(1280.0, 800.0), bits([1.0, -1.0]));
+        assert_eq!(at(640.0, 400.0), bits([0.0, 0.0]));
+        assert_eq!(at(320.0, 100.0), bits([-0.5, 0.75]));
     }
 
     #[test]

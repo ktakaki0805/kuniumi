@@ -101,9 +101,10 @@ parallel with later milestones.
 | --- | --- | --- |
 | [MV-01](MV-01-world-reader.md) | Read world directories back | M2-01 |
 | [MV-02](MV-02-native-viewer.md) | Native globe viewer | MV-01, M2-06 |
-| [MV-04](MV-04-cell-inspection.md) | Cell inspection in the viewer | MV-02 |
+| [MV-04](MV-04-cell-inspection.md) | Cell picking in the viewer | MV-02 |
+| [MV-06](MV-06-cell-panel.md) | On-screen cell panel in the viewer | MV-04 |
 | [MV-05](MV-05-relief-bound.md) | Relief exaggeration bounded by the deepest point | MV-02 |
-| [MV-03](MV-03-web-viewer.md) | Viewer in the browser | MV-02, MV-04 |
+| [MV-03](MV-03-web-viewer.md) | Viewer in the browser | MV-02, MV-04, MV-06 |
 
 ### M3 — Erosion and drainage
 

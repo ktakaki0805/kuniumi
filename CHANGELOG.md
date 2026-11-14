@@ -296,6 +296,13 @@ section: every change after which an existing seed produces a different world
   `--benchmark` times the frames, in the window or `--offscreen`. A
   650,000-cell world loads in 0.3 s and is drawn in 1.0 ms on an RTX 3060
   Ti, presented at the display's 60 Hz (MV-02).
+- Cell picking in `kuniumi-viewer`: the cell under the cursor is found on
+  the globe's triangles as they are drawn (relief and occlusion included,
+  front faces only) and highlighted in inverted colours; a click prints its
+  id, latitude and longitude, every field's value with its unit and the
+  legend of the layer shown. `--screenshot` with `--cursor <x>,<y>` picks,
+  highlights, marks and prints the cell under a pixel. A pick on a
+  650,000-cell world takes under 0.5 ms (MV-04).
 
 ### Changed
 

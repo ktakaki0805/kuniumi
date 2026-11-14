@@ -92,6 +92,16 @@ impl GlobeMesh {
         }
     }
 
+    /// The vertices of `cell`: its centre first, then its Voronoi vertices.
+    ///
+    /// # Panics
+    ///
+    /// If `cell` is not a cell of the mesh.
+    pub fn cell_vertices(&self, cell: u32) -> core::ops::Range<u32> {
+        let v = cell as usize;
+        self.cell_vertex_offsets[v]..self.cell_vertex_offsets[v + 1]
+    }
+
     /// The colour of every vertex: each cell's colour from `cell_colours`
     /// over its vertex range, opaque, as `[r, g, b, 255]` (sRGB).
     ///
@@ -324,10 +334,10 @@ mod tests {
         let per_vertex = mesh.vertex_colours(&colours);
         assert_eq!(per_vertex.len(), mesh.vertices.len());
         for (i, colour) in colours.iter().enumerate() {
-            let range =
-                mesh.cell_vertex_offsets[i] as usize..mesh.cell_vertex_offsets[i + 1] as usize;
-            for k in range {
-                assert_eq!(per_vertex[k], [colour[0], colour[1], colour[2], 255]);
+            let range = mesh.cell_vertices(i as u32);
+            assert_eq!(range.len(), 1 + grid.neighbors(i as u32).len());
+            for vertex_colour in &per_vertex[range.start as usize..range.end as usize] {
+                assert_eq!(*vertex_colour, [colour[0], colour[1], colour[2], 255]);
             }
         }
     }

@@ -1,5 +1,6 @@
-//! The window: winit's event loop, the mouse and keyboard, and the
-//! benchmark that spins the globe and times the frames.
+//! The window: winit's event loop, the mouse and keyboard, the cell under
+//! the cursor (highlighted, printed on a click), and the benchmark that
+//! spins the globe and times the frames.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,6 +15,8 @@ use winit::window::{Window, WindowId};
 
 use crate::Scene;
 use crate::gpu::{Renderer, block_on, request_device};
+use crate::inspect::cell_text;
+use crate::layers::highlight;
 use crate::view::{View, relief_down, relief_up};
 
 /// How far the benchmark turns the globe per frame (rad): 0.5°.
@@ -21,6 +24,17 @@ pub const BENCHMARK_STEP_RAD: f64 = 0.5 * RADIANS_PER_DEGREE;
 
 /// Pixels of a touchpad scroll that count as one wheel step.
 const PIXELS_PER_STEP: f64 = 40.0;
+
+/// The largest distance between pressing and releasing the left button
+/// (px) for a click, which prints the cell under the cursor; more is a drag.
+pub const CLICK_PX: f64 = 3.0;
+
+/// Whether the left button pressed at `press` and released at `release`
+/// (pixel positions) is a click: at most [`CLICK_PX`] apart.
+pub fn is_click(press: (f64, f64), release: (f64, f64)) -> bool {
+    let (dx, dy) = (release.0 - press.0, release.1 - press.1);
+    dx * dx + dy * dy <= CLICK_PX * CLICK_PX
+}
 
 /// Opens the window and runs until it is closed; with `benchmark`, spins the
 /// globe for that many frames, prints the frame times and closes.
@@ -53,6 +67,8 @@ pub fn run(
         error: None,
         dragging: false,
         cursor: None,
+        pressed_at: None,
+        picked: None,
     };
     event_loop
         .run_app(&mut app)
@@ -133,7 +149,12 @@ struct App {
     gfx: Option<Gfx>,
     error: Option<String>,
     dragging: bool,
+    /// The cursor's position in the window, if it is inside.
     cursor: Option<PhysicalPosition<f64>>,
+    /// Where the left button was last pressed.
+    pressed_at: Option<PhysicalPosition<f64>>,
+    /// The cell under the cursor, highlighted.
+    picked: Option<u32>,
 }
 
 impl App {
@@ -235,6 +256,62 @@ impl App {
         if let Some(gfx) = &self.gfx {
             gfx.renderer.set_colours(&self.scene.vertex_colours());
         }
+        if let Some(cell) = self.picked {
+            self.paint(cell, true);
+        }
+    }
+
+    /// Paints `cell` in the layer's colour, highlighted or not.
+    fn paint(&self, cell: u32, highlighted: bool) {
+        if let Some(gfx) = &self.gfx {
+            let colour = self.scene.layers.cell_colour(&self.scene.world, cell);
+            let colour = if highlighted {
+                highlight(colour)
+            } else {
+                colour
+            };
+            gfx.renderer
+                .set_cell_colour(self.scene.mesh.cell_vertices(cell), colour);
+        }
+    }
+
+    /// Picks the cell under the cursor anew, after the cursor moved or the
+    /// view changed, and moves the highlight to it (none while the
+    /// benchmark runs).
+    fn repick(&mut self) {
+        let Some(gfx) = &self.gfx else { return };
+        let (width, height) = (gfx.config.width, gfx.config.height);
+        let cell = match (self.cursor, &self.benchmark) {
+            (Some(cursor), None) => self
+                .scene
+                .pick(&self.view, width, height, cursor.x, cursor.y)
+                .map(|hit| hit.cell),
+            _ => None,
+        };
+        if cell != self.picked {
+            if let Some(old) = self.picked {
+                self.paint(old, false);
+            }
+            if let Some(new) = cell {
+                self.paint(new, true);
+            }
+            self.picked = cell;
+            if let Some(gfx) = &self.gfx {
+                gfx.window.request_redraw();
+            }
+        }
+    }
+
+    /// Prints the cell under the cursor to the terminal (a click).
+    fn print_picked(&self) {
+        match self.picked {
+            Some(cell) => {
+                for line in cell_text(&self.scene.world, &self.scene.layers, cell) {
+                    println!("{line}");
+                }
+            }
+            None => println!("no cell under the cursor"),
+        }
     }
 
     fn key(&mut self, key: &Key, event_loop: &ActiveEventLoop) {
@@ -244,7 +321,10 @@ impl App {
                 self.show_layer();
                 self.changed();
             }
-            Action::Redraw => self.changed(),
+            Action::Redraw => {
+                self.changed();
+                self.repick();
+            }
             Action::Nothing => {}
         }
     }
@@ -382,6 +462,7 @@ impl ApplicationHandler for App {
                     gfx.surface.configure(gfx.renderer.device(), &gfx.config);
                     gfx.window.request_redraw();
                 }
+                self.repick();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
@@ -391,7 +472,16 @@ impl ApplicationHandler for App {
                 state,
                 button: MouseButton::Left,
                 ..
-            } => self.dragging = state == ElementState::Pressed,
+            } => {
+                self.dragging = state == ElementState::Pressed;
+                if self.dragging {
+                    self.pressed_at = self.cursor;
+                } else if let (Some(press), Some(release)) = (self.pressed_at.take(), self.cursor) {
+                    if is_click((press.x, press.y), (release.x, release.y)) {
+                        self.print_picked();
+                    }
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 if let (true, Some(last), Some(gfx)) = (self.dragging, self.cursor, &self.gfx) {
                     let height = f64::from(gfx.config.height);
@@ -401,6 +491,11 @@ impl ApplicationHandler for App {
                     self.changed();
                 }
                 self.cursor = Some(position);
+                self.repick();
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor = None;
+                self.repick();
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let steps = match delta {
@@ -411,6 +506,7 @@ impl ApplicationHandler for App {
                     .camera
                     .zoom(steps, self.view.top(&self.scene.relief));
                 self.changed();
+                self.repick();
             }
             _ => {}
         }
@@ -499,6 +595,17 @@ mod tests {
             close.camera.distance.to_bits(),
             (close.top(&scene.relief) + crate::camera::MIN_CLEARANCE).to_bits()
         );
+    }
+
+    #[test]
+    fn clicks_and_drags() {
+        assert!(is_click((100.0, 200.0), (100.0, 200.0)));
+        assert!(is_click((100.0, 200.0), (103.0, 200.0)));
+        assert!(is_click((100.0, 200.0), (100.0, 197.0)));
+        // 3-4-5: 1.8 and 2.4 px are 3 px apart.
+        assert!(is_click((0.0, 0.0), (1.8, 2.4)));
+        assert!(!is_click((100.0, 200.0), (103.1, 200.0)));
+        assert!(!is_click((0.0, 0.0), (2.2, 2.2)));
     }
 
     #[test]
