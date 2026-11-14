@@ -4,7 +4,9 @@ A world directory written by `kuniumi generate` as an interactive 3D globe,
 in a window or in a web browser. Every field of the world is a layer, in the
 colours of its PNG map; the relief is exaggerated over a translucent sea
 surface; the cell under the pointer is highlighted and its values are shown
-in a panel with the layer's legend.
+in a panel with the layer's legend. In a window too short for every field,
+the panel shows the fields around the one of the layer shown (Left/Right
+move through them) and says how many are hidden above and below.
 
 ## In a window
 

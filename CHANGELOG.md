@@ -522,6 +522,15 @@ section: every change after which an existing seed produces a different world
   does, with six significant digits and class ids as integers: the sea
   level of an Earth-like world is `-698.709`, no longer
   `-698.7089569869918` (MV-06).
+- The panel of `kuniumi-viewer` fits the window's height: in a window too
+  short for every field it keeps the cell's line, the layer line, the
+  colour bar and its labels, and shows the field lines around the one of
+  the layer shown, with lines saying how many are hidden above and below
+  (`... 4 fields above`), or `... 13 fields hidden` when not even that line
+  fits. It ends at least 8 px (× the text scale) above the bottom edge
+  whenever the kept lines fit, and shows the marker from one row more:
+  104 px for an Earth-like world's elevation layer at 1280 px wide. Where
+  every line fits it is unchanged (MV-07).
 
 ### Removed
 

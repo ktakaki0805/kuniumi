@@ -41,7 +41,8 @@ Keys: Left/Right layer, Up/Down relief (at most what the world allows), S sea,
 P panel, R reset view, Esc or Q quit.
 Mouse: drag to rotate, wheel to zoom; the cell under the cursor is
 highlighted and shown in the panel at the top left with the layer's legend,
-and a click prints it.";
+and a click prints it. In a window too short for every field, the panel
+shows the fields around the layer's field and says how many are hidden.";
 
 /// What the viewer does after loading the world.
 #[derive(Clone, Debug, PartialEq)]

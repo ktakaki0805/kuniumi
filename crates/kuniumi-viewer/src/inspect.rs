@@ -68,6 +68,49 @@ fn trim_zeros(number: &str) -> &str {
     }
 }
 
+/// What the text of a cell has, after its first line, for a world without
+/// fields.
+pub const NO_FIELDS: &str = "no fields";
+
+/// The first line of [`cell_text`]: the cell's id, the number of cells and
+/// the latitude and longitude of its centre in degrees with four decimals.
+///
+/// # Panics
+///
+/// If `cell` is not a cell of `world`.
+pub fn cell_line(world: &World, cell: u32) -> String {
+    let (lat_rad, lon_rad) = coords::lat_lon(world.grid.position(cell));
+    format!(
+        "cell {cell} of {}, lat {:.4} deg, lon {:.4} deg",
+        world.grid.len(),
+        lat_rad / RADIANS_PER_DEGREE,
+        lon_rad / RADIANS_PER_DEGREE
+    )
+}
+
+/// The lines of [`cell_text`] that give the value of each field of `world`
+/// at `cell`, in the world's order: none for a world without fields.
+///
+/// # Panics
+///
+/// If `cell` is not a cell of `world`.
+pub fn field_lines(world: &World, cell: u32) -> Vec<String> {
+    let width = world.fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
+    world
+        .fields
+        .iter()
+        .map(|field| {
+            let shown = format_field_value(field.kind, field.values[cell as usize]);
+            let unit = if field.unit.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", field.unit)
+            };
+            format!("  {:<width$}  {shown}{unit}", field.name)
+        })
+        .collect()
+}
+
 /// The lines that describe `cell` of `world`, with `layers` its layers:
 ///
 /// ```text
@@ -78,37 +121,24 @@ fn trim_zeros(number: &str) -> &str {
 /// layer 13/13: surface_height (m): elevation, …
 /// ```
 ///
-/// The latitude and longitude are those of the cell's centre, with four
-/// decimals; the field names are padded to the longest, quantities given by
+/// The first line ([`cell_line`]) has the latitude and longitude of the
+/// cell's centre, with four decimals; the field lines ([`field_lines`]) have
+/// the field names padded to the longest, quantities given by
 /// [`format_value`] with their unit, class fields as their integer id. The
-/// last line is the layer shown with its [`legend`](crate::layers::Layer::legend).
-/// A world without fields has the line `no fields` after the first instead.
+/// last line is the layer shown with its [`legend`](crate::layers::Layer::legend)
+/// ([`layer_line`]). A world without fields has the line [`NO_FIELDS`] after
+/// the first instead.
 ///
 /// # Panics
 ///
 /// If `cell` is not a cell of `world`.
 pub fn cell_text(world: &World, layers: &Layers, cell: u32) -> Vec<String> {
-    let (lat_rad, lon_rad) = coords::lat_lon(world.grid.position(cell));
-    let mut lines = vec![format!(
-        "cell {cell} of {}, lat {:.4} deg, lon {:.4} deg",
-        world.grid.len(),
-        lat_rad / RADIANS_PER_DEGREE,
-        lon_rad / RADIANS_PER_DEGREE
-    )];
+    let mut lines = vec![cell_line(world, cell)];
     if world.fields.is_empty() {
-        lines.push("no fields".into());
+        lines.push(NO_FIELDS.into());
         return lines;
     }
-    let width = world.fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
-    for field in &world.fields {
-        let shown = format_field_value(field.kind, field.values[cell as usize]);
-        let unit = if field.unit.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", field.unit)
-        };
-        lines.push(format!("  {:<width$}  {shown}{unit}", field.name));
-    }
+    lines.extend(field_lines(world, cell));
     lines.extend(layer_line(layers));
     lines
 }
@@ -228,6 +258,16 @@ mod tests {
 
         assert_eq!(layer_line(&layers).as_ref(), text.last());
 
+        // The parts of the text (MV-07): the cell's line, the field lines and
+        // the layer line, in order.
+        for cell in [0, 517, 999] {
+            let text = cell_text(&world, &layers, cell);
+            let fields = field_lines(&world, cell);
+            assert_eq!(fields.len(), world.fields.len());
+            assert_eq!(cell_line(&world, cell), text[0]);
+            assert_eq!(fields, text[1..text.len() - 1]);
+        }
+
         // A world without fields.
         let mut empty = world;
         empty.fields.clear();
@@ -235,6 +275,9 @@ mod tests {
         assert_eq!(text.len(), 2);
         assert!(text[0].starts_with("cell 3 of 1000, lat "));
         assert_eq!(text[1], "no fields");
+        assert_eq!(NO_FIELDS, "no fields");
+        assert_eq!(cell_line(&empty, 3), text[0]);
+        assert!(field_lines(&empty, 3).is_empty());
         assert_eq!(layer_line(&Layers::new(&empty)), None);
         assert_eq!(NO_CELL, "no cell under the cursor");
     }
