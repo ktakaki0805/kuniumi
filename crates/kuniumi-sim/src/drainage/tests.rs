@@ -12,6 +12,10 @@
 //!   `a_cone_drains_radially`, `a_bowl_produces_a_single_pit`;
 //! - the panics of `build` and `accumulate`;
 //! - `golden_fingerprint_of_an_earth_world`.
+//!
+//! The tests of the depression routing (ticket M3-02) are in the child
+//! module [`depressions`], which shares the grid, the worlds and the
+//! helpers of this one.
 #![allow(clippy::disallowed_methods)]
 
 use core::f64::consts::PI;
@@ -25,6 +29,8 @@ use kuniumi_world::{PlanetParams, Settings, World};
 
 use super::*;
 use crate::stages::crust::SURFACE_HEIGHT;
+
+mod depressions;
 
 /// Earth's radius (m), `PlanetParams::earth().radius_m`.
 const EARTH_RADIUS_M: f64 = 6_371_000.0;

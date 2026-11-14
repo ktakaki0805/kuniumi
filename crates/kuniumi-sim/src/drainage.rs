@@ -1,5 +1,5 @@
-//! The drainage graph (design: "侵食と地形発達 / 1ステップの処理", steps 1
-//! and 3; ticket M3-01).
+//! The drainage graph and depression routing (design: "侵食と地形発達 /
+//! 1ステップの処理", steps 1 to 3; tickets M3-01 and M3-02).
 //!
 //! [`Drainage::build`] sends the water of every land cell to one neighbour,
 //! its *receiver*: the neighbour down the steepest slope (single-flow
@@ -14,16 +14,42 @@
 //! [`Drainage::accumulate`] sums a quantity per cell down the graph, in
 //! reverse stack order: drainage area, or discharge from precipitation.
 //!
-//! The Erosion stage rebuilds the graph at every step (M3-03), on the
-//! surface with its depressions filled (M3-02); the Hydrology stage routes
-//! the runoff on the final one (M5-01). The graph depends only on its
-//! inputs, through integer bookkeeping, IEEE `−`, `×`, `÷` and comparisons
-//! (docs/conventions.md, "Determinism", rule 2), so it is the same on every
-//! platform; it draws no random numbers.
+//! Water must not stay in closed depressions: [`fill_depressions`]
+//! (Priority-Flood with an ε gradient, Barnes, Lehman & Mulla 2014) fills
+//! them to their spill levels, and the graph built on the filled surface
+//! has no pit, every land cell draining to the ocean:
+//!
+//! ```
+//! # use kuniumi_sim::drainage::{Drainage, depression_depth_m};
+//! # use kuniumi_sim::drainage::fill_depressions;
+//! # use kuniumi_sphere::SphereGrid;
+//! // An octahedron: cell 5 is the ocean, cell 4 a pit enclosed by 0–3.
+//! let grid = SphereGrid::octahedron();
+//! let height_m = [300.0, 200.0, 400.0, 250.0, 10.0, -100.0];
+//! let filled_m = fill_depressions(&grid, &height_m, 0.0);
+//! let routed = Drainage::build(&grid, &filled_m, 0.0, 6_371_000.0);
+//! assert!(routed.pits().is_empty());
+//! assert_eq!(routed.receiver(4), 1); // over the lowest saddle, 200 m
+//! let depth_m = depression_depth_m(&height_m, &filled_m);
+//! assert!(depth_m[4] > 190.0 && depth_m[4] < 190.0 + 1e-9);
+//! ```
+//!
+//! The Erosion stage rebuilds the graph at every step (M3-03) on the
+//! filled surface and erodes the original one; the Hydrology stage routes
+//! the runoff on the final one (M5-01), and its lakes (M5-02) start from
+//! [`depression_depth_m`]. Graph and fill depend only on their inputs,
+//! through integer bookkeeping, IEEE `−`, `×`, `÷`, comparisons and exact
+//! operations on bit patterns (docs/conventions.md, "Determinism", rule
+//! 2), so they are the same on every platform; they draw no random
+//! numbers.
 
 use core::cmp::Ordering;
 
 use kuniumi_sphere::SphereGrid;
+
+mod depressions;
+
+pub use depressions::{depression_depth_m, fill_depressions};
 
 /// Where the water of each cell goes, and the order in which to follow it
 /// (module documentation).
@@ -61,8 +87,9 @@ impl Drainage {
     ///   receiver may be an ocean cell.
     /// - A land cell without a lower neighbour is a pit, its own receiver.
     ///   Neighbours of equal height are not lower, so on a flat every cell
-    ///   without a lower neighbour is a pit; the depression routing of
-    ///   ticket M3-02 removes pits.
+    ///   without a lower neighbour is a pit. On a surface filled by
+    ///   [`fill_depressions`] no land cell is a pit, except, on land
+    ///   without ocean, the one cell the flood started from.
     ///
     /// Every link goes strictly downhill, so the receivers form no cycle:
     /// from any cell they reach a base level within `n − 1` links. The

@@ -45,8 +45,9 @@ grep -H "^- Status:" docs/tickets/M*.md
 
 Tickets are listed in the recommended order. The next ticket is the first one
 that is `ready` or `draft` and whose dependencies are all `done`. Tickets of
-M1–M3 and MV-01 are `ready`; the rest are `draft`, because they are best
-planned once the code they build on exists.
+M1–M3 and MV-01 are `ready`, except follow-ups found along the way (such as
+M3-06); the rest are `draft`, because they are best planned once the code
+they build on exists.
 
 ### M1 — Spherical grid and map rendering
 
@@ -116,6 +117,7 @@ parallel with later milestones.
 | [M3-03](M3-03-stream-power.md) | Implicit stream-power erosion with uplift | M3-02 |
 | [M3-04](M3-04-hillslope-diffusion.md) | Hillslope diffusion | M3-03 |
 | [M3-05](M3-05-erosion-stage.md) | Erosion stage, river maps and Hack's law | M3-04, M2-06 |
+| [M3-06](M3-06-convergent-flats.md) | Convergent flow across flats | M3-05 |
 
 ### M4 — Climate
 

@@ -338,6 +338,16 @@ section: every change after which an existing seed produces a different world
   from the cell areas, discharge (m³/s) from precipitation times area.
   O(n): 11 ms for an Earth world of 650,000 cells, 25 ms for random
   heights, in release (M3-01).
+- `kuniumi_sim::drainage::fill_depressions`, depression routing by
+  Priority-Flood (Barnes, Lehman & Mulla 2014) seeded from the ocean cells:
+  a min-heap keyed by (height via `total_cmp`, cell index) raises every
+  closed depression to its spill level plus a gradient of one ULP per step
+  of the flood, so that `Drainage::build` on the filled surface leaves no
+  pit and every land cell drains to the ocean; cells that already descend
+  to the ocean keep their heights bit for bit, and on land without ocean
+  the lowest cell is the one outlet. `depression_depth_m` gives
+  `h_fill − h` (m) for the lakes. Fill plus routing: 56 ms for an Earth
+  world of 650,000 cells, 220 ms for random heights, in release (M3-02).
 
 ### Changed
 
