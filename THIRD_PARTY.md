@@ -15,6 +15,19 @@ dependencies are not listed here: cargo-deny checks their licences (D-10).
 - Licence: CC0 1.0 (public domain dedication).
 - Regenerate and compare: `tools/colormap_tables.py`.
 
+## font8x8 bitmap font
+
+- Used in: `crates/kuniumi-viewer/src/font.rs` (`BASIC`: U+0020 to U+007E
+  of `font8x8_basic.h`; `DEGREE`: U+00B0 of `font8x8_ext_latin.h`; both
+  unchanged), the text of the viewer's panel.
+- Source: <https://github.com/dhepper/font8x8>, commit
+  `8e279d2d864e79128e96188a6b9526cfa3fbfef9`.
+- Authors: Daniel Hepper, after `font8_8.asm` by Marcel Sondaar from the
+  IBM VGA fonts.
+- Licence: public domain ("License: Public Domain" in the README and in
+  both headers, also for the original).
+- Regenerate and compare: `tools/font8x8_table.py`.
+
 ## ColorBrewer colour schemes
 
 - Used in: `crates/kuniumi-io/src/colormap.rs` (`DIVERGING`: RdBu with 11

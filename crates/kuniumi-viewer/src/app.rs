@@ -1,6 +1,6 @@
 //! The window: winit's event loop, the mouse and keyboard, the cell under
-//! the cursor (highlighted, printed on a click), and the benchmark that
-//! spins the globe and times the frames.
+//! the cursor (highlighted, shown in the panel, printed on a click), and the
+//! benchmark that spins the globe and times the frames.
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -15,8 +15,9 @@ use winit::window::{Window, WindowId};
 
 use crate::Scene;
 use crate::gpu::{Renderer, block_on, request_device};
-use crate::inspect::cell_text;
+use crate::inspect::{NO_CELL, cell_text};
 use crate::layers::highlight;
+use crate::panel::{self, text_scale};
 use crate::view::{View, relief_down, relief_up};
 
 /// How far the benchmark turns the globe per frame (rad): 0.5°.
@@ -69,6 +70,8 @@ pub fn run(
         cursor: None,
         pressed_at: None,
         picked: None,
+        panel: true,
+        text_scale: 1,
     };
     event_loop
         .run_app(&mut app)
@@ -155,6 +158,10 @@ struct App {
     pressed_at: Option<PhysicalPosition<f64>>,
     /// The cell under the cursor, highlighted.
     picked: Option<u32>,
+    /// Whether the panel is shown (P).
+    panel: bool,
+    /// The panel's text scale, from the window's scale factor.
+    text_scale: u32,
 }
 
 impl App {
@@ -243,8 +250,9 @@ impl App {
         )
     }
 
-    /// Shows the layer now selected: new colours, the legend printed.
-    fn show_layer(&self) {
+    /// Shows the layer now selected: new colours, the legend printed, the
+    /// panel's legend.
+    fn show_layer(&mut self) {
         if let Some(layer) = self.scene.layers.current() {
             println!(
                 "layer {}/{}: {}",
@@ -259,6 +267,28 @@ impl App {
         if let Some(cell) = self.picked {
             self.paint(cell, true);
         }
+        self.update_panel();
+    }
+
+    /// Lays out the panel anew (none while it is hidden) for the cell under
+    /// the cursor, the layer, the window's size and its text scale, and
+    /// asks for a new frame.
+    fn update_panel(&mut self) {
+        let Some(gfx) = &mut self.gfx else { return };
+        let quads = if self.panel {
+            let lines = panel::lines(&self.scene.world, &self.scene.layers, self.picked);
+            let viewport = (gfx.config.width, gfx.config.height);
+            panel::layout(
+                &lines,
+                self.scene.layers.current(),
+                self.text_scale,
+                viewport,
+            )
+        } else {
+            Vec::new()
+        };
+        gfx.renderer.set_overlay(&quads);
+        gfx.window.request_redraw();
     }
 
     /// Paints `cell` in the layer's colour, highlighted or not.
@@ -276,8 +306,8 @@ impl App {
     }
 
     /// Picks the cell under the cursor anew, after the cursor moved or the
-    /// view changed, and moves the highlight to it (none while the
-    /// benchmark runs).
+    /// view changed, and moves the highlight and the panel to it (none while
+    /// the benchmark runs).
     fn repick(&mut self) {
         let Some(gfx) = &self.gfx else { return };
         let (width, height) = (gfx.config.width, gfx.config.height);
@@ -296,9 +326,7 @@ impl App {
                 self.paint(new, true);
             }
             self.picked = cell;
-            if let Some(gfx) = &self.gfx {
-                gfx.window.request_redraw();
-            }
+            self.update_panel();
         }
     }
 
@@ -310,7 +338,7 @@ impl App {
                     println!("{line}");
                 }
             }
-            None => println!("no cell under the cursor"),
+            None => println!("{NO_CELL}"),
         }
     }
 
@@ -324,6 +352,10 @@ impl App {
             Action::Redraw => {
                 self.changed();
                 self.repick();
+            }
+            Action::Panel => {
+                self.panel = !self.panel;
+                self.update_panel();
             }
             Action::Nothing => {}
         }
@@ -391,13 +423,16 @@ enum Action {
     Layer,
     /// The view changed: a new frame.
     Redraw,
+    /// Show or hide the panel.
+    Panel,
     /// Not a key of the viewer.
     Nothing,
 }
 
 /// Applies the key `key` to the layers of `scene` and to `view` (`start` is
 /// the view that R restores): Left/Right previous/next layer, Up/Down relief
-/// steps, S sea on/off, R reset view, Esc or Q quit.
+/// steps, S sea on/off, R reset view, P panel on/off (left to the window),
+/// Esc or Q quit.
 fn press(key: &Key, scene: &mut Scene, view: &mut View, start: &View) -> Action {
     let top = |view: &View| view.top(&scene.relief);
     match key {
@@ -422,6 +457,7 @@ fn press(key: &Key, scene: &mut Scene, view: &mut View, start: &View) -> Action 
                     view.camera.clamp(top(view));
                 }
                 "q" | "Q" => return Action::Quit,
+                "p" | "P" => return Action::Panel,
                 _ => return Action::Nothing,
             }
             return Action::Redraw;
@@ -438,6 +474,7 @@ impl ApplicationHandler for App {
         }
         match self.open(event_loop) {
             Ok(gfx) => {
+                self.text_scale = text_scale(gfx.window.scale_factor());
                 self.gfx = Some(gfx);
                 self.show_layer();
                 if self.benchmark.is_some() {
@@ -463,6 +500,11 @@ impl ApplicationHandler for App {
                     gfx.window.request_redraw();
                 }
                 self.repick();
+                self.update_panel();
+            }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                self.text_scale = text_scale(scale_factor);
+                self.update_panel();
             }
             WindowEvent::RedrawRequested => self.redraw(event_loop),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
@@ -566,6 +608,10 @@ mod tests {
         assert_ne!(view.camera, start.camera);
         assert_eq!(hit(character("r"), &mut view), Action::Redraw);
         assert_eq!(view.camera, start.camera);
+        let before = view;
+        assert_eq!(hit(character("p"), &mut view), Action::Panel);
+        assert_eq!(hit(character("P"), &mut view), Action::Panel);
+        assert_eq!(view, before, "the panel is not part of the view");
         assert_eq!(hit(character("x"), &mut view), Action::Nothing);
         assert_eq!(hit(named(NamedKey::Tab), &mut view), Action::Nothing);
         assert_eq!(hit(character("q"), &mut view), Action::Quit);

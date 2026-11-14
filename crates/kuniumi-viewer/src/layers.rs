@@ -11,6 +11,8 @@ use kuniumi_sim::metrics::{ElevationMetrics, HYPSOMETRY_BIN_M, Hypsometry, MAX_H
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
 use kuniumi_world::{FieldKind, World};
 
+use crate::inspect::format_field_value;
+
 /// The colour of every cell of a world without fields.
 pub const NO_FIELD: Rgb8 = [170, 170, 170];
 
@@ -32,9 +34,13 @@ pub struct Layer {
 }
 
 impl Layer {
-    /// The layer's legend in one line, for the terminal.
+    /// The layer's legend in one line, for the terminal and the panel: its
+    /// name, unit, colour map and range, the numbers as the cell's text
+    /// writes them ([`format_field_value`]: six significant digits, class
+    /// ids as integers).
     pub fn legend(&self) -> String {
-        let (name, min, max) = (&self.name, self.min, self.max);
+        let number = |x: f64| format_field_value(self.kind, x);
+        let (name, min, max) = (&self.name, number(self.min), number(self.max));
         let unit = if self.unit.is_empty() {
             "dimensionless"
         } else {
@@ -46,12 +52,16 @@ impl Layer {
             }
             Colormap::Viridis => format!("{name} ({unit}): viridis from {min} to {max}"),
             Colormap::Diverging { centre } => {
+                let centre = number(centre);
                 format!("{name} ({unit}): diverging around {centre}, from {min} to {max}")
             }
-            Colormap::Elevation { sea_level } => format!(
-                "{name} ({unit}): elevation, blue below the sea level at {sea_level} and green to \
-                 brown above, from {min} to {max}"
-            ),
+            Colormap::Elevation { sea_level } => {
+                let sea_level = number(sea_level);
+                format!(
+                    "{name} ({unit}): elevation, blue below the sea level at {sea_level} and green \
+                     to brown above, from {min} to {max}"
+                )
+            }
         }
     }
 }
@@ -398,6 +408,34 @@ mod tests {
             )
             .legend(),
             "f (K): diverging around 0, from -1 to 3"
+        );
+        // Numbers with six significant digits (MV-06), class ids as integers.
+        let sea_level = -698.708_956_986_991_8;
+        assert_eq!(
+            layer(
+                Colormap::Elevation { sea_level },
+                sea_level - 11_000.0,
+                sea_level + 9_000.0,
+                FieldKind::Quantity,
+                "m"
+            )
+            .legend(),
+            "f (m): elevation, blue below the sea level at -698.709 and green to brown above, from -11698.7 to 8301.29"
+        );
+        assert_eq!(
+            layer(
+                Colormap::Viridis,
+                0.1 + 0.2,
+                1.0 / 3.0,
+                FieldKind::Quantity,
+                "s"
+            )
+            .legend(),
+            "f (s): viridis from 0.3 to 0.333333"
+        );
+        assert_eq!(
+            layer(Colormap::Categorical, 0.0, 1.0e6, FieldKind::Class, "").legend(),
+            "f (class ids 0 to 1000000): categorical palette"
         );
     }
 }

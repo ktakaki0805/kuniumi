@@ -303,6 +303,17 @@ section: every change after which an existing seed produces a different world
   legend of the layer shown. `--screenshot` with `--cursor <x>,<y>` picks,
   highlights, marks and prints the cell under a pixel. A pick on a
   650,000-cell world takes under 0.5 ms (MV-04).
+- A panel over the globe of `kuniumi-viewer`, at the top left on a
+  translucent background: the text of the cell under the cursor (or "no
+  cell under the cursor"), the layer shown with its legend, and the legend
+  as a colour bar in the layer's colours with its range written under it.
+  Text is drawn with an 8 × 8 bitmap font ported from the public-domain
+  font8x8 (U+0020 to U+007E and the degree sign; other characters as `?`)
+  by a second pipeline, at an integer scale following the window's scale
+  factor; lines wrap at 64 columns or the window's width. P shows and
+  hides it; `--screenshot` with `--cursor` draws it at scale 1, and
+  screenshots without `--cursor` are unchanged. `tools/font8x8_table.py`
+  prints the font's tables from their source (MV-06).
 
 ### Changed
 
@@ -494,6 +505,10 @@ section: every change after which an existing seed produces a different world
 - `mise run msrv` leaves out `kuniumi-viewer`, whose minimum Rust version
   follows `wgpu` (1.87); the library crates and the CLI keep 1.85 (D-24,
   MV-02).
+- The legends of `kuniumi-viewer` write their numbers as the cell's text
+  does, with six significant digits and class ids as integers: the sea
+  level of an Earth-like world is `-698.709`, no longer
+  `-698.7089569869918` (MV-06).
 
 ### Removed
 

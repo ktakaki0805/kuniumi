@@ -25,16 +25,19 @@ Options:
   --size <w>x<h>       window or screenshot size in pixels (default: 1280x800)
   --screenshot <png>   render one frame without a window into a PNG and exit
   --cursor <x>,<y>     with --screenshot: pick the cell under that pixel,
-                       highlight it, mark the pixel and print the cell
+                       highlight it, mark the pixel, print the cell and
+                       draw the panel
   --benchmark <frames> spin the globe in the window for that many frames,
                        print the times between presented frames and exit
   --offscreen          with --benchmark: draw without a window instead and
                        time each frame until the GPU has finished it
   -h, --help           print this text
 
-Keys: Left/Right layer, Up/Down relief, S sea, R reset view, Esc or Q quit.
+Keys: Left/Right layer, Up/Down relief, S sea, P panel, R reset view, Esc or
+Q quit.
 Mouse: drag to rotate, wheel to zoom; the cell under the cursor is
-highlighted, and a click prints it.";
+highlighted and shown in the panel at the top left with the layer's legend,
+and a click prints it.";
 
 /// What the viewer does after loading the world.
 #[derive(Clone, Debug, PartialEq)]

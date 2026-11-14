@@ -8,11 +8,13 @@
 //! GPU through `wgpu` ([`gpu`]) in a `winit` window ([`app`]). The mouse
 //! turns and zooms the globe ([`camera`]), the keyboard changes the layer,
 //! the relief and the sea. The cell under the cursor is found on the drawn
-//! triangles ([`pick`]) and highlighted; a click prints its values
-//! ([`inspect`]). `--screenshot` renders one frame into a PNG without a
-//! window (with `--cursor`, the cell under a pixel picked, highlighted and
-//! printed); `--benchmark` times the frames of a spinning globe. The usage
-//! is in [`args::USAGE`].
+//! triangles ([`pick`]) and highlighted; its values ([`inspect`]) and the
+//! layer's legend are shown in a panel over the globe ([`panel`], drawn
+//! with a bitmap [`font`]), and a click prints them. `--screenshot` renders
+//! one frame into a PNG without a window (with `--cursor`, the cell under a
+//! pixel picked, highlighted, printed and shown in the panel);
+//! `--benchmark` times the frames of a spinning globe. The usage is in
+//! [`args::USAGE`].
 
 // The GPU works in `f32`. D-19 and rule 1 of docs/conventions.md,
 // "Determinism", let this crate (and kuniumi-gpu) use `f32` through this
@@ -23,10 +25,12 @@
 mod app;
 mod args;
 mod camera;
+mod font;
 mod gpu;
 mod inspect;
 mod layers;
 mod mesh;
+mod panel;
 mod pick;
 mod view;
 
@@ -255,6 +259,12 @@ fn run(args: &Args) -> Result<(), String> {
                 offscreen
                     .renderer()
                     .set_cell_colour(scene.mesh.cell_vertices(cell), colour);
+            }
+            if args.cursor.is_some() {
+                // The window's panel at text scale 1.
+                let lines = panel::lines(&scene.world, &scene.layers, picked_cell);
+                let quads = panel::layout(&lines, scene.layers.current(), 1, size);
+                offscreen.renderer().set_overlay(&quads);
             }
             offscreen.draw(&view.frame(aspect, &scene.relief))?;
             let mut pixels = offscreen.pixels()?;

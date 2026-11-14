@@ -105,6 +105,7 @@ parallel with later milestones.
 | [MV-06](MV-06-cell-panel.md) | On-screen cell panel in the viewer | MV-04 |
 | [MV-05](MV-05-relief-bound.md) | Relief exaggeration bounded by the deepest point | MV-02 |
 | [MV-03](MV-03-web-viewer.md) | Viewer in the browser | MV-02, MV-04, MV-06 |
+| [MV-07](MV-07-panel-height.md) | Panel height bounded by the window | MV-06 |
 
 ### M3 — Erosion and drainage
 

@@ -1,7 +1,8 @@
 //! The text that describes one cell: its id, latitude and longitude, the
 //! value of every field with its unit, and the legend of the layer shown
 //! (ticket MV-04). Printed to the terminal on a click and with
-//! `--screenshot --cursor`; MV-06 draws the same lines in the window.
+//! `--screenshot --cursor`, and drawn in the panel over the globe
+//! (`panel.rs`, MV-06).
 //!
 //! Angles are converted to degrees here, at the boundary
 //! (docs/conventions.md, Units); values keep the field's SI unit.
@@ -14,6 +15,10 @@ use crate::layers::Layers;
 
 /// The significant digits of a quantity in the text.
 pub const SIGNIFICANT_DIGITS: usize = 6;
+
+/// What a click prints, and the panel shows, when no cell is under the
+/// cursor.
+pub const NO_CELL: &str = "no cell under the cursor";
 
 /// `x` with [`SIGNIFICANT_DIGITS`] significant digits and trailing zeros
 /// trimmed: in fixed notation from 10⁻³ up to 10⁶ (after rounding), in
@@ -39,6 +44,17 @@ pub fn format_value(x: f64) -> String {
         trim_zeros(&format!("{x:.decimals$}")).into()
     } else {
         format!("{}e{exponent}", trim_zeros(mantissa))
+    }
+}
+
+/// `value` of a field of kind `kind` as the text writes it: a class id as
+/// an integer, anything else (a quantity, or a class value that is not a
+/// class id) by [`format_value`].
+pub fn format_field_value(kind: FieldKind, value: f64) -> String {
+    match kind {
+        // Class ids are integers below 2⁵³, exact as u64.
+        FieldKind::Class if Field::is_class_value(value) => format!("{}", value as u64),
+        _ => format_value(value),
     }
 }
 
@@ -85,12 +101,7 @@ pub fn cell_text(world: &World, layers: &Layers, cell: u32) -> Vec<String> {
     }
     let width = world.fields.iter().map(|f| f.name.len()).max().unwrap_or(0);
     for field in &world.fields {
-        let value = field.values[cell as usize];
-        let shown = match field.kind {
-            // Class ids are integers below 2⁵³, exact as u64.
-            FieldKind::Class if Field::is_class_value(value) => format!("{}", value as u64),
-            _ => format_value(value),
-        };
+        let shown = format_field_value(field.kind, field.values[cell as usize]);
         let unit = if field.unit.is_empty() {
             String::new()
         } else {
@@ -98,15 +109,23 @@ pub fn cell_text(world: &World, layers: &Layers, cell: u32) -> Vec<String> {
         };
         lines.push(format!("  {:<width$}  {shown}{unit}", field.name));
     }
-    if let Some(layer) = layers.current() {
-        lines.push(format!(
+    lines.extend(layer_line(layers));
+    lines
+}
+
+/// The line that names the layer shown, `layer 14/14: <legend>` (its
+/// index, the number of layers and its
+/// [`legend`](crate::layers::Layer::legend)), or `None` for a world without
+/// fields: the last line of [`cell_text`].
+pub fn layer_line(layers: &Layers) -> Option<String> {
+    layers.current().map(|layer| {
+        format!(
             "layer {}/{}: {}",
             layers.current_index() + 1,
             layers.len(),
             layer.legend()
-        ));
-    }
-    lines
+        )
+    })
 }
 
 // The tests use std's `to_degrees` as an independent reference.
@@ -207,6 +226,8 @@ mod tests {
         assert!(last.starts_with("layer "), "{last}");
         assert!(last.contains("plate_id (class ids 0 to "), "{last}");
 
+        assert_eq!(layer_line(&layers).as_ref(), text.last());
+
         // A world without fields.
         let mut empty = world;
         empty.fields.clear();
@@ -214,5 +235,21 @@ mod tests {
         assert_eq!(text.len(), 2);
         assert!(text[0].starts_with("cell 3 of 1000, lat "));
         assert_eq!(text[1], "no fields");
+        assert_eq!(layer_line(&Layers::new(&empty)), None);
+        assert_eq!(NO_CELL, "no cell under the cursor");
+    }
+
+    #[test]
+    fn field_values_by_kind() {
+        assert_eq!(format_field_value(FieldKind::Class, 11.0), "11");
+        assert_eq!(format_field_value(FieldKind::Class, 1.0e6), "1000000");
+        assert_eq!(format_field_value(FieldKind::Class, 2.5), "2.5");
+        assert_eq!(format_field_value(FieldKind::Class, -1.0), "-1");
+        assert_eq!(format_field_value(FieldKind::Class, f64::NAN), "NaN");
+        assert_eq!(format_field_value(FieldKind::Quantity, 1.0e6), "1e6");
+        assert_eq!(
+            format_field_value(FieldKind::Quantity, -698.70895),
+            "-698.709"
+        );
     }
 }

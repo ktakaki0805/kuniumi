@@ -1,13 +1,17 @@
-//! The GPU side: the globe's buffers and pipelines, drawing a frame into a
-//! texture view, and screenshots read back from an offscreen texture.
+//! The GPU side: the globe's buffers and pipelines, the panel drawn over
+//! it, drawing a frame into a texture view, and screenshots read back from
+//! an offscreen texture.
 //!
 //! Buffers: the vertices (direction and height, `Float32x4`), the vertex
 //! colours (`Unorm8x4`, rewritten when the layer changes), the indices
 //! (`Uint32`) and one uniform buffer (`shader.wgsl`). Two pipelines share
 //! them: the terrain, opaque with depth writes, and the sea, the same mesh
-//! at the sea level, translucent, depth-tested without writes. Depth is
-//! `Depth32Float`; the colour target is an sRGB view, with 4× multisampling
-//! where the adapter supports it.
+//! at the sea level, translucent, depth-tested without writes. A third
+//! pipeline (`overlay.wgsl`, MV-06) draws the panel's quads
+//! (`panel::vertices`) last, alpha-blended over the globe, from their own
+//! vertex buffer, the font's atlas (`R8Unorm`) and a uniform with the
+//! viewport's size. Depth is `Depth32Float`; the colour target is an sRGB
+//! view, with 4× multisampling where the adapter supports it.
 
 use core::future::Future;
 use core::num::NonZeroU64;
@@ -21,11 +25,20 @@ use kuniumi_io::render::BACKGROUND;
 use kuniumi_math::det;
 use wgpu::util::DeviceExt;
 
+use crate::font;
 use crate::mesh::GlobeMesh;
+use crate::panel::{self, Quad, VERTEX_BYTES, VERTICES_PER_QUAD};
 use crate::view::Frame;
 
 /// The shader of both pipelines.
 pub const SHADER: &str = include_str!("shader.wgsl");
+
+/// The shader of the panel's pipeline.
+pub const OVERLAY_SHADER: &str = include_str!("overlay.wgsl");
+
+/// The size of the uniform block of `overlay.wgsl` (bytes): one
+/// `vec4<f32>`.
+const OVERLAY_UNIFORM_SIZE: u64 = 16;
 
 /// The colour of the sea surface (sRGB).
 pub const SEA_COLOUR: Rgb8 = [30, 80, 160];
@@ -45,6 +58,10 @@ const UNIFORM_SIZE: u64 = 112;
 
 /// The multisample count used where supported.
 const MSAA: u32 = 4;
+
+/// The size of the panel's first vertex buffer (bytes); it grows to the
+/// next power of two when the quads need more.
+const OVERLAY_BUFFER_BYTES: u64 = 1 << 16;
 
 /// Runs `future` to completion on this thread. wgpu's native futures (adapter
 /// and device requests) are ready when first polled, so this spins at most a
@@ -135,7 +152,155 @@ pub struct Renderer {
     colours: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    /// The panel's pipeline, its uniform (the viewport's size), its bind
+    /// group (the uniform and the atlas) and its vertices.
+    overlay: wgpu::RenderPipeline,
+    overlay_uniforms: wgpu::Buffer,
+    overlay_bind_group: wgpu::BindGroup,
+    overlay_vertices: wgpu::Buffer,
+    overlay_vertex_count: u32,
     targets: Option<Targets>,
+}
+
+/// A vertex buffer for the panel of `size` bytes.
+fn overlay_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("panel vertices"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// The panel's pipeline drawing into `format` with `sample_count` samples,
+/// and its bind group for the atlas made on `queue`.
+fn overlay_pipeline(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    format: wgpu::TextureFormat,
+    sample_count: u32,
+) -> (wgpu::RenderPipeline, wgpu::Buffer, wgpu::BindGroup) {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("panel"),
+        source: wgpu::ShaderSource::Wgsl(OVERLAY_SHADER.into()),
+    });
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("panel"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(OVERLAY_UNIFORM_SIZE),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    });
+    let [width, height] = font::ATLAS_SIZE;
+    let atlas = device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("font atlas"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &font::atlas(),
+    );
+    let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("panel uniforms"),
+        size: OVERLAY_UNIFORM_SIZE,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("panel"),
+        layout: &layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(
+                    &atlas.create_view(&Default::default()),
+                ),
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("panel"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("panel"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_overlay"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: VERTEX_BYTES as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4],
+            })],
+        },
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            cull_mode: None,
+            ..Default::default()
+        },
+        // In the globe's pass, so with its depth buffer, but always drawn
+        // and never written to it.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: sample_count,
+            ..Default::default()
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_overlay"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    (pipeline, uniforms, bind_group)
 }
 
 impl Renderer {
@@ -277,6 +442,9 @@ impl Renderer {
                 .collect::<Vec<u8>>(),
             usage: wgpu::BufferUsages::INDEX,
         });
+        let (overlay, overlay_uniforms, overlay_bind_group) =
+            overlay_pipeline(&device, &queue, format, sample_count);
+        let overlay_vertices = overlay_buffer(&device, OVERLAY_BUFFER_BYTES);
         Self {
             device,
             queue,
@@ -290,8 +458,28 @@ impl Renderer {
             colours,
             indices,
             index_count: mesh.indices.len() as u32,
+            overlay,
+            overlay_uniforms,
+            overlay_bind_group,
+            overlay_vertices,
+            overlay_vertex_count: 0,
             targets: None,
         }
+    }
+
+    /// Replaces the panel's quads (`panel::layout`), drawn over the globe
+    /// from the next [`draw`](Self::draw) on; none draws no panel.
+    pub fn set_overlay(&mut self, quads: &[Quad]) {
+        let bytes = panel::vertices(quads);
+        let needed = bytes.len() as u64;
+        if needed > self.overlay_vertices.size() {
+            self.overlay_vertices = overlay_buffer(&self.device, needed.next_power_of_two());
+        }
+        if needed > 0 {
+            // A multiple of 4 bytes (20 per vertex), as wgpu requires.
+            self.queue.write_buffer(&self.overlay_vertices, 0, &bytes);
+        }
+        self.overlay_vertex_count = (quads.len() * VERTICES_PER_QUAD) as u32;
     }
 
     /// The device.
@@ -327,6 +515,12 @@ impl Renderer {
     pub fn draw(&mut self, view: &wgpu::TextureView, width_px: u32, height_px: u32, frame: &Frame) {
         self.queue
             .write_buffer(&self.uniforms, 0, &uniform_bytes(frame));
+        let viewport: Vec<u8> = [width_px as f32, height_px as f32, 0.0, 0.0]
+            .iter()
+            .flat_map(|x| x.to_ne_bytes())
+            .collect();
+        self.queue
+            .write_buffer(&self.overlay_uniforms, 0, &viewport);
         self.prepare_targets(width_px, height_px);
         let targets = self.targets.as_ref().expect("prepared above");
         let (attachment, resolve_target) = match &targets.colour {
@@ -372,6 +566,12 @@ impl Renderer {
             if frame.sea {
                 pass.set_pipeline(&self.sea);
                 pass.draw_indexed(0..self.index_count, 0, 0..1);
+            }
+            if self.overlay_vertex_count > 0 {
+                pass.set_pipeline(&self.overlay);
+                pass.set_bind_group(0, &self.overlay_bind_group, &[]);
+                pass.set_vertex_buffer(0, self.overlay_vertices.slice(..));
+                pass.draw(0..self.overlay_vertex_count, 0..1);
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -489,10 +689,10 @@ impl Offscreen {
         })
     }
 
-    /// The renderer, for changes to the globe's colours before a
-    /// [`draw`](Self::draw).
-    pub fn renderer(&self) -> &Renderer {
-        &self.renderer
+    /// The renderer, for changes to the globe's colours and the panel
+    /// before a [`draw`](Self::draw).
+    pub fn renderer(&mut self) -> &mut Renderer {
+        &mut self.renderer
     }
 
     /// Draws `frame` and waits until the GPU has finished it.
@@ -604,6 +804,98 @@ mod tests {
         assert_eq!(
             module.types[uniforms.ty].inner.size(module.to_ctx()),
             UNIFORM_SIZE as u32
+        );
+    }
+
+    #[test]
+    fn overlay_shader_parses_and_validates() {
+        let module = naga::front::wgsl::parse_str(OVERLAY_SHADER)
+            .unwrap_or_else(|e| panic!("{}", e.emit_to_string(OVERLAY_SHADER)));
+        naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
+        )
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        let mut entry_points: Vec<&str> = module
+            .entry_points
+            .iter()
+            .map(|e| e.name.as_str())
+            .collect();
+        entry_points.sort_unstable();
+        assert_eq!(entry_points, ["fs_overlay", "vs_overlay"]);
+        let global = |name: &str| {
+            module
+                .global_variables
+                .iter()
+                .find(|(_, v)| v.name.as_deref() == Some(name))
+                .unwrap_or_else(|| panic!("no global `{name}`"))
+                .1
+        };
+        // The bindings of `overlay_pipeline`'s bind group layout (review
+        // R1-3).
+        let binding = |name: &str| global(name).binding;
+        assert_eq!(
+            binding("viewport"),
+            Some(naga::ResourceBinding {
+                group: 0,
+                binding: 0
+            })
+        );
+        assert_eq!(
+            binding("atlas"),
+            Some(naga::ResourceBinding {
+                group: 0,
+                binding: 1
+            })
+        );
+        // The uniform block has the size the Rust side writes.
+        let viewport = global("viewport");
+        assert_eq!(
+            module.types[viewport.ty].inner.size(module.to_ctx()),
+            OVERLAY_UNIFORM_SIZE as u32
+        );
+        // The atlas: a 2D float texture, read without a sampler.
+        assert_eq!(
+            module.types[global("atlas").ty].inner,
+            naga::TypeInner::Image {
+                dim: naga::ImageDimension::D2,
+                arrayed: false,
+                class: naga::ImageClass::Sampled {
+                    kind: naga::ScalarKind::Float,
+                    multi: false,
+                },
+            }
+        );
+        // The vertex inputs match `panel::vertices`: position and texel as
+        // two f32 each, the colour as four normalised channels.
+        let vs = module
+            .entry_points
+            .iter()
+            .find(|e| e.name == "vs_overlay")
+            .unwrap();
+        let inputs: Vec<(u32, naga::TypeInner)> = vs
+            .function
+            .arguments
+            .iter()
+            .map(|a| match a.binding {
+                Some(naga::Binding::Location { location, .. }) => {
+                    (location, module.types[a.ty].inner.clone())
+                }
+                ref other => panic!("{other:?}"),
+            })
+            .collect();
+        let vector = |size| naga::TypeInner::Vector {
+            size,
+            scalar: naga::Scalar::F32,
+        };
+        assert_eq!(
+            inputs,
+            [
+                (0, vector(naga::VectorSize::Bi)),
+                (1, vector(naga::VectorSize::Bi)),
+                (2, vector(naga::VectorSize::Quad)),
+            ]
         );
     }
 
