@@ -327,6 +327,17 @@ section: every change after which an existing seed produces a different world
 - `world_dir::read_with`: reads a world directory through any reader of its
   files, such as the bytes a browser hands over; `world_dir::read` is
   `read_with` on the file system (MV-03).
+- `kuniumi_sim::drainage::Drainage`, the drainage graph on the global grid:
+  `build(grid, height_m, sea_level_m, radius_m)` sends each land cell to the
+  lower neighbour of steepest slope `(h_i − h_j)/(d_ij R)` (ties to the lower
+  index); ocean cells (`h ≤` sea level) are outlets and land cells without a
+  lower neighbour pits, both their own receivers; donors in CSR form,
+  ascending; a breadth-first stack from the base levels (in index order)
+  through the donors, each cell after its receiver. `accumulate` sums a
+  quantity per cell downstream in reverse stack order: drainage area (m²)
+  from the cell areas, discharge (m³/s) from precipitation times area.
+  O(n): 11 ms for an Earth world of 650,000 cells, 25 ms for random
+  heights, in release (M3-01).
 
 ### Changed
 

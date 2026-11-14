@@ -10,13 +10,16 @@
 //! units. Climate and erosion will alternate two or three times (see the
 //! design document, "侵食と地形発達").
 //!
-//! [`metrics`] measures finished worlds against Earth (design, "検証方法").
+//! [`drainage`] routes water over a surface, for erosion and hydrology
+//! (design, "侵食と地形発達 / 1ステップの処理"). [`metrics`] measures
+//! finished worlds against Earth (design, "検証方法").
 
 use core::fmt;
 
 use kuniumi_sphere::BuildError;
 use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, World};
 
+pub mod drainage;
 pub mod metrics;
 pub mod pipeline;
 pub mod stages;
