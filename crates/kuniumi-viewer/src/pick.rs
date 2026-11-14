@@ -58,9 +58,10 @@
 //!    lower cell index.
 //! 5. Below `r_bot` = [`MIN_BOTTOM_RADIUS`], or where the bound of step 1
 //!    does not hold (a vertex at a radius of 0 or less, a cap of a
-//!    hemisphere or more; a small world at a high
-//!    exaggeration, drawn inside out until MV-05 bounds the relief), every
-//!    triangle of the mesh is tested instead: slow, but still what is drawn.
+//!    hemisphere or more), every triangle of the mesh is tested instead:
+//!    slow, but still what is drawn. The viewer never draws a vertex below
+//!    half the radius (`view::Relief::max_relief`, MV-05), so on its grids
+//!    this applies only to an exaggeration that it does not offer.
 //!
 //! The cell is the one whose drawn triangle is hit, not the nearest centre,
 //! so the pick agrees with the drawn fans up to the GPU's `f32` rounding.

@@ -49,7 +49,7 @@ use crate::gpu::Offscreen;
 use crate::layers::Layers;
 use crate::mesh::GlobeMesh;
 use crate::pick::{Hit, Picker};
-use crate::view::{Relief, View};
+use crate::view::{MIN_DRAWN_RADIUS, Relief, View, relief_text};
 
 /// A world and what the viewer derives from it once.
 pub struct Scene {
@@ -96,6 +96,7 @@ impl Scene {
         let relief = Relief {
             radius_m,
             max_height_m: mesh.max_height_m,
+            min_height_m: mesh.min_height_m,
             present: heights.is_some(),
         };
         let picker = Picker::new(&mesh);
@@ -173,6 +174,41 @@ pub fn crosshair(pixels: &mut [Rgb8], width_px: u32, height_px: u32, x_px: u32, 
     }
 }
 
+/// The view at start: the camera, the relief exaggeration and the sea of
+/// `args`, the exaggeration lowered to the most the world allows
+/// ([`Relief::max_relief`]), the camera's distance clamped above the
+/// highest drawn point.
+pub fn start_view(args: &Args, relief: &Relief) -> View {
+    let mut view = View {
+        camera: OrbitCamera {
+            lat_rad: args.lat_rad,
+            lon_rad: args.lon_rad,
+            distance: args.distance,
+        },
+        relief: args.relief.min(relief.max_relief()),
+        sea: args.sea,
+    };
+    view.camera.clamp(view.top(relief));
+    view
+}
+
+/// The line printed when the world lowered the relief `asked` to `given`
+/// ([`start_view`]), naming its deepest point; `None` if it did not, or by
+/// less than the two decimals the title shows.
+pub fn relief_note(asked: f64, given: f64, relief: &Relief) -> Option<String> {
+    (relief_text(given) != relief_text(asked)).then(|| {
+        format!(
+            "relief x{} lowered to x{}, the most for this world: its deepest point, {:.1} km \
+             below the sea level on a radius of {:.0} km, stays at {} of the radius",
+            relief_text(asked),
+            relief_text(given),
+            -relief.min_height_m / 1e3,
+            relief.radius_m / 1e3,
+            MIN_DRAWN_RADIUS
+        )
+    })
+}
+
 fn main() -> ExitCode {
     match args::parse(std::env::args().skip(1)) {
         Err(message) => {
@@ -207,16 +243,10 @@ fn run(args: &Args) -> Result<(), String> {
         scene.mesh.indices.len() / 3,
         start.elapsed().as_secs_f64() - read_s
     );
-    let mut view = View {
-        camera: OrbitCamera {
-            lat_rad: args.lat_rad,
-            lon_rad: args.lon_rad,
-            distance: args.distance,
-        },
-        relief: args.relief,
-        sea: args.sea,
-    };
-    view.camera.clamp(view.top(&scene.relief));
+    let mut view = start_view(args, &scene.relief);
+    if let Some(note) = relief_note(args.relief, view.relief, &scene.relief) {
+        println!("{note}");
+    }
     let size = (args.width_px, args.height_px);
     let aspect = f64::from(size.0) / f64::from(size.1);
     match &args.mode {
@@ -335,7 +365,7 @@ mod tests {
             world.params.radius_m.to_bits()
         );
         assert_eq!(scene.layers.current().unwrap().name, SURFACE_HEIGHT);
-        let mut top = 0.0;
+        let (mut top, mut bottom) = (0.0, 0.0);
         for (cell, h) in heights.iter().enumerate() {
             let above = h - sea_level;
             let centre = scene.mesh.vertices[scene.mesh.cell_vertex_offsets[cell] as usize];
@@ -343,9 +373,13 @@ mod tests {
             if above > top {
                 top = above;
             }
+            if above < bottom {
+                bottom = above;
+            }
         }
-        assert!(top > 0.0);
+        assert!(top > 0.0 && bottom < 0.0);
         assert_eq!(scene.relief.max_height_m.to_bits(), top.to_bits());
+        assert_eq!(scene.relief.min_height_m.to_bits(), bottom.to_bits());
 
         let plates = Scene::new("w".into(), world.clone(), Some("plate_id")).unwrap();
         assert_eq!(plates.layers.current().unwrap().name, "plate_id");
@@ -376,6 +410,7 @@ mod tests {
         let scene = Scene::new("w".into(), flat, None).unwrap();
         assert!(!scene.relief.present);
         assert_eq!(scene.relief.max_height_m.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(scene.relief.min_height_m.to_bits(), 0.0_f64.to_bits());
         assert!(
             scene
                 .mesh
@@ -422,6 +457,29 @@ mod tests {
             ..view
         };
         assert_eq!(scene.pick(&far, 1280, 800, 0.5, 0.5), None);
+    }
+
+    #[test]
+    fn relief_note_names_the_deepest_point() {
+        let small = Relief {
+            radius_m: 1_500_000.0,
+            max_height_m: 0.0,
+            min_height_m: -50_681.6,
+            present: true,
+        };
+        let cap = small.max_relief();
+        assert_eq!(
+            relief_note(100.0, cap, &small).as_deref(),
+            Some(
+                "relief x100 lowered to x14.8, the most for this world: its deepest point, \
+                 50.7 km below the sea level on a radius of 1500 km, stays at 0.5 of the radius"
+            )
+        );
+        assert_eq!(relief_note(10.0, 10.0, &small), None);
+        assert_eq!(relief_note(0.0, 0.0, &small), None);
+        // Lowered by less than the title shows: 14.799 to 14.798.
+        assert_eq!(relief_note(14.799, cap, &small), None);
+        assert!(relief_note(14.81, cap, &small).is_some());
     }
 
     #[test]

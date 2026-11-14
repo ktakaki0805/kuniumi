@@ -18,7 +18,7 @@ use crate::gpu::{Renderer, block_on, request_device};
 use crate::inspect::{NO_CELL, cell_text};
 use crate::layers::highlight;
 use crate::panel::{self, text_scale};
-use crate::view::{View, relief_down, relief_up};
+use crate::view::{View, relief_down, relief_line, relief_text, relief_up};
 
 /// How far the benchmark turns the globe per frame (rad): 0.5°.
 pub const BENCHMARK_STEP_RAD: f64 = 0.5 * RADIANS_PER_DEGREE;
@@ -245,7 +245,7 @@ impl App {
         format!(
             "kuniumi-viewer - {} - {layer} - relief x{} - sea {}",
             self.scene.dir.display(),
-            self.view.relief,
+            relief_text(self.view.relief),
             if self.view.sea { "on" } else { "off" }
         )
     }
@@ -440,12 +440,12 @@ fn press(key: &Key, scene: &mut Scene, view: &mut View, start: &View) -> Action 
         Key::Named(NamedKey::ArrowLeft) => scene.layers.previous(),
         Key::Named(NamedKey::ArrowUp | NamedKey::ArrowDown) => {
             view.relief = if *key == Key::Named(NamedKey::ArrowUp) {
-                relief_up(view.relief)
+                relief_up(view.relief, scene.relief.max_relief())
             } else {
                 relief_down(view.relief)
             };
             view.camera.clamp(top(view));
-            println!("relief x{}", view.relief);
+            println!("{}", relief_line(view.relief, scene.relief.max_relief()));
             return Action::Redraw;
         }
         Key::Named(NamedKey::Escape) => return Action::Quit,
@@ -563,10 +563,14 @@ impl ApplicationHandler for App {
 
 #[cfg(test)]
 mod tests {
+    use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
     use kuniumi_world::{PlanetParams, Settings};
 
     use super::*;
+    use crate::args::Parsed;
     use crate::camera::OrbitCamera;
+    use crate::start_view;
+    use crate::view::{MAX_RELIEF, MIN_DRAWN_RADIUS};
 
     #[test]
     fn keys() {
@@ -641,6 +645,148 @@ mod tests {
             close.camera.distance.to_bits(),
             (close.top(&scene.relief) + crate::camera::MIN_CLEARANCE).to_bits()
         );
+    }
+
+    /// The planet of review R3-1 of MV-02: the smallest radius of D-12 with
+    /// Earth's bulk density (g = 9.80665 m/s² × 1,500/6,371 = 2.3089 m/s²)
+    /// and, like every other parameter, Earth's ocean volume.
+    fn small_planet() -> PlanetParams {
+        PlanetParams {
+            radius_m: 1_500_000.0,
+            surface_gravity_m_s2: 2.3089,
+            ..PlanetParams::earth()
+        }
+    }
+
+    /// The scene of `params`, seed 1, 100,000 cells.
+    fn scene_of(params: &PlanetParams) -> Scene {
+        let settings = Settings {
+            cells: 100_000,
+            allow_partial: true,
+            ..Settings::default()
+        };
+        let world = kuniumi_sim::generate(params, &settings, 1, &mut |_| {}).unwrap();
+        Scene::new("w".into(), world, None).unwrap()
+    }
+
+    /// Every relief exaggeration the viewer reaches on `scene`, without
+    /// repeats: each start relief that `--relief` gives (and the default),
+    /// through `start_view`, and each relief that ten presses of Up, then
+    /// ten of Down, then ten of Up reach from it.
+    fn reachable_reliefs(scene: &mut Scene) -> Vec<f64> {
+        let mut lists: Vec<Vec<String>> = vec![vec!["w".into()]];
+        let given = ["0", "0.5", "14", "14.79", "15", "37", "99.5"];
+        let steps = crate::view::RELIEF_STEPS.map(|step| step.to_string());
+        for relief in given.iter().map(|r| r.to_string()).chain(steps) {
+            lists.push(vec!["w".into(), "--relief".into(), relief]);
+        }
+        let mut reached = Vec::new();
+        for list in lists {
+            let Ok(Parsed::Run(args)) = crate::args::parse(list.clone()) else {
+                panic!("{list:?}");
+            };
+            let start = start_view(&args, &scene.relief);
+            reached.push(start.relief);
+            let mut view = start;
+            for key in [NamedKey::ArrowUp, NamedKey::ArrowDown, NamedKey::ArrowUp] {
+                for _ in 0..10 {
+                    press(&Key::Named(key), scene, &mut view, &start);
+                    reached.push(view.relief);
+                }
+            }
+        }
+        reached.sort_by(f64::total_cmp);
+        reached.dedup_by(|a, b| a.to_bits() == b.to_bits());
+        reached
+    }
+
+    /// The lowest radius at which a vertex of `scene` is drawn at `relief`,
+    /// asserting that every vertex lies at [`MIN_DRAWN_RADIUS`] or above:
+    /// in `f32` as the shader computes `1 + σ·h`, with separate roundings
+    /// and with a fused multiply-add, and in `f64` from the `f32` values as
+    /// the picker does, with the `σ` the frame hands to the GPU.
+    fn lowest_drawn_radius(scene: &Scene, relief: f64) -> f64 {
+        let view = View {
+            camera: OrbitCamera {
+                lat_rad: 0.0,
+                lon_rad: 0.0,
+                distance: 3.0,
+            },
+            relief,
+            sea: true,
+        };
+        let sigma = view.frame(1.6, &scene.relief).relief_scale_per_m;
+        let floor = MIN_DRAWN_RADIUS as f32;
+        let mut lowest = f64::INFINITY;
+        for (k, v) in scene.mesh.vertices.iter().enumerate() {
+            let h = v[3];
+            let separate = 1.0_f32 + sigma * h;
+            let fused = sigma.mul_add(h, 1.0);
+            let picker = 1.0 + f64::from(sigma) * f64::from(h);
+            assert!(
+                separate >= floor && fused >= floor && picker >= MIN_DRAWN_RADIUS,
+                "×{relief}, vertex {k} at {h} m: {separate}, {fused}, {picker}"
+            );
+            if picker < lowest {
+                lowest = picker;
+            }
+        }
+        lowest
+    }
+
+    #[test]
+    fn relief_keeps_the_deepest_point_of_a_small_world_above_the_floor() {
+        let mut scene = scene_of(&small_planet());
+        // The deepest cell below the sea level, from the world's fields.
+        let world = &scene.world;
+        let heights = &world.field(SURFACE_HEIGHT).unwrap().values;
+        let depth_m = heights
+            .iter()
+            .map(|h| world.sea_level_m - h)
+            .fold(0.0, f64::max);
+        assert!(
+            (50_000.0..51_000.0).contains(&depth_m),
+            "50.7 km in review R3-1 of MV-02: {depth_m}"
+        );
+        // By hand: (1 − 0.5) × 1,500 km/50.7 km = 14.80.
+        let cap = scene.relief.max_relief();
+        let by_hand = 0.5 * 1_500_000.0 / depth_m;
+        assert!((cap - by_hand).abs() < 1e-4, "{cap} {by_hand}");
+        assert!(cap < MAX_RELIEF);
+        let reached = reachable_reliefs(&mut scene);
+        assert_eq!(reached.last().unwrap().to_bits(), cap.to_bits());
+        for &relief in &reached {
+            lowest_drawn_radius(&scene, relief);
+        }
+        // At the cap the deepest point lies just above half the radius.
+        let lowest = lowest_drawn_radius(&scene, cap);
+        assert!(lowest < MIN_DRAWN_RADIUS + 1e-5, "{lowest}");
+        // Above the cap it would not (the bound is tight, not a margin).
+        let view = View {
+            camera: OrbitCamera {
+                lat_rad: 0.0,
+                lon_rad: 0.0,
+                distance: 3.0,
+            },
+            relief: 15.0,
+            sea: true,
+        };
+        let sigma = f64::from(view.frame(1.6, &scene.relief).relief_scale_per_m);
+        assert!(1.0 - sigma * depth_m < MIN_DRAWN_RADIUS);
+    }
+
+    #[test]
+    fn relief_on_earth_reaches_the_largest_step_above_the_floor() {
+        let mut scene = scene_of(&PlanetParams::earth());
+        assert_eq!(scene.relief.max_relief().to_bits(), MAX_RELIEF.to_bits());
+        let reached = reachable_reliefs(&mut scene);
+        assert_eq!(reached.last().unwrap().to_bits(), MAX_RELIEF.to_bits());
+        for &relief in &reached {
+            lowest_drawn_radius(&scene, relief);
+        }
+        // At ×100 Earth's deepest cell, some 7 km down, lies near 0.89.
+        let lowest = lowest_drawn_radius(&scene, MAX_RELIEF);
+        assert!((0.85..0.92).contains(&lowest), "{lowest}");
     }
 
     #[test]

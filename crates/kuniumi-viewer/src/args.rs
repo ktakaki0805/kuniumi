@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use kuniumi_math::units::deg_to_rad;
 
-use crate::view::RELIEF_STEPS;
+use crate::view::MAX_RELIEF;
 
 /// The usage text printed by `--help`.
 pub const USAGE: &str = "\
@@ -16,7 +16,9 @@ Shows a world directory written by `kuniumi generate` as a 3D globe.
 Options:
   --layer <name>       field shown first (default: surface_height if present,
                        else the first field)
-  --relief <factor>    relief exaggeration, from 0 to 100 (default: 20)
+  --relief <factor>    relief exaggeration, from 0 to 100 (default: 20),
+                       lowered on a world whose deepest point it would draw
+                       closer to the centre than half the radius
   --no-sea             start without the sea-level surface
   --lat-deg <deg>      latitude under the camera (default: 20)
   --lon-deg <deg>      longitude under the camera (default: 0)
@@ -33,8 +35,8 @@ Options:
                        time each frame until the GPU has finished it
   -h, --help           print this text
 
-Keys: Left/Right layer, Up/Down relief, S sea, P panel, R reset view, Esc or
-Q quit.
+Keys: Left/Right layer, Up/Down relief (at most what the world allows), S sea,
+P panel, R reset view, Esc or Q quit.
 Mouse: drag to rotate, wheel to zoom; the cell under the cursor is
 highlighted and shown in the panel at the top left with the layer's legend,
 and a click prints it.";
@@ -64,7 +66,8 @@ pub struct Args {
     pub world_dir: PathBuf,
     /// The field shown first, if given.
     pub layer: Option<String>,
-    /// The relief exaggeration, from 0 to 100.
+    /// The relief exaggeration asked for, from 0 to 100; the world may
+    /// lower it (`start_view`).
     pub relief: f64,
     /// Whether the sea-level surface is drawn.
     pub sea: bool,
@@ -96,10 +99,6 @@ pub enum Parsed {
 
 /// The default relief exaggeration.
 pub const DEFAULT_RELIEF: f64 = 20.0;
-/// The largest relief exaggeration, the largest key step: at ×1000, Earth's
-/// trenches (7 km deep on a radius of 6,371 km) would be drawn below the
-/// centre of the planet, turned inside out.
-const MAX_RELIEF: f64 = RELIEF_STEPS[RELIEF_STEPS.len() - 1];
 /// The default latitude under the camera (degrees).
 const DEFAULT_LAT_DEG: f64 = 20.0;
 /// The default camera distance (planet radii from the centre).

@@ -36,6 +36,8 @@ pub struct GlobeMesh {
     pub cell_vertex_offsets: Vec<u32>,
     /// The largest height above the sea level of any vertex (m), at least 0.
     pub max_height_m: f64,
+    /// The lowest height above the sea level of any vertex (m), at most 0.
+    pub min_height_m: f64,
 }
 
 impl GlobeMesh {
@@ -84,11 +86,15 @@ impl GlobeMesh {
         }
         cell_vertex_offsets.push(vertices.len() as u32);
         let max_height_m = heights.iter().copied().fold(0.0, f64::max);
+        // The Voronoi vertices' means of three lie within their cells'
+        // heights, so the extremes are those of the cells.
+        let min_height_m = heights.iter().copied().fold(0.0, f64::min);
         Self {
             vertices,
             indices,
             cell_vertex_offsets,
             max_height_m,
+            min_height_m,
         }
     }
 
@@ -198,6 +204,14 @@ mod tests {
             );
             let top = heights(&grid).into_iter().fold(0.0, f64::max);
             assert_eq!(mesh.max_height_m.to_bits(), top.to_bits());
+            // The lowest height of `heights`, cell 0's: 0 × 731.3 − 5,000.1.
+            assert_eq!(mesh.min_height_m.to_bits(), (-5_000.1_f64).to_bits());
+            // No vertex lies lower, up to the f32 rounding of its height.
+            assert!(
+                mesh.vertices
+                    .iter()
+                    .all(|v| f64::from(v[3]) >= mesh.min_height_m * (1.0 + 1e-7))
+            );
         }
     }
 
@@ -313,14 +327,18 @@ mod tests {
             }
         }
         assert_eq!(mesh.max_height_m.to_bits(), 500.0_f64.to_bits());
-        // A world below the sea level everywhere still has a top of 0.
-        assert_eq!(
-            (GlobeMesh::new(&grid, &[-1.0; 6]).max_height_m).to_bits(),
-            0.0_f64.to_bits()
-        );
+        assert_eq!(mesh.min_height_m.to_bits(), (-600.0_f64).to_bits());
+        // A world below the sea level everywhere still has a top of 0, and
+        // one above it everywhere a bottom of 0.
+        let sea = GlobeMesh::new(&grid, &[-1.0; 6]);
+        assert_eq!(sea.max_height_m.to_bits(), 0.0_f64.to_bits());
+        assert_eq!(sea.min_height_m.to_bits(), (-1.0_f64).to_bits());
+        let land = GlobeMesh::new(&grid, &[1.0; 6]);
+        assert_eq!(land.min_height_m.to_bits(), 0.0_f64.to_bits());
         // Non-finite heights are drawn at 0.
         let odd = GlobeMesh::new(&grid, &[f64::NAN, 1.0, 1.0, 1.0, 1.0, f64::INFINITY]);
         assert_eq!(odd.vertices[0][3].to_bits(), 0.0_f32.to_bits());
+        assert_eq!(odd.min_height_m.to_bits(), 0.0_f64.to_bits());
         assert!(odd.vertices.iter().all(|v| v[3].is_finite()));
     }
 

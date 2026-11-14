@@ -64,10 +64,12 @@ cargo run --release -p kuniumi-viewer -- out/world --layer plate_id --screenshot
 
 Drag to turn the globe and use the wheel to zoom; Left and Right choose the
 field shown, in the colours of its PNG map; Up and Down change the relief
-exaggeration; S shows or hides the sea surface; R resets the view; Esc or Q
-quits. The cell under the cursor is highlighted and its values are shown
-in a panel at the top left with the legend of the field shown (P hides and
-shows it); a click prints them to the terminal. `--help` lists the options
+exaggeration (up to ×100, less on a world whose deepest point it would draw
+closer to the centre than half the radius); S shows or hides the sea
+surface; R resets the view; Esc or Q quits. The cell under the cursor is
+highlighted and its values are shown in a panel at the top left with the
+legend of the field shown (P hides and shows it); a click prints them to the
+terminal. `--help` lists the options
 (start view, screenshots without a window, with `--cursor` the cell under a
 pixel and the panel, a frame-time benchmark).
 

@@ -591,6 +591,15 @@ section: every change after which an existing seed produces a different world
   `world_dir::FIXED_FILES` (`world.json`, `grid.kgrid`, `metrics.txt`,
   `hypsometry.png`): only `hypsometry` today. No stage uses the name;
   every output for an existing seed is unchanged (M2-19).
+- `kuniumi-viewer` no longer turns a small world inside out at a high relief
+  exaggeration: each world caps it so that its deepest point is drawn at
+  half the radius or above (`--relief`, the start view and Up; a line on
+  the terminal says when the relief asked for is lowered). On a 1,500 km
+  world with Earth's ocean, whose sea floor lies up to 50.7 km deep, the
+  most is ×14.8 instead of ×100 (the drawn radius fell below 0 above
+  ×29.6); Earth keeps ×100. The window title shows the relief with at most
+  two decimals, and the comment of `MAX_RELIEF` gives Earth's deepest point
+  as about 11 km below the sea level instead of 7 km (MV-05).
 
 ### World-breaking
 
