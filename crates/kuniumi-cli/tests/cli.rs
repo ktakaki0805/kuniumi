@@ -149,11 +149,20 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         );
     }
     let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+    // The default erosion settings as Python's repr prints them:
+    // repr(5e-3 / 31557600.0), repr(1e4 * 31557600.0).
     for line in [
+        "  \"format_version\": 3,",
         "  \"seed\": 1,",
         "    \"cells\": 1000,",
         "    \"plate_count\": 12,",
-        "    \"allow_partial\": true",
+        "    \"allow_partial\": true,",
+        "    \"erosion\": {",
+        "      \"erodibility\": 7.5e-10,",
+        "      \"discharge_exponent\": 0.45,",
+        "      \"diffusivity_m2_s\": 1.5844043907014476e-10,",
+        "      \"time_step_s\": 315576000000.0,",
+        "      \"steps\": 1000",
         "    \"radius_m\": 6371000.0,",
         "    \"grid\",",
         "    \"tectonics\",",
@@ -651,12 +660,14 @@ fn generate_with_the_earth_file_writes_the_world_without_a_file() {
 
 #[test]
 fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
-    // A Mars-sized planet in human units, with five plates; the file asks
-    // for `allow_partial = false`, which `generate` overrides.
+    // A Mars-sized planet in human units, with five plates and erosion
+    // settings of its own; the file asks for `allow_partial = false`, which
+    // `generate` overrides.
     let planet = settings_file(
         "generate_planet_file",
         "[planet]\nradius_km = 3389.5\nobliquity_deg = 25.19\n\
-         [generation]\ncells = 1000\nplate_count = 5\nallow_partial = false\n",
+         [generation]\ncells = 1000\nplate_count = 5\nallow_partial = false\n\
+         [generation.erosion]\ntime_step_yr = 20000\nsteps = 5\n",
     );
     let planet = planet.to_str().expect("UTF-8 path");
     for (cells, expected) in [(None, 1_000), (Some("1200"), 1_200)] {
@@ -675,11 +686,15 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
         );
         let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
         // 3,389.5 km = 3,389,500 m; 25.19° from Python,
-        // repr(25.19 * (math.pi / 180)).
+        // repr(25.19 * (math.pi / 180)); 20,000 Julian years,
+        // 631,152,000,000 s.
         for line in [
             format!("    \"cells\": {expected},"),
             "    \"plate_count\": 5,".into(),
-            "    \"allow_partial\": true".into(),
+            "    \"allow_partial\": true,".into(),
+            "      \"erodibility\": 7.5e-10,".into(),
+            "      \"time_step_s\": 631152000000.0,".into(),
+            "      \"steps\": 5".into(),
             "    \"radius_m\": 3389500.0,".into(),
             "    \"obliquity_rad\": 0.4396484385773716,".into(),
             "    \"surface_gravity_m_s2\": 9.80665,".into(),
@@ -712,6 +727,15 @@ fn generate_reports_a_bad_planet_file_and_writes_nothing() {
         "generate_bad_planet_density",
         "[planet]\nradius_km = 13000\n",
     );
+    let erosion = settings_file(
+        "generate_bad_erosion_range",
+        "[generation.erosion]\ntime_step_yr = -1\n",
+    );
+    // 1e300 m²/s times the default time step overflows.
+    let step = settings_file(
+        "generate_bad_erosion_step",
+        "[generation.erosion]\ndiffusivity_m2_s = 1e300\n",
+    );
     // What follows `error: <path>: `: its start, and a part of it.
     for (path, start, part) in [
         // The message of the operating system (error 2 on Unix and Windows).
@@ -736,6 +760,18 @@ fn generate_reports_a_bad_planet_file_and_writes_nothing() {
             "`planet.radius_km` and `planet.surface_gravity_m_s2` do not fit together: \
              bulk_density_kg_m3 = 2698.",
             " is out of range\n",
+        ),
+        (
+            &erosion,
+            "`generation.erosion.time_step_yr` = -1 is out of range \
+             (erosion.time_step_s = -31557600)\n",
+            "",
+        ),
+        (
+            &step,
+            "`generation.erosion.diffusivity_m2_s` and `generation.erosion.time_step_s` do not \
+             fit together: erosion.diffusion_step_m2 = inf is out of range\n",
+            "",
         ),
     ] {
         let dir = scratch("generate_bad_planet_file_out");

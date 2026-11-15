@@ -327,21 +327,27 @@ pub enum ParamError {
     /// A value is not finite or outside its valid range.
     OutOfRange {
         /// Field name, of [`PlanetParams`] or of
-        /// [`Settings`](crate::Settings).
+        /// [`Settings`](crate::Settings); for a field of a struct within
+        /// `Settings`, its path from `Settings` (`"erosion.time_step_s"`),
+        /// or its name when the struct itself is checked
+        /// ([`ErosionSettings::validate`](crate::ErosionSettings::validate)).
         name: &'static str,
         /// The rejected value.
         value: f64,
     },
-    /// Parameters, each within its bounds, that together describe a planet
-    /// that cannot exist.
+    /// Parameters or settings, each within its bounds, that together
+    /// describe a planet that cannot exist, or ask for a computation that
+    /// cannot be done (a diffusion step of the erosion that overflows).
     Inconsistent {
         /// The derived quantity that is out of range, named with its unit
-        /// (`"bulk_density_kg_m3"`).
+        /// (`"bulk_density_kg_m3"`; `"erosion.diffusion_step_m2"`, named as
+        /// in [`OutOfRange`](Self::OutOfRange)).
         name: &'static str,
         /// Its value.
         value: f64,
-        /// The fields of [`PlanetParams`] it is derived from, in field order
-        /// (`["radius_m", "surface_gravity_m_s2"]`).
+        /// The fields it is derived from, in field order, named as in
+        /// [`OutOfRange`](Self::OutOfRange) (`["radius_m",
+        /// "surface_gravity_m_s2"]`).
         fields: [&'static str; 2],
     },
     /// The parameters ask for a feature this version does not implement yet.

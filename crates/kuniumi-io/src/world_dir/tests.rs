@@ -40,7 +40,8 @@ use std::path::PathBuf;
 use kuniumi_math::rng::Rng;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
-    Field, FieldKind, PlanetParams, RotationRegime, Settings, TectonicRegime, World,
+    ErosionSettings, Field, FieldKind, PlanetParams, RotationRegime, Settings, TectonicRegime,
+    World,
 };
 
 use kuniumi_sim::metrics::{ElevationMetrics, earth};
@@ -49,7 +50,8 @@ use super::*;
 use crate::chart;
 use crate::colormap::{Colormap, Range};
 
-/// A world on a 1,000-cell grid with a quantity field and a class field.
+/// A world on a 1,000-cell grid with a quantity field and a class field,
+/// and erosion settings that are valid but not the defaults.
 pub(super) fn world() -> World {
     let grid = SphereGrid::fibonacci(1_000, 1).expect("a valid grid");
     let n = grid.len();
@@ -59,6 +61,13 @@ pub(super) fn world() -> World {
             cells: 1_000,
             plate_count: 12,
             allow_partial: true,
+            erosion: ErosionSettings {
+                erodibility: 2.5e-10,
+                discharge_exponent: 0.5,
+                diffusivity_m2_s: 3.2e-10,
+                time_step_s: 6.311_52e11,
+                steps: 250,
+            },
         },
         seed: 1,
         grid,
@@ -74,7 +83,8 @@ pub(super) fn world() -> World {
 }
 
 /// A world whose metadata holds awkward numbers: subnormals, the extremes,
-/// −0, values that need 17 digits, the v2 regimes.
+/// −0, values that need 17 digits, the v2 regimes, settings that are not
+/// valid.
 pub(super) fn awkward_world() -> World {
     World {
         params: PlanetParams {
@@ -95,6 +105,13 @@ pub(super) fn awkward_world() -> World {
             cells: u32::MAX,
             plate_count: u32::MAX - 1,
             allow_partial: false,
+            erosion: ErosionSettings {
+                erodibility: 5e-324,
+                discharge_exponent: -0.0,
+                diffusivity_m2_s: f64::MAX,
+                time_step_s: 1.0 / 3.0,
+                steps: u32::MAX,
+            },
         },
         seed: u64::MAX,
         sea_level_m: -1.5e-320,
@@ -105,8 +122,13 @@ pub(super) fn awkward_world() -> World {
 
 /// The `f64` metadata of `world`, as bits, listed by hand from the `World`.
 fn world_floats(world: &World) -> Vec<u64> {
+    let e = &world.settings.erosion;
     let p = &world.params;
     [
+        e.erodibility,
+        e.discharge_exponent,
+        e.diffusivity_m2_s,
+        e.time_step_s,
         p.radius_m,
         p.surface_gravity_m_s2,
         p.rotation_period_s,
@@ -125,8 +147,13 @@ fn world_floats(world: &World) -> Vec<u64> {
 
 /// The `f64` values of parsed metadata, as bits, listed by hand.
 fn json_floats(json: &WorldJson) -> Vec<u64> {
+    let e = &json.settings.erosion;
     let p = &json.planet;
     [
+        e.erodibility,
+        e.discharge_exponent,
+        e.diffusivity_m2_s,
+        e.time_step_s,
         p.radius_m,
         p.surface_gravity_m_s2,
         p.rotation_period_s,
@@ -150,18 +177,20 @@ fn world_json_parses_back_bit_exactly() {
         let back: WorldJson = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back, WorldJson::of(&world));
         assert_eq!(json_floats(&back), world_floats(&world));
-        assert_eq!(back.format_version, 2);
+        assert_eq!(back.format_version, 3);
         assert_eq!(back.generator_version, kuniumi_world::GENERATOR_VERSION);
         assert_eq!(back.seed, world.seed);
         let s = &back.settings;
         assert_eq!(
-            (s.cells, s.plate_count, s.allow_partial),
+            (s.cells, s.plate_count, s.allow_partial, s.erosion.steps),
             (
                 world.settings.cells,
                 world.settings.plate_count,
-                world.settings.allow_partial
+                world.settings.allow_partial,
+                world.settings.erosion.steps
             )
         );
+        assert_eq!(s.to_settings(), world.settings);
         assert_eq!(back.stages, world.stages);
         let fields: Vec<_> = back
             .fields
@@ -180,6 +209,7 @@ fn world_json_parses_back_bit_exactly() {
     assert_eq!(back.planet.rotation, RotationJson::TidallyLocked);
     assert_eq!(back.planet.tectonics, TectonicsJson::StagnantLid);
     assert_eq!((back.seed, back.settings.cells), (u64::MAX, u32::MAX));
+    assert_eq!(back.settings.erosion.steps, u32::MAX);
 }
 
 /// Serialises `values` and parses them back with serde_json, and checks
@@ -240,18 +270,27 @@ fn serde_json_round_trips_every_finite_f64() {
 }
 
 /// `world.json` for Earth after the Grid stage, written by hand: the decimal
-/// literals of `PlanetParams::earth()`, and its obliquity
-/// `23.44 · (π/180)` as `repr(23.44 * (math.pi / 180))` prints it in
-/// Python 3 (0.40910517666747087). It is the example in the module
+/// literals of `PlanetParams::earth()` and `ErosionSettings::default()`,
+/// the obliquity `23.44 · (π/180)` as `repr(23.44 * (math.pi / 180))`
+/// prints it in Python 3 (0.40910517666747087), and the default
+/// diffusivity and time step as `repr(5e-3 / 31557600.0)` and
+/// `repr(1e4 * 31557600.0)` print them. It is the example in the module
 /// documentation.
 const EARTH_JSON: &str = r#"{
-  "format_version": 2,
+  "format_version": 3,
   "generator_version": "0.0.1",
   "seed": 1,
   "settings": {
     "cells": 20000,
     "plate_count": 12,
-    "allow_partial": true
+    "allow_partial": true,
+    "erosion": {
+      "erodibility": 7.5e-10,
+      "discharge_exponent": 0.45,
+      "diffusivity_m2_s": 1.5844043907014476e-10,
+      "time_step_s": 315576000000.0,
+      "steps": 1000
+    }
   },
   "planet": {
     "radius_m": 6371000.0,
@@ -295,6 +334,7 @@ fn earth_world_json_has_the_documented_layout() {
             cells: 20_000,
             plate_count: 12,
             allow_partial: true,
+            erosion: ErosionSettings::default(),
         },
         fields: Vec::new(),
         ..world()
@@ -326,13 +366,20 @@ fn earth_world_json_has_the_documented_layout() {
 /// serde_json's float formatter, whose digit writers differ between
 /// targets, on subnormals, 17-digit values, the extremes and −0.
 const AWKWARD_JSON: &str = r#"{
-  "format_version": 2,
+  "format_version": 3,
   "generator_version": "0.0.1",
   "seed": 18446744073709551615,
   "settings": {
     "cells": 4294967295,
     "plate_count": 4294967294,
-    "allow_partial": false
+    "allow_partial": false,
+    "erosion": {
+      "erodibility": 5e-324,
+      "discharge_exponent": -0.0,
+      "diffusivity_m2_s": 1.7976931348623157e+308,
+      "time_step_s": 0.3333333333333333,
+      "steps": 4294967295
+    }
   },
   "planet": {
     "radius_m": 2.2250738585072014e-308,
@@ -397,8 +444,24 @@ type Spoil = fn(&mut World);
 
 #[test]
 fn rejects_non_finite_metadata() {
-    let cases: [(Spoil, &str); 4] = [
+    let cases: [(Spoil, &str); 8] = [
         (|w| w.sea_level_m = f64::NAN, "`sea_level_m`"),
+        (
+            |w| w.settings.erosion.erodibility = f64::NAN,
+            "`settings.erosion.erodibility`",
+        ),
+        (
+            |w| w.settings.erosion.discharge_exponent = f64::NEG_INFINITY,
+            "-inf of `settings.erosion.discharge_exponent`",
+        ),
+        (
+            |w| w.settings.erosion.diffusivity_m2_s = f64::INFINITY,
+            "inf of `settings.erosion.diffusivity_m2_s`",
+        ),
+        (
+            |w| w.settings.erosion.time_step_s = f64::NAN,
+            "`settings.erosion.time_step_s`",
+        ),
         (
             |w| w.sea_level_m = f64::NEG_INFINITY,
             "-inf of `sea_level_m`",
@@ -426,6 +489,15 @@ fn rejects_non_finite_metadata() {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert!(!dir.exists(), "nothing is written");
     }
+    // The first in the order written: the settings before the planet.
+    let mut world = world();
+    world.params.radius_m = f64::NAN;
+    world.settings.erosion.time_step_s = f64::INFINITY;
+    let message = world_json(&world).unwrap_err().to_string();
+    assert!(
+        message.ends_with("inf of `settings.erosion.time_step_s`"),
+        "{message}"
+    );
 }
 
 #[test]

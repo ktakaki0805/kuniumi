@@ -1,11 +1,13 @@
 use kuniumi_math::Rng;
-use kuniumi_world::{RotationRegime, TectonicRegime};
+use kuniumi_world::{ErosionSettings, RotationRegime, TectonicRegime};
 
 use super::*;
 
 /// The settings file of Earth with the default settings, written by hand:
-/// the decimal literals of `PlanetParams::earth()` and `Settings::default()`,
-/// and the obliquity from Python's `repr(23.44 * (math.pi / 180))`.
+/// the decimal literals of `PlanetParams::earth()`, `Settings::default()`
+/// and `ErosionSettings::default()`, the obliquity from Python's
+/// `repr(23.44 * (math.pi / 180))`, and the default diffusivity and time
+/// step from `repr(5e-3 / 31557600.0)` and `repr(1e4 * 31557600.0)`.
 const EARTH: &str = "\
 # kuniumi settings file: a planet and how to generate it (TOML).
 # Values are SI. A quantity whose comment names another key may be given
@@ -30,6 +32,13 @@ tectonics = \"plate_tectonics\"       # \"plate_tectonics\" or \"stagnant_lid\" 
 cells = 650000                      # grid cells, 1000 to 715827884
 plate_count = 12                    # tectonic plates, 2 to 64
 allow_partial = false               # return the world so far at a missing stage
+
+[generation.erosion]
+erodibility = 7.5e-10               # stream power K, m^(1-3m) s^(m-1)
+discharge_exponent = 0.45           # m of the discharge in K Q^m S
+diffusivity_m2_s = 1.5844043907014476e-10 # hillslope; or diffusivity_m2_yr
+time_step_s = 315576000000.0        # time step; or time_step_yr
+steps = 1000                        # number of time steps
 ";
 
 /// The bits of every float of `p`, field by field. The destructuring lists
@@ -64,11 +73,37 @@ fn bits(p: &PlanetParams) -> [u64; 10] {
     .map(|v| v.to_bits())
 }
 
+/// The bits of every float of `s`, field by field, listed as [`bits`]
+/// lists those of a planet.
+fn settings_bits(s: &Settings) -> [u64; 4] {
+    let Settings {
+        cells: _,
+        plate_count: _,
+        allow_partial: _,
+        erosion,
+    } = s;
+    let ErosionSettings {
+        erodibility,
+        discharge_exponent,
+        diffusivity_m2_s,
+        time_step_s,
+        steps: _,
+    } = erosion;
+    [
+        erodibility,
+        discharge_exponent,
+        diffusivity_m2_s,
+        time_step_s,
+    ]
+    .map(|v| v.to_bits())
+}
+
 /// Asserts that `loaded` is `(p, s)` bit for bit: every float by its bits
 /// (so that −0 is not +0), and everything by `==`.
 fn assert_same(loaded: &(PlanetParams, Settings), p: &PlanetParams, s: &Settings, text: &str) {
     assert_eq!(bits(&loaded.0), bits(p), "{text}");
     assert_eq!(loaded.0, *p, "{text}");
+    assert_eq!(settings_bits(&loaded.1), settings_bits(s), "{text}");
     assert_eq!(loaded.1, *s, "{text}");
 }
 
@@ -122,8 +157,9 @@ fn next_down(v: f64) -> f64 {
 
 /// Planets of awkward numbers, each valid: the extremes of every range,
 /// subnormals and −0 where zero is allowed (the ocean volume, the
-/// obliquity, the eccentricity and the continental fraction), 17-digit
-/// values and numbers whose shortest decimal needs an exponent.
+/// obliquity, the eccentricity and the continental fraction; the discharge
+/// exponent and the diffusivity), 17-digit values and numbers whose
+/// shortest decimal needs an exponent.
 fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
     let earth = PlanetParams::earth();
     let tiny = f64::from_bits(1); // 5e-324
@@ -148,6 +184,13 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 cells: Settings::MIN_CELLS,
                 plate_count: Settings::MIN_PLATE_COUNT,
                 allow_partial: true,
+                erosion: ErosionSettings {
+                    erodibility: f64::MIN_POSITIVE,
+                    discharge_exponent: -0.0,
+                    diffusivity_m2_s: -0.0,
+                    time_step_s: tiny,
+                    steps: 0,
+                },
             },
         ),
         (
@@ -169,6 +212,14 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 cells: Settings::MAX_CELLS,
                 plate_count: Settings::MAX_PLATE_COUNT,
                 allow_partial: false,
+                // The largest diffusion step, f64::MAX m².
+                erosion: ErosionSettings {
+                    erodibility: f64::MAX,
+                    discharge_exponent: f64::MAX,
+                    diffusivity_m2_s: 1.0,
+                    time_step_s: f64::MAX,
+                    steps: u32::MAX,
+                },
             },
         ),
         (
@@ -189,6 +240,13 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 cells: 1_001,
                 plate_count: 3,
                 allow_partial: true,
+                erosion: ErosionSettings {
+                    erodibility: tiny,
+                    discharge_exponent: 1.0 / 3.0,
+                    diffusivity_m2_s: largest_subnormal,
+                    time_step_s: 123_456_789.012_345_68,
+                    steps: 1,
+                },
             },
         ),
     ]
@@ -210,7 +268,8 @@ fn within(rng: &mut Rng, lo: f64, hi: f64) -> f64 {
 }
 
 /// A random valid planet with random settings: every float within its
-/// bounds, and a radius and gravity whose bulk density is in range.
+/// bounds, a radius and gravity whose bulk density is in range, and a
+/// diffusion step `Δt K_d` that is finite.
 fn random_planet(rng: &mut Rng) -> (PlanetParams, Settings) {
     let p = loop {
         let p = PlanetParams {
@@ -261,6 +320,19 @@ fn random_planet(rng: &mut Rng) -> (PlanetParams, Settings) {
         plate_count: Settings::MIN_PLATE_COUNT
             + rng.below(span(Settings::MIN_PLATE_COUNT, Settings::MAX_PLATE_COUNT)) as u32,
         allow_partial: rng.below(2) == 1,
+        erosion: loop {
+            let tiny = f64::from_bits(1);
+            let e = ErosionSettings {
+                erodibility: within(rng, tiny, f64::MAX),
+                discharge_exponent: within(rng, 0.0, f64::MAX),
+                diffusivity_m2_s: within(rng, 0.0, f64::MAX),
+                time_step_s: within(rng, tiny, f64::MAX),
+                steps: rng.below(1 << 32) as u32,
+            };
+            if (e.time_step_s * e.diffusivity_m2_s).is_finite() {
+                break e;
+            }
+        },
     };
     (p, s)
 }
@@ -341,6 +413,28 @@ fn invalid_parameters_are_written_and_rejected_by_key() {
             },
             "generation.plate_count",
         ),
+        (
+            PlanetParams::earth(),
+            Settings {
+                erosion: ErosionSettings {
+                    erodibility: f64::NAN,
+                    ..ErosionSettings::default()
+                },
+                ..Settings::default()
+            },
+            "generation.erosion.erodibility",
+        ),
+        (
+            PlanetParams::earth(),
+            Settings {
+                erosion: ErosionSettings {
+                    time_step_s: f64::NEG_INFINITY,
+                    ..ErosionSettings::default()
+                },
+                ..Settings::default()
+            },
+            "generation.erosion.time_step_s",
+        ),
     ] {
         let text = write(&p, &s);
         match err(&text) {
@@ -364,6 +458,37 @@ fn invalid_parameters_are_written_and_rejected_by_key() {
     ] {
         assert!(text.contains(&format!("\n{line}")), "{line}\n{text}");
     }
+    let text = write(
+        &PlanetParams::earth(),
+        &Settings {
+            erosion: ErosionSettings {
+                discharge_exponent: f64::NAN,
+                diffusivity_m2_s: f64::INFINITY,
+                ..ErosionSettings::default()
+            },
+            ..Settings::default()
+        },
+    );
+    for line in ["discharge_exponent = nan ", "diffusivity_m2_s = inf "] {
+        assert!(text.contains(&format!("\n{line}")), "{line}\n{text}");
+    }
+    // A diffusion step that overflows is written as it is, and rejected.
+    let s = Settings {
+        erosion: ErosionSettings {
+            diffusivity_m2_s: f64::MAX,
+            ..ErosionSettings::default()
+        },
+        ..Settings::default()
+    };
+    let text = write(&PlanetParams::earth(), &s);
+    assert!(
+        text.contains("\ndiffusivity_m2_s = 1.7976931348623157e308 "),
+        "{text}"
+    );
+    assert!(
+        matches!(err(&text), ConfigError::Inconsistent { .. }),
+        "{text}"
+    );
 }
 
 #[test]
@@ -624,6 +749,113 @@ fn the_bounds_in_human_units_load_to_the_si_bounds() {
 }
 
 #[test]
+fn erosion_human_unit_keys_convert_to_si() {
+    // The defaults in human units, bit for bit: 10,000 Julian years and
+    // 5e-3 m²/yr are converted by the same operations as the constants.
+    let (_, s) = ok("[generation.erosion]\ntime_step_yr = 10000\ndiffusivity_m2_yr = 0.005\n");
+    assert_same(
+        &(PlanetParams::earth(), s),
+        &PlanetParams::earth(),
+        &Settings::default(),
+        "the defaults in years",
+    );
+    // Other values against Python's IEEE 754 arithmetic:
+    // repr(2.5 * 31557600.0), repr(1.0 / 31557600.0),
+    // repr(2e4 * 31557600.0), repr(0.01 / 31557600.0).
+    for (text, time_step_s, diffusivity_m2_s) in [
+        (
+            "time_step_yr = 2.5\ndiffusivity_m2_yr = 1",
+            78_894_000.0,
+            3.168_808_781_402_895e-8,
+        ),
+        (
+            "time_step_yr = 2e4\ndiffusivity_m2_yr = 0.01",
+            631_152_000_000.0,
+            3.168_808_781_402_895e-10,
+        ),
+        // Zero is a valid diffusivity under either key, −0 too.
+        ("time_step_s = 1\ndiffusivity_m2_yr = -0.0", 1.0, -0.0),
+    ] {
+        let text = format!("[generation.erosion]\n{text}\n");
+        let (_, s) = ok(&text);
+        let expected = Settings {
+            erosion: ErosionSettings {
+                time_step_s,
+                diffusivity_m2_s,
+                ..ErosionSettings::default()
+            },
+            ..Settings::default()
+        };
+        assert_eq!(settings_bits(&s), settings_bits(&expected), "{text}");
+        assert_eq!(s, expected, "{text}");
+    }
+}
+
+#[test]
+fn a_diffusion_step_that_overflows_names_both_keys() {
+    // The keys as written, in field order, the SI key for a value left at
+    // its default. 1e300 m²/yr is 3.2e292 m²/s and 1e300 yr 3.2e307 s
+    // (Python: repr(1e300 / 31557600.0), repr(1e300 * 31557600.0)), each
+    // finite, their product not; 1e300 m²/s times the default 3.2e11 s
+    // overflows too.
+    for (text, expected) in [
+        (
+            "diffusivity_m2_s = 1e200\ntime_step_s = 1e200",
+            [
+                "generation.erosion.diffusivity_m2_s",
+                "generation.erosion.time_step_s",
+            ],
+        ),
+        (
+            "time_step_yr = 1e300\ndiffusivity_m2_yr = 1e300",
+            [
+                "generation.erosion.diffusivity_m2_yr",
+                "generation.erosion.time_step_yr",
+            ],
+        ),
+        (
+            "diffusivity_m2_s = 1e300",
+            [
+                "generation.erosion.diffusivity_m2_s",
+                "generation.erosion.time_step_s",
+            ],
+        ),
+    ] {
+        let text = format!("[generation.erosion]\n{text}\n");
+        let e = err(&text);
+        assert_eq!(
+            e,
+            ConfigError::Inconsistent {
+                keys: expected,
+                error: ParamError::Inconsistent {
+                    name: "erosion.diffusion_step_m2",
+                    value: f64::INFINITY,
+                    fields: ["erosion.diffusivity_m2_s", "erosion.time_step_s"],
+                },
+            },
+            "{text}"
+        );
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "`{}` and `{}` do not fit together: erosion.diffusion_step_m2 = inf is out of \
+                 range",
+                expected[0], expected[1]
+            ),
+            "{text}"
+        );
+    }
+    // A value out of its own domain is reported first.
+    assert!(matches!(
+        err("[generation.erosion]\ndiffusivity_m2_s = 1e300\nerodibility = 0\n"),
+        ConfigError::Invalid {
+            key: "generation.erosion.erodibility",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn a_radius_and_gravity_that_do_not_fit_name_both_keys() {
     // The keys as written, in field order, with Earth's gravity when the
     // file leaves it out. Densities from Python,
@@ -736,6 +968,32 @@ fn missing_keys_take_earth_and_the_default_settings() {
     let text = "planet.radius_km = 3389.5\ngeneration = { cells = 20000 }\n";
     assert_eq!(ok(text).0.radius_m.to_bits(), 3_389_500.0_f64.to_bits());
     assert_eq!(ok(text).1.cells, 20_000);
+    // The erosion settings, each missing key at its default.
+    for text in [
+        "[generation.erosion]\n",
+        "[generation]\n[generation.erosion]\n",
+        "generation.erosion = {}\n",
+    ] {
+        assert_same(&ok(text), &earth, &Settings::default(), text);
+    }
+    let some = Settings {
+        cells: 2_000,
+        erosion: ErosionSettings {
+            discharge_exponent: 0.5,
+            steps: 5,
+            ..ErosionSettings::default()
+        },
+        ..Settings::default()
+    };
+    for text in [
+        "[generation]\ncells = 2000\n[generation.erosion]\ndischarge_exponent = 0.5\nsteps = 5\n",
+        "[generation.erosion]\nsteps = 5\ndischarge_exponent = 0.5\n[generation]\ncells = 2000\n",
+        "generation.cells = 2000\ngeneration.erosion.steps = 5\n\
+         generation.erosion.discharge_exponent = 0.5\n",
+        "[generation]\ncells = 2000\nerosion = { steps = 5, discharge_exponent = 0.5 }\n",
+    ] {
+        assert_same(&ok(text), &earth, &some, text);
+    }
 }
 
 #[test]
@@ -749,31 +1007,37 @@ fn regimes_are_read_by_name() {
 
 #[test]
 fn both_keys_of_a_quantity_are_an_error() {
-    for (si, human) in [
-        ("radius_m", "radius_km"),
-        ("rotation_period_s", "rotation_period_h"),
-        ("obliquity_rad", "obliquity_deg"),
-        ("orbital_period_s", "orbital_period_days"),
-        ("ocean_volume_m3", "ocean_volume_km3"),
-        ("surface_pressure_pa", "surface_pressure_bar"),
+    for (table, si, human) in [
+        ("planet", "radius_m", "radius_km"),
+        ("planet", "rotation_period_s", "rotation_period_h"),
+        ("planet", "obliquity_rad", "obliquity_deg"),
+        ("planet", "orbital_period_s", "orbital_period_days"),
+        ("planet", "ocean_volume_m3", "ocean_volume_km3"),
+        ("planet", "surface_pressure_pa", "surface_pressure_bar"),
+        (
+            "generation.erosion",
+            "diffusivity_m2_s",
+            "diffusivity_m2_yr",
+        ),
+        ("generation.erosion", "time_step_s", "time_step_yr"),
     ] {
         // Even with the same value under both, and in either order.
         for text in [
-            format!("[planet]\n{si} = 1.0\n{human} = 1.0\n"),
-            format!("[planet]\n{human} = 0.001\n{si} = 1.0\n"),
+            format!("[{table}]\n{si} = 1.0\n{human} = 1.0\n"),
+            format!("[{table}]\n{human} = 0.001\n{si} = 1.0\n"),
         ] {
             let e = err(&text);
             match &e {
                 ConfigError::BothKeys { si_key, human_key } => {
-                    assert_eq!(*si_key, format!("planet.{si}"), "{text}");
-                    assert_eq!(*human_key, format!("planet.{human}"), "{text}");
+                    assert_eq!(*si_key, format!("{table}.{si}"), "{text}");
+                    assert_eq!(*human_key, format!("{table}.{human}"), "{text}");
                 }
                 e => panic!("{e:?} from\n{text}"),
             }
             assert_eq!(
                 e.to_string(),
                 format!(
-                    "`planet.{si}` and `planet.{human}` are the same quantity; give one of them"
+                    "`{table}.{si}` and `{table}.{human}` are the same quantity; give one of them"
                 )
             );
         }
@@ -805,6 +1069,19 @@ fn unknown_tables_and_keys_are_errors_with_their_position() {
             "[planet]\nradius_m = 1.0\n[planets]\n",
             "planets",
             "line 3, column 2",
+        ),
+        ("[generation.erosion]\nk = 1.0\n", "k", "line 2, column 1"),
+        (
+            "[generation.erosion]\ntime_step_kyr = 10\n",
+            "time_step_kyr",
+            "line 2, column 1",
+        ),
+        // The erosion settings are a table of `[generation]` only.
+        ("[erosion]\nsteps = 1\n", "erosion", "line 1, column 2"),
+        (
+            "[planet.erosion]\nsteps = 1\n",
+            "erosion",
+            "line 1, column 9",
         ),
     ] {
         let message = toml_message(text);
@@ -873,6 +1150,26 @@ fn wrong_types_are_errors_with_their_position() {
             "generation = \"fast\"\n",
             "expected the table [generation]",
             "line 1, column 14",
+        ),
+        (
+            "[generation.erosion]\nsteps = -1\n",
+            "invalid value: integer `-1`, expected u32",
+            "line 2, column 9",
+        ),
+        (
+            "[generation.erosion]\nsteps = 1.5\n",
+            "invalid type: floating point `1.5`, expected u32",
+            "line 2, column 9",
+        ),
+        (
+            "[generation.erosion]\nerodibility = \"small\"\n",
+            "invalid type: string \"small\", expected f64",
+            "line 2, column 15",
+        ),
+        (
+            "[generation]\nerosion = 1\n",
+            "invalid type: integer `1`, expected the table [generation.erosion]",
+            "line 2, column 11",
         ),
     ] {
         let message = toml_message(text);
@@ -1031,6 +1328,80 @@ fn out_of_range_values_name_the_key_as_written() {
             "plate_count",
             65.0,
         ),
+        // The erosion settings, named by their path from `Settings`; the
+        // SI values of the human-unit keys from Python,
+        // repr(-1.0 / 31557600.0) and repr(1e301 * 31557600.0).
+        (
+            "[generation.erosion]\nerodibility = 0\n",
+            "generation.erosion.erodibility",
+            0.0,
+            "erosion.erodibility",
+            0.0,
+        ),
+        (
+            "[generation.erosion]\nerodibility = -inf\n",
+            "generation.erosion.erodibility",
+            f64::NEG_INFINITY,
+            "erosion.erodibility",
+            f64::NEG_INFINITY,
+        ),
+        (
+            "[generation.erosion]\ndischarge_exponent = -0.1\n",
+            "generation.erosion.discharge_exponent",
+            -0.1,
+            "erosion.discharge_exponent",
+            -0.1,
+        ),
+        (
+            "[generation.erosion]\ndischarge_exponent = inf\n",
+            "generation.erosion.discharge_exponent",
+            f64::INFINITY,
+            "erosion.discharge_exponent",
+            f64::INFINITY,
+        ),
+        (
+            "[generation.erosion]\ndiffusivity_m2_s = -1e-300\n",
+            "generation.erosion.diffusivity_m2_s",
+            -1e-300,
+            "erosion.diffusivity_m2_s",
+            -1e-300,
+        ),
+        (
+            "[generation.erosion]\ndiffusivity_m2_yr = -1\n",
+            "generation.erosion.diffusivity_m2_yr",
+            -1.0,
+            "erosion.diffusivity_m2_s",
+            -3.168_808_781_402_895e-8,
+        ),
+        (
+            "[generation.erosion]\ndiffusivity_m2_yr = inf\n",
+            "generation.erosion.diffusivity_m2_yr",
+            f64::INFINITY,
+            "erosion.diffusivity_m2_s",
+            f64::INFINITY,
+        ),
+        (
+            "[generation.erosion]\ntime_step_s = 0\n",
+            "generation.erosion.time_step_s",
+            0.0,
+            "erosion.time_step_s",
+            0.0,
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = -1\n",
+            "generation.erosion.time_step_yr",
+            -1.0,
+            "erosion.time_step_s",
+            -31_557_600.0,
+        ),
+        // 1e301 years is beyond the largest float in seconds.
+        (
+            "[generation.erosion]\ntime_step_yr = 1e301\n",
+            "generation.erosion.time_step_yr",
+            1e301,
+            "erosion.time_step_s",
+            f64::INFINITY,
+        ),
     ] {
         assert_eq!(
             err(text),
@@ -1046,6 +1417,14 @@ fn out_of_range_values_name_the_key_as_written() {
     for (text, key) in [
         ("[planet]\nradius_m = nan\n", "planet.radius_m"),
         ("[planet]\nobliquity_deg = -nan\n", "planet.obliquity_deg"),
+        (
+            "[generation.erosion]\nerodibility = nan\n",
+            "generation.erosion.erodibility",
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = nan\n",
+            "generation.erosion.time_step_yr",
+        ),
     ] {
         match err(text) {
             ConfigError::Invalid {
@@ -1059,18 +1438,37 @@ fn out_of_range_values_name_the_key_as_written() {
             e => panic!("{e:?} from\n{text}"),
         }
     }
-    // The planet is checked before the settings, each in field order.
-    let e = err("[generation]\ncells = 1\n[planet]\nradius_km = 0\nobliquity_deg = 200\n");
-    assert!(
-        matches!(
-            e,
-            ConfigError::Invalid {
-                key: "planet.radius_km",
-                ..
-            }
+    // The planet is checked before the settings, each in field order, the
+    // erosion settings after the cells and the plate count.
+    for (text, key) in [
+        (
+            "[generation]\ncells = 1\n[planet]\nradius_km = 0\nobliquity_deg = 200\n",
+            "planet.radius_km",
         ),
-        "{e:?}"
-    );
+        (
+            "[generation.erosion]\nerodibility = 0\n[planet]\nradius_km = 0\n",
+            "planet.radius_km",
+        ),
+        (
+            "[generation.erosion]\nerodibility = 0\n[generation]\nplate_count = 1\n",
+            "generation.plate_count",
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = -1\ndiffusivity_m2_yr = -1\n\
+             discharge_exponent = -1\n",
+            "generation.erosion.discharge_exponent",
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = -1\ndiffusivity_m2_yr = -1\n",
+            "generation.erosion.diffusivity_m2_yr",
+        ),
+    ] {
+        let e = err(text);
+        assert!(
+            matches!(e, ConfigError::Invalid { key: k, .. } if k == key),
+            "{text}: {e:?}"
+        );
+    }
 }
 
 #[test]
@@ -1116,6 +1514,32 @@ fn out_of_range_messages_give_the_number_as_written() {
         (
             "[planet]\nocean_volume_km3 = -1e8\n",
             "`planet.ocean_volume_km3` = -100000000 is out of range (ocean_volume_m3 = -1e17)",
+        ),
+        // The erosion settings: an SI key gives the number alone, a
+        // human-unit key adds the SI value under its path from `Settings`
+        // (repr(-1.0 / 31557600.0) in Python).
+        (
+            "[generation.erosion]\nerodibility = 0\n",
+            "`generation.erosion.erodibility` = 0 is out of range",
+        ),
+        (
+            "[generation.erosion]\ntime_step_s = -1\n",
+            "`generation.erosion.time_step_s` = -1 is out of range",
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = -1\n",
+            "`generation.erosion.time_step_yr` = -1 is out of range \
+             (erosion.time_step_s = -31557600)",
+        ),
+        (
+            "[generation.erosion]\ndiffusivity_m2_yr = -1\n",
+            "`generation.erosion.diffusivity_m2_yr` = -1 is out of range \
+             (erosion.diffusivity_m2_s = -3.168808781402895e-8)",
+        ),
+        (
+            "[generation.erosion]\ntime_step_yr = 1e301\n",
+            "`generation.erosion.time_step_yr` = 1e301 is out of range \
+             (erosion.time_step_s = inf)",
         ),
     ] {
         assert_eq!(err(text).to_string(), message, "{text}");

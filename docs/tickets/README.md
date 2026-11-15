@@ -116,7 +116,7 @@ parallel with later milestones.
 | [M3-02](M3-02-depression-routing.md) | Depression routing (Priority-Flood) | M3-01 |
 | [M3-03](M3-03-stream-power.md) | Implicit stream-power erosion with uplift | M3-02 |
 | [M3-04](M3-04-hillslope-diffusion.md) | Hillslope diffusion | M3-03 |
-| [M3-07](M3-07-erosion-settings.md) | Erosion settings in `Settings`, `world.json` and settings files | M3-03 |
+| [M3-07](M3-07-erosion-settings.md) | Erosion settings in `Settings`, `world.json` and settings files | M3-03, M3-04 |
 | [M3-05](M3-05-erosion-stage.md) | Erosion stage, river maps and Hack's law | M3-04, M3-07, M2-06 |
 | [M3-06](M3-06-convergent-flats.md) | Convergent flow across flats | M3-05 |
 

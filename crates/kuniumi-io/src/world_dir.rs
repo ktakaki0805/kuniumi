@@ -28,10 +28,11 @@
 //!   whose axes `metrics.txt` describes;
 //!
 //! and last `world.json` ([`METADATA_FILE`]), the metadata: format version,
-//! generator version, seed, settings, planet parameters, sea level, the
-//! stages that have run and the field list. An existing `world.json`,
-//! `metrics.txt` and `hypsometry.png` are removed before the grid is
-//! written, and the new `world.json` is written last, so a directory with a
+//! generator version, seed, settings (with the erosion settings), planet
+//! parameters, sea level, the stages that have run and the field list. An
+//! existing `world.json`, `metrics.txt` and `hypsometry.png` are removed
+//! before the grid is written, and the new `world.json` is written last, so
+//! a directory with a
 //! `world.json` holds every file it lists, from the same world, even after a
 //! write that failed halfway, and no metrics of another world. Other files
 //! in the directory are left alone.
@@ -84,17 +85,25 @@
 //! the shortest form that parses back to the same bits (serde_json's
 //! formatting, and its parser with the `float_roundtrip` feature), so only
 //! finite numbers can be written (JSON has no NaN or infinity). For a
-//! 20,000-cell world stopped after the Grid stage:
+//! 20,000-cell world stopped after the Grid stage, with the default erosion
+//! settings:
 //!
 //! ```json
 //! {
-//!   "format_version": 2,
+//!   "format_version": 3,
 //!   "generator_version": "0.0.1",
 //!   "seed": 1,
 //!   "settings": {
 //!     "cells": 20000,
 //!     "plate_count": 12,
-//!     "allow_partial": true
+//!     "allow_partial": true,
+//!     "erosion": {
+//!       "erodibility": 7.5e-10,
+//!       "discharge_exponent": 0.45,
+//!       "diffusivity_m2_s": 1.5844043907014476e-10,
+//!       "time_step_s": 315576000000.0,
+//!       "steps": 1000
+//!     }
 //!   },
 //!   "planet": {
 //!     "radius_m": 6371000.0,
@@ -145,8 +154,8 @@ use kuniumi_sim::metrics::{
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
-    Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings, TectonicRegime,
-    World,
+    ErosionSettings, Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings,
+    TectonicRegime, World,
 };
 use serde::{Deserialize, Serialize};
 
@@ -156,8 +165,12 @@ use crate::{Rgb8, field_file, grid_file, png, render};
 
 /// The version of the layout of a world directory, the key
 /// `format_version` of `world.json`: 1 (ticket M2-01) had no grid file, 2
-/// (ticket MV-01) adds [`GRID_FILE`]. [`read()`] reads only this version.
-pub const FORMAT_VERSION: u32 = 2;
+/// (ticket MV-01) added [`GRID_FILE`], 3 (ticket M3-07) adds the erosion
+/// settings, `settings.erosion` ([`ErosionJson`]). [`read()`] reads only
+/// this version: a directory of an earlier one is generated again (a
+/// version-2 world read with the default erosion settings would record
+/// settings that its generator never had).
+pub const FORMAT_VERSION: u32 = 3;
 
 /// The name of the metadata file.
 pub const METADATA_FILE: &str = "world.json";
@@ -247,6 +260,24 @@ pub struct SettingsJson {
     pub plate_count: u32,
     /// [`Settings::allow_partial`].
     pub allow_partial: bool,
+    /// [`Settings::erosion`].
+    pub erosion: ErosionJson,
+}
+
+/// [`ErosionSettings`] in `world.json`, SI as in the code.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErosionJson {
+    /// [`ErosionSettings::erodibility`] (m^(1−3m) s^(m−1)).
+    pub erodibility: f64,
+    /// [`ErosionSettings::discharge_exponent`].
+    pub discharge_exponent: f64,
+    /// [`ErosionSettings::diffusivity_m2_s`] (m²/s).
+    pub diffusivity_m2_s: f64,
+    /// [`ErosionSettings::time_step_s`] (s).
+    pub time_step_s: f64,
+    /// [`ErosionSettings::steps`].
+    pub steps: u32,
 }
 
 /// [`PlanetParams`] in `world.json`, SI as in the code.
@@ -339,9 +370,14 @@ impl WorldJson {
     }
 
     /// Every number of type `f64`, with its key, in the order written.
-    fn floats(&self) -> [(&'static str, f64); 11] {
+    fn floats(&self) -> [(&'static str, f64); 15] {
+        let e = &self.settings.erosion;
         let p = &self.planet;
         [
+            ("settings.erosion.erodibility", e.erodibility),
+            ("settings.erosion.discharge_exponent", e.discharge_exponent),
+            ("settings.erosion.diffusivity_m2_s", e.diffusivity_m2_s),
+            ("settings.erosion.time_step_s", e.time_step_s),
             ("planet.radius_m", p.radius_m),
             ("planet.surface_gravity_m_s2", p.surface_gravity_m_s2),
             ("planet.rotation_period_s", p.rotation_period_s),
@@ -367,6 +403,7 @@ impl SettingsJson {
             cells: settings.cells,
             plate_count: settings.plate_count,
             allow_partial: settings.allow_partial,
+            erosion: ErosionJson::of(&settings.erosion),
         }
     }
 
@@ -376,6 +413,31 @@ impl SettingsJson {
             cells: self.cells,
             plate_count: self.plate_count,
             allow_partial: self.allow_partial,
+            erosion: self.erosion.to_settings(),
+        }
+    }
+}
+
+impl ErosionJson {
+    /// The mirror of `settings`.
+    pub fn of(settings: &ErosionSettings) -> Self {
+        Self {
+            erodibility: settings.erodibility,
+            discharge_exponent: settings.discharge_exponent,
+            diffusivity_m2_s: settings.diffusivity_m2_s,
+            time_step_s: settings.time_step_s,
+            steps: settings.steps,
+        }
+    }
+
+    /// The settings this mirrors, the inverse of [`of`](Self::of).
+    pub fn to_settings(&self) -> ErosionSettings {
+        ErosionSettings {
+            erodibility: self.erodibility,
+            discharge_exponent: self.discharge_exponent,
+            diffusivity_m2_s: self.diffusivity_m2_s,
+            time_step_s: self.time_step_s,
+            steps: self.steps,
         }
     }
 }
@@ -1144,12 +1206,13 @@ fn parse_world_json(bytes: &[u8]) -> Result<WorldJson, Problem> {
 
 /// Checks that the values of the top-level object `top` of a `world.json`
 /// of this [`FORMAT_VERSION`] that hold a struct are JSON objects
-/// (`settings`, `planet` and every entry of `fields`) and that those holding
-/// an enum are strings (`rotation` and `tectonics` of `planet`, `kind` of
-/// every field). serde's derive would also accept a struct as an array of
-/// its values in their order, and a unit variant as an object
-/// (`{"free": null}`), neither of which [`write()`] writes. Missing keys
-/// are left to the typed parse, which names them.
+/// (`settings`, `erosion` of `settings`, `planet` and every entry of
+/// `fields`) and that those holding an enum are strings (`rotation` and
+/// `tectonics` of `planet`, `kind` of every field). serde's derive would
+/// also accept a struct as an array of its values in their order, and a
+/// unit variant as an object (`{"free": null}`), neither of which
+/// [`write()`] writes. Missing keys are left to the typed parse, which
+/// names them.
 fn check_shapes(top: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
     use serde_json::Value;
     let not_object = |what: &str| format!("{what} is not a JSON object");
@@ -1157,6 +1220,11 @@ fn check_shapes(top: &serde_json::Map<String, serde_json::Value>) -> Result<(), 
     for key in ["settings", "planet"] {
         if top.get(key).is_some_and(|v| !v.is_object()) {
             return Err(not_object(&format!("`{key}`")));
+        }
+    }
+    if let Some(settings) = top.get("settings").and_then(Value::as_object) {
+        if settings.get("erosion").is_some_and(|v| !v.is_object()) {
+            return Err(not_object("`settings.erosion`"));
         }
     }
     if let Some(planet) = top.get("planet").and_then(Value::as_object) {

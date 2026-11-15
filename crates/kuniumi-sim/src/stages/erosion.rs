@@ -21,8 +21,8 @@
 //! original surface along it ([`incise`]), and diffuses the land
 //! ([`diffuse`]). Until the Climate stage exists the
 //! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere. Ticket
-//! M3-05 wires the stage into the pipeline, M3-07 makes
-//! [`ErosionSettings`] part of the world's settings.
+//! M3-05 wires the stage into the pipeline, with the world's erosion
+//! settings, `Settings::erosion` (ticket M3-07).
 //!
 //! Everything here depends only on its inputs, through integer
 //! bookkeeping, IEEE `+ − × ÷`, `sqrt`, comparisons, [`det::pow`] and exact

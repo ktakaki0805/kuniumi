@@ -346,6 +346,18 @@ fn diffuse_needs_valid_settings() {
 #[test]
 #[should_panic(expected = "diffuse needs a finite step Δt K_d / R²")]
 fn diffuse_needs_a_finite_step() {
+    // Valid settings (`Δt K_d` = 1 m²) on a radius whose square underflows
+    // to 0. A product `Δt K_d` that overflows is not valid (ticket M3-07),
+    // so it is rejected as such.
+    diffuse_octahedron(|r, _, _, _| *r = 1e-200);
+}
+
+#[test]
+#[should_panic(
+    expected = "diffuse needs valid settings: diffusion_step_m2 from diffusivity_m2_s \
+                           and time_step_s is out of range: inf"
+)]
+fn diffuse_needs_a_diffusion_step_that_does_not_overflow() {
     diffuse_octahedron(|_, _, s, _| {
         s.diffusivity_m2_s = 1e200;
         s.time_step_s = 1e200;
@@ -359,16 +371,17 @@ fn erode_needs_a_finite_step() {
     let world = &worlds()[0];
     let n = world.grid.len();
     let (no_uplift, precipitation) = (vec![0.0; n], rain(&world.grid));
+    // The default settings, valid (`Δt K_d` = 50 m²), on a radius whose
+    // square underflows to 0; a product `Δt K_d` that overflows is not
+    // valid (ticket M3-07).
     let inputs = ErosionInputs {
         grid: &world.grid,
-        radius_m: world.params.radius_m,
+        radius_m: 1e-200,
         sea_level_m: world.sea_level_m,
         uplift_rate_m_s: &no_uplift,
         precipitation_m_s: &precipitation,
     };
     let settings = ErosionSettings {
-        diffusivity_m2_s: f64::MAX,
-        time_step_s: f64::MAX,
         steps: 0,
         ..ErosionSettings::default()
     };

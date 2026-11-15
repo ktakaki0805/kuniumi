@@ -31,6 +31,10 @@ pub struct Settings {
     ///
     /// [`World::settings`]: crate::World::settings
     pub allow_partial: bool,
+    /// The settings of the Erosion stage (ticket M3-05 runs it), checked by
+    /// [`validate`](Self::validate) after the other fields. Default
+    /// [`ErosionSettings::default`].
+    pub erosion: ErosionSettings,
 }
 
 impl Settings {
@@ -61,7 +65,13 @@ impl Settings {
 
     /// Checks every setting, in the order of the fields; the error names the
     /// first one out of range ([`ParamError::OutOfRange`] with the setting's
-    /// name, such as `"cells"` or `"plate_count"`).
+    /// name, such as `"cells"` or `"plate_count"`). The erosion settings come
+    /// last, checked by [`ErosionSettings::validate`], whose errors name a
+    /// field by its path from `Settings`: `"erosion.time_step_s"` for
+    /// [`ErosionSettings::time_step_s`], and
+    /// `"erosion.diffusion_step_m2"` with the fields
+    /// `["erosion.diffusivity_m2_s", "erosion.time_step_s"]` for a diffusion
+    /// step that overflows ([`ParamError::Inconsistent`]).
     pub fn validate(&self) -> Result<(), ParamError> {
         if !(Self::MIN_CELLS..=Self::MAX_CELLS).contains(&self.cells) {
             return Err(ParamError::OutOfRange {
@@ -75,7 +85,7 @@ impl Settings {
                 value: f64::from(self.plate_count),
             });
         }
-        Ok(())
+        self.erosion.check(Naming::Path)
     }
 }
 
@@ -85,6 +95,7 @@ impl Default for Settings {
             cells: Self::DEFAULT_CELLS,
             plate_count: Self::DEFAULT_PLATE_COUNT,
             allow_partial: false,
+            erosion: ErosionSettings::default(),
         }
     }
 }
@@ -97,9 +108,9 @@ impl Default for Settings {
 /// M3-04), solved by backward Euler; [`steps`](Self::steps) steps of
 /// [`time_step_s`](Self::time_step_s).
 ///
-/// Not yet a field of [`Settings`]: ticket M3-07 adds it there and records
-/// it in `world.json` and in settings files. Until then the solver of
-/// `kuniumi_sim::stages::erosion` takes it as an argument.
+/// A world's erosion settings are [`Settings::erosion`] (ticket M3-07),
+/// recorded with the other settings in `world.json` and in settings files;
+/// the solver of `kuniumi_sim::stages::erosion` takes them as an argument.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ErosionSettings {
     /// The erodibility `K` of the stream-power law, in the SI unit
@@ -195,39 +206,83 @@ impl ErosionSettings {
     /// ([`ParamError::OutOfRange`] with the field's name, such as
     /// `"erodibility"`): the erodibility and the time step must be finite
     /// and positive, the discharge exponent and the diffusivity finite and
-    /// not negative; every number of steps is valid. Within these the laws
-    /// are defined and the solvers' results are finite, provided the step
-    /// of the diffusion, `Δt K_d / R²` with the planet's radius `R`, does
-    /// not overflow, which the solver checks (`kuniumi_sim`'s `erode`).
+    /// not negative; every number of steps is valid. Then the diffusion
+    /// step `K_d Δt` (m², the square of the diffusion length of one step)
+    /// must be finite: [`ParamError::Inconsistent`] with the name
+    /// `"diffusion_step_m2"`, the value `+∞` and the fields
+    /// `["diffusivity_m2_s", "time_step_s"]` if the product overflows
+    /// (ticket M3-07; above 1.8 × 10³⁰⁸ m², such as 10²⁰⁰ m²/s for 10²⁰⁰ s).
+    ///
+    /// Within these the laws are defined and the solvers' results are
+    /// finite: the step of the diffusion on the unit sphere,
+    /// `Δt K_d / R²`, is then finite on every planet whose radius `R` is at
+    /// least 1 m, every valid planet (`kuniumi_sim`'s `erode` checks it for
+    /// the radius it is given). [`Settings::validate`] reports the same
+    /// errors with each name prefixed by `erosion.`.
     pub fn validate(&self) -> Result<(), ParamError> {
-        // Written so that NaN fails every check.
-        let checks = [
-            (
-                "erodibility",
-                self.erodibility,
-                self.erodibility > 0.0 && self.erodibility.is_finite(),
-            ),
-            (
-                "discharge_exponent",
-                self.discharge_exponent,
-                self.discharge_exponent >= 0.0 && self.discharge_exponent.is_finite(),
-            ),
-            (
-                "diffusivity_m2_s",
-                self.diffusivity_m2_s,
-                self.diffusivity_m2_s >= 0.0 && self.diffusivity_m2_s.is_finite(),
-            ),
-            (
-                "time_step_s",
-                self.time_step_s,
-                self.time_step_s > 0.0 && self.time_step_s.is_finite(),
-            ),
-        ];
-        match checks.into_iter().find(|&(_, _, valid)| !valid) {
-            Some((name, value, _)) => Err(ParamError::OutOfRange { name, value }),
-            None => Ok(()),
-        }
+        self.check(Naming::Field)
     }
+
+    /// The names of the fields that [`validate`](Self::validate) checks, in
+    /// field order, as `(name, path from Settings)`.
+    const CHECKED_FIELDS: [(&'static str, &'static str); 4] = [
+        ("erodibility", "erosion.erodibility"),
+        ("discharge_exponent", "erosion.discharge_exponent"),
+        ("diffusivity_m2_s", "erosion.diffusivity_m2_s"),
+        ("time_step_s", "erosion.time_step_s"),
+    ];
+
+    /// The name of the diffusion step `K_d Δt`, as `(name, path from
+    /// Settings)`.
+    const DIFFUSION_STEP: (&'static str, &'static str) =
+        ("diffusion_step_m2", "erosion.diffusion_step_m2");
+
+    /// [`validate`](Self::validate), naming each field as `naming` asks.
+    fn check(&self, naming: Naming) -> Result<(), ParamError> {
+        let name = |(field, path): (&'static str, &'static str)| match naming {
+            Naming::Field => field,
+            Naming::Path => path,
+        };
+        let values = [
+            self.erodibility,
+            self.discharge_exponent,
+            self.diffusivity_m2_s,
+            self.time_step_s,
+        ];
+        // Written so that NaN fails every check.
+        let valid = [
+            self.erodibility > 0.0 && self.erodibility.is_finite(),
+            self.discharge_exponent >= 0.0 && self.discharge_exponent.is_finite(),
+            self.diffusivity_m2_s >= 0.0 && self.diffusivity_m2_s.is_finite(),
+            self.time_step_s > 0.0 && self.time_step_s.is_finite(),
+        ];
+        if let Some(k) = valid.iter().position(|&v| !v) {
+            return Err(ParamError::OutOfRange {
+                name: name(Self::CHECKED_FIELDS[k]),
+                value: values[k],
+            });
+        }
+        // Both finite and not negative: the product is finite or +∞, never
+        // NaN.
+        let step_m2 = self.diffusivity_m2_s * self.time_step_s;
+        if !step_m2.is_finite() {
+            return Err(ParamError::Inconsistent {
+                name: name(Self::DIFFUSION_STEP),
+                value: step_m2,
+                fields: [name(Self::CHECKED_FIELDS[2]), name(Self::CHECKED_FIELDS[3])],
+            });
+        }
+        Ok(())
+    }
+}
+
+/// How [`ErosionSettings::check`] names a field.
+#[derive(Clone, Copy)]
+enum Naming {
+    /// By its name in [`ErosionSettings`] (`"time_step_s"`).
+    Field,
+    /// By its path from [`Settings`] (`"erosion.time_step_s"`).
+    Path,
 }
 
 impl Default for ErosionSettings {
@@ -269,7 +324,11 @@ mod tests {
             (f64::MIN_POSITIVE, 0.0, 0.0, f64::MIN_POSITIVE, 0),
             (5e-324, 1.0, 5e-324, 5e-324, 1),
             (1.0, 0.5, 1.0, 1.0, u32::MAX),
-            (f64::MAX, f64::MAX, f64::MAX, f64::MAX, 7),
+            // Products `Δt K_d` up to the largest float.
+            (f64::MAX, f64::MAX, 1.0, f64::MAX, 7),
+            (f64::MAX, f64::MAX, f64::MAX, 1.0, 7),
+            (1.0, 0.0, f64::MAX, 0.5, 2),
+            (1.0, 0.0, 0.0, f64::MAX, 2),
         ] {
             let s = ErosionSettings {
                 erodibility,
@@ -282,8 +341,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn erosion_settings_reject_values_out_of_their_domain_by_name() {
+    /// Erosion settings with one value out of its domain, the field's name
+    /// and the value, in field order.
+    fn bad_erosion_settings() -> Vec<(ErosionSettings, &'static str, f64)> {
         let bad_positive = [0.0, -0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
         let bad_non_negative = [-5e-324, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
         let cases = bad_positive
@@ -328,7 +388,12 @@ mod tests {
                     v,
                 )
             }));
-        for (s, name, value) in cases {
+        cases.collect()
+    }
+
+    #[test]
+    fn erosion_settings_reject_values_out_of_their_domain_by_name() {
+        for (s, name, value) in bad_erosion_settings() {
             match s.validate() {
                 Err(ParamError::OutOfRange {
                     name: n,
@@ -379,12 +444,175 @@ mod tests {
         );
     }
 
+    /// The error of a diffusion step `Δt K_d` that overflows, with the
+    /// names `diffusion_step_m2`, `diffusivity_m2_s` and `time_step_s`,
+    /// each after `prefix`.
+    fn overflowing_step(prefix: &str) -> (String, f64, [String; 2]) {
+        (
+            format!("{prefix}diffusion_step_m2"),
+            f64::INFINITY,
+            [
+                format!("{prefix}diffusivity_m2_s"),
+                format!("{prefix}time_step_s"),
+            ],
+        )
+    }
+
+    /// `error` as the names and the value of `ParamError::Inconsistent`.
+    fn inconsistent(error: Result<(), ParamError>) -> (String, f64, [String; 2]) {
+        match error {
+            Err(ParamError::Inconsistent {
+                name,
+                value,
+                fields,
+            }) => (name.to_owned(), value, fields.map(str::to_owned)),
+            other => panic!("not Inconsistent: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn erosion_settings_reject_a_diffusion_step_that_overflows() {
+        // Each product above f64::MAX: twice it, 1e400, and f64::MAX times
+        // the next double above 1, which rounds up to infinity (its exact
+        // value exceeds f64::MAX by about 2^971, more than half an ULP).
+        let above_one = f64::from_bits(1.0_f64.to_bits() + 1);
+        for (diffusivity_m2_s, time_step_s) in [
+            (f64::MAX, 2.0),
+            (2.0, f64::MAX),
+            (1e200, 1e200),
+            (f64::MAX, f64::MAX),
+            (f64::MAX, above_one),
+        ] {
+            let s = ErosionSettings {
+                diffusivity_m2_s,
+                time_step_s,
+                ..ErosionSettings::default()
+            };
+            assert_eq!(inconsistent(s.validate()), overflowing_step(""), "{s:?}");
+            let settings = Settings {
+                erosion: s,
+                ..Settings::default()
+            };
+            assert_eq!(
+                inconsistent(settings.validate()),
+                overflowing_step("erosion."),
+                "{s:?}"
+            );
+        }
+        // A field out of its domain is reported first.
+        let s = ErosionSettings {
+            diffusivity_m2_s: f64::MAX,
+            time_step_s: f64::MAX,
+            erodibility: 0.0,
+            ..ErosionSettings::default()
+        };
+        assert_eq!(
+            s.validate(),
+            Err(ParamError::OutOfRange {
+                name: "erodibility",
+                value: 0.0,
+            })
+        );
+    }
+
+    #[test]
+    fn settings_reject_invalid_erosion_settings_by_path() {
+        for (erosion, name, value) in bad_erosion_settings() {
+            let s = Settings {
+                erosion,
+                ..Settings::default()
+            };
+            match s.validate() {
+                Err(ParamError::OutOfRange {
+                    name: n,
+                    value: got,
+                }) => {
+                    assert_eq!(n, format!("erosion.{name}"), "{s:?}");
+                    assert_eq!(got.to_bits(), value.to_bits(), "{s:?}");
+                }
+                other => panic!("{s:?}: {other:?}"),
+            }
+        }
+        // The cells and the plate count are checked before the erosion
+        // settings, and those in field order.
+        let all_bad = ErosionSettings {
+            erodibility: -1.0,
+            discharge_exponent: -2.0,
+            diffusivity_m2_s: -3.0,
+            time_step_s: -4.0,
+            steps: 0,
+        };
+        let cases = [
+            (999, 12, all_bad, "cells", 999.0),
+            (1_000, 1, all_bad, "plate_count", 1.0),
+            (1_000, 12, all_bad, "erosion.erodibility", -1.0),
+            (
+                1_000,
+                12,
+                ErosionSettings {
+                    erodibility: 1.0,
+                    ..all_bad
+                },
+                "erosion.discharge_exponent",
+                -2.0,
+            ),
+            (
+                1_000,
+                12,
+                ErosionSettings {
+                    erodibility: 1.0,
+                    discharge_exponent: 1.0,
+                    ..all_bad
+                },
+                "erosion.diffusivity_m2_s",
+                -3.0,
+            ),
+            (
+                1_000,
+                12,
+                ErosionSettings {
+                    erodibility: 1.0,
+                    discharge_exponent: 1.0,
+                    diffusivity_m2_s: 1.0,
+                    ..all_bad
+                },
+                "erosion.time_step_s",
+                -4.0,
+            ),
+        ];
+        for (cells, plate_count, erosion, name, value) in cases {
+            let s = Settings {
+                cells,
+                plate_count,
+                allow_partial: false,
+                erosion,
+            };
+            assert_eq!(
+                s.validate(),
+                Err(ParamError::OutOfRange { name, value }),
+                "{s:?}"
+            );
+        }
+        // Every number of steps is valid.
+        for steps in [0, 1, u32::MAX] {
+            let s = Settings {
+                erosion: ErosionSettings {
+                    steps,
+                    ..ErosionSettings::default()
+                },
+                ..Settings::default()
+            };
+            assert_eq!(s.validate(), Ok(()), "{steps}");
+        }
+    }
+
     #[test]
     fn default_has_650_000_cells_12_plates_and_is_valid() {
         let s = Settings::default();
         assert_eq!(s.cells, 650_000);
         assert_eq!(s.plate_count, 12);
         assert!(!s.allow_partial);
+        assert_eq!(s.erosion, ErosionSettings::default());
         assert_eq!(s.validate(), Ok(()));
     }
 
@@ -425,6 +653,10 @@ mod tests {
                 cells: 999,
                 plate_count: 0,
                 allow_partial: false,
+                erosion: ErosionSettings {
+                    erodibility: 0.0,
+                    ..ErosionSettings::default()
+                },
             }
             .validate(),
             Err(ParamError::OutOfRange {

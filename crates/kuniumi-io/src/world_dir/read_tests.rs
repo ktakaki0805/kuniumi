@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use kuniumi_world::{Field, PlanetParams, Settings, World};
+use kuniumi_world::{ErosionSettings, Field, PlanetParams, Settings, World};
 
 use super::tests::{
     HYPSOMETRY_RESERVED, awkward_world, octahedron_world, world, world_with_relief,
@@ -49,6 +49,7 @@ fn bytes_of(path: &Path) -> Vec<u8> {
 /// the same bit for bit (`==` on `f64` cannot tell −0 from 0).
 fn contents(world: &World) -> Vec<String> {
     let p = &world.params;
+    let e = &world.settings.erosion;
     let mut out = vec![
         format!(
             "params {:?} {:?}",
@@ -68,6 +69,16 @@ fn contents(world: &World) -> Vec<String> {
             (p.rotation, p.tectonics)
         ),
         format!("settings {:?}", world.settings),
+        format!(
+            "erosion {:?}",
+            [
+                e.erodibility,
+                e.discharge_exponent,
+                e.diffusivity_m2_s,
+                e.time_step_s,
+            ]
+            .map(f64::to_bits)
+        ),
         format!("seed {}", world.seed),
         format!("sea level {:#x}", world.sea_level_m.to_bits()),
         format!("stages {:?}", world.stages),
@@ -115,12 +126,22 @@ fn assert_round_trip(world: &World, dir: &Path, copy: &Path) {
 
 #[test]
 fn reads_back_a_generated_world_bit_exactly() {
+    // Erosion settings that are not the defaults, recorded with the world
+    // (no stage reads them yet).
     let settings = Settings {
         cells: 20_000,
         allow_partial: true,
+        erosion: ErosionSettings {
+            erodibility: 1.0 / 3.0 * 1e-9,
+            discharge_exponent: 0.4,
+            diffusivity_m2_s: 0.1 + 0.2,
+            time_step_s: 123_456_789.012_345_68,
+            steps: 7,
+        },
         ..Settings::default()
     };
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 1, &mut |_| {}).unwrap();
+    assert_eq!(world.settings, settings);
     // Every stage that exists so far, with its fields.
     assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
     assert_eq!(world.grid.len(), 20_000);
@@ -198,11 +219,11 @@ fn assert_error(what: &str, err: &ReadError, dir: &Path, file: &str, kind: &str,
 
 #[test]
 fn rejects_other_format_versions() {
-    for version in ["0", "1", "3", "18446744073709551615"] {
+    for version in ["0", "1", "2", "4", "18446744073709551615"] {
         let (dir, err) = read_spoiled("version", |dir| {
             edit_world_json(dir, |text| {
                 text.replace(
-                    "\"format_version\": 2,",
+                    "\"format_version\": 3,",
                     &format!("\"format_version\": {version},"),
                 )
             })
@@ -215,17 +236,39 @@ fn rejects_other_format_versions() {
             "version",
             &format!(
                 "world directory format version {version} is not supported: this build reads \
-                 only version 2 (generate the world again)"
+                 only version 3 (generate the world again)"
             ),
         );
         remove(&dir);
     }
+    // A version 2 directory as ticket MV-01 wrote it: the settings without
+    // `erosion` (ticket M3-07 refuses it rather than read it with the
+    // default erosion settings, which its generator never had).
+    let (dir, err) = read_spoiled("version_2", |dir| {
+        edit_world_json(dir, |text| {
+            let start = text.find(",\n    \"erosion\": {").unwrap();
+            let end = start + text[start..].find("\n    }").unwrap() + "\n    }".len();
+            let text = format!("{}{}", &text[..start], &text[end..]);
+            assert!(text.contains("\"allow_partial\": true\n  },"), "{text}");
+            text.replace("\"format_version\": 3,", "\"format_version\": 2,")
+        })
+    });
+    assert_error(
+        "version 2",
+        &err,
+        &dir,
+        "world.json",
+        "version",
+        "world directory format version 2 is not supported: this build reads only version 3 \
+         (generate the world again)",
+    );
+    remove(&dir);
     // The version is checked before the rest of the file: a version 1
     // directory of ticket M2-01, with a key this build does not know.
     let (dir, err) = read_spoiled("version_first", |dir| {
         edit_world_json(dir, |text| {
             text.replace(
-                "\"format_version\": 2,",
+                "\"format_version\": 3,",
                 "\"format_version\": 1, \"old\": 0,",
             )
         })
@@ -236,7 +279,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 1 is not supported: this build reads only version 2 \
+        "world directory format version 1 is not supported: this build reads only version 3 \
          (generate the world again)",
     );
     remove(&dir);
@@ -245,7 +288,7 @@ fn rejects_other_format_versions() {
     let (dir, err) = read_spoiled("version_layout", |dir| {
         edit_world_json(dir, |text| {
             let text = text
-                .replace("\"format_version\": 2,", "\"format_version\": 3,")
+                .replace("\"format_version\": 3,", "\"format_version\": 4,")
                 .replace("\"seed\": 1,", "")
                 .replace(
                     "\"rotation\": \"free\"",
@@ -255,22 +298,24 @@ fn rejects_other_format_versions() {
                     "\"kind\": \"class\"",
                     "\"kind\": {\"class\": {\"palette\": 2}}",
                 );
+            // The settings object ends at the first brace at its own
+            // indentation, after the erosion settings.
             let start = text.find("\"settings\": {").unwrap();
-            let end = start + text[start..].find('}').unwrap() + 1;
+            let end = start + text[start..].find("\n  }").unwrap() + "\n  }".len();
             format!(
-                "{}\"settings\": [1000, 12, true]{}",
+                "{}\"settings\": [1000, 12, true, []]{}",
                 &text[..start],
                 &text[end..]
             )
         })
     });
     assert_error(
-        "version 3, another layout",
+        "version 4, another layout",
         &err,
         &dir,
         "world.json",
         "version",
-        "world directory format version 3 is not supported: this build reads only version 2 \
+        "world directory format version 4 is not supported: this build reads only version 3 \
          (generate the world again)",
     );
     remove(&dir);
@@ -337,10 +382,34 @@ fn rejects_malformed_world_json() {
         (
             "settings as an array",
             Box::new(replace(
-                "\"settings\": {\n    \"cells\": 1000,\n    \"plate_count\": 12,\n    \"allow_partial\": true\n  }",
-                "\"settings\": [1000, 12, true]",
+                "\"settings\": {\n    \"cells\": 1000,\n    \"plate_count\": 12,\n    \
+                 \"allow_partial\": true,\n    \"erosion\": {\n      \
+                 \"erodibility\": 2.5e-10,\n      \"discharge_exponent\": 0.5,\n      \
+                 \"diffusivity_m2_s\": 3.2e-10,\n      \"time_step_s\": 631152000000.0,\n      \
+                 \"steps\": 250\n    }\n  }",
+                "\"settings\": [1000, 12, true, [2.5e-10, 0.5, 3.2e-10, 631152000000.0, 250]]",
             )),
             "`settings` is not a JSON object",
+        ),
+        (
+            "erosion settings as an array",
+            Box::new(replace(
+                "\"erosion\": {\n      \"erodibility\": 2.5e-10,\n      \
+                 \"discharge_exponent\": 0.5,\n      \"diffusivity_m2_s\": 3.2e-10,\n      \
+                 \"time_step_s\": 631152000000.0,\n      \"steps\": 250\n    }",
+                "\"erosion\": [2.5e-10, 0.5, 3.2e-10, 631152000000.0, 250]",
+            )),
+            "`settings.erosion` is not a JSON object",
+        ),
+        (
+            "no erosion settings",
+            Box::new(replace(
+                ",\n    \"erosion\": {\n      \"erodibility\": 2.5e-10,\n      \
+                 \"discharge_exponent\": 0.5,\n      \"diffusivity_m2_s\": 3.2e-10,\n      \
+                 \"time_step_s\": 631152000000.0,\n      \"steps\": 250\n    }",
+                "",
+            )),
+            "missing field `erosion`",
         ),
         (
             "planet as an array",
@@ -385,24 +454,24 @@ fn rejects_malformed_world_json() {
         ),
         (
             "no version",
-            Box::new(replace("\"format_version\": 2,", "")),
+            Box::new(replace("\"format_version\": 3,", "")),
             "missing field `format_version`",
         ),
         (
             "a version that is not a number",
             Box::new(replace(
-                "\"format_version\": 2,",
-                "\"format_version\": \"2\",",
+                "\"format_version\": 3,",
+                "\"format_version\": \"3\",",
             )),
-            "`format_version` is \"2\", not an unsigned integer",
+            "`format_version` is \"3\", not an unsigned integer",
         ),
         (
             "a fractional version",
             Box::new(replace(
-                "\"format_version\": 2,",
-                "\"format_version\": 2.0,",
+                "\"format_version\": 3,",
+                "\"format_version\": 3.0,",
             )),
-            "`format_version` is 2.0, not an unsigned integer",
+            "`format_version` is 3.0, not an unsigned integer",
         ),
         (
             "a missing key",
@@ -426,6 +495,34 @@ fn rejects_malformed_world_json() {
                 "\"allow_partial\": true, \"extra\": 1",
             )),
             "unknown field `extra`",
+        ),
+        (
+            "an unknown key of the erosion settings",
+            Box::new(replace("\"steps\": 250", "\"steps\": 250, \"k\": 1")),
+            "unknown field `k`",
+        ),
+        (
+            "a missing key of the erosion settings",
+            Box::new(replace("\"discharge_exponent\": 0.5,", "")),
+            "missing field `discharge_exponent`",
+        ),
+        (
+            "a string for the steps",
+            Box::new(replace("\"steps\": 250", "\"steps\": \"250\"")),
+            "invalid type: string \"250\", expected u32",
+        ),
+        (
+            "negative steps",
+            Box::new(replace("\"steps\": 250", "\"steps\": -1")),
+            "invalid value: integer `-1`, expected u32",
+        ),
+        (
+            "null for the erodibility",
+            Box::new(replace(
+                "\"erodibility\": 2.5e-10,",
+                "\"erodibility\": null,",
+            )),
+            "invalid type: null, expected f64",
         ),
         (
             "an unknown key of a field",
@@ -951,7 +1048,7 @@ fn spoiled_files_read_from_memory_fail_as_from_disk() {
         "truncated" => put(dir, &file, &full[..full.len() - 3]),
         "trailing" => put(dir, &file, &[full.as_slice(), &[0]].concat()),
         "version" => edit_world_json(dir, |t| {
-            t.replace("\"format_version\": 2", "\"format_version\": 9")
+            t.replace("\"format_version\": 3", "\"format_version\": 9")
         }),
         "grid" => {
             let bytes = bytes_of(&dir.join(GRID_FILE));

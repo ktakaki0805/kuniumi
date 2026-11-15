@@ -84,6 +84,16 @@ pub fn mm_per_year_to_m_per_s(mm_per_year: f64) -> f64 {
     mm_per_year * 1.0e-3 / SECONDS_PER_YEAR
 }
 
+/// Converts Julian years to seconds.
+pub fn years_to_s(years: f64) -> f64 {
+    years * SECONDS_PER_YEAR
+}
+
+/// Converts a diffusivity in m² per Julian year to m²/s.
+pub fn m2_per_year_to_m2_per_s(m2_per_year: f64) -> f64 {
+    m2_per_year / SECONDS_PER_YEAR
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +134,33 @@ mod tests {
         assert!(same(deg_to_rad(23.44), 0.409_105_176_667_470_87));
         // Zeros keep their sign.
         for f in [km_to_m, hours_to_s, days_to_s, km3_to_m3, bar_to_pa] {
+            assert!(same(f(0.0), 0.0));
+            assert!(same(f(-0.0), -0.0));
+        }
+    }
+
+    #[test]
+    fn year_conversions_give_the_hand_computed_si_values() {
+        // Exact by hand: 10,000 and 2.5 Julian years of 31,557,600 s.
+        assert!(same(years_to_s(1e4), 315_576_000_000.0));
+        assert!(same(years_to_s(2.5), 78_894_000.0));
+        assert!(same(years_to_s(-1.0), -31_557_600.0));
+        // Rounded quotients, from Python's IEEE 754 arithmetic:
+        // repr(5e-3 / 31557600.0), repr(1.0 / 31557600.0),
+        // repr(0.01 / 31557600.0).
+        assert!(same(
+            m2_per_year_to_m2_per_s(5e-3),
+            1.584_404_390_701_447_6e-10
+        ));
+        assert!(same(m2_per_year_to_m2_per_s(1.0), 3.168_808_781_402_895e-8));
+        assert!(same(
+            m2_per_year_to_m2_per_s(0.01),
+            3.168_808_781_402_895e-10
+        ));
+        // Beyond the largest float in seconds (Python: 1e301 * 31557600.0
+        // is inf).
+        assert!(same(years_to_s(1e301), f64::INFINITY));
+        for f in [years_to_s, m2_per_year_to_m2_per_s] {
             assert!(same(f(0.0), 0.0));
             assert!(same(f(-0.0), -0.0));
         }

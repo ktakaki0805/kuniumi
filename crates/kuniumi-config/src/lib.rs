@@ -1,8 +1,10 @@
 //! Settings files: a planet's parameters and its generation settings in
 //! TOML (D-15).
 //!
-//! A settings file has two tables, both optional. `[planet]` holds the
-//! [`PlanetParams`], `[generation]` the [`Settings`]:
+//! A settings file has three tables, all optional. `[planet]` holds the
+//! [`PlanetParams`], `[generation]` the [`Settings`], and its subtable
+//! `[generation.erosion]` the settings of the Erosion stage,
+//! [`Settings::erosion`] (ticket M3-07):
 //!
 //! ```toml
 //! [planet]
@@ -11,12 +13,15 @@
 //!
 //! [generation]
 //! cells = 20000
+//!
+//! [generation.erosion]
+//! time_step_yr = 20000
 //! ```
 //!
 //! Every field has its own key, the field's name, so that a key spells its
-//! unit (docs/conventions.md, "Units"). Six quantities may instead be given
-//! in a human unit, under a second key; giving both keys of one quantity is
-//! an error ([`ConfigError::BothKeys`]):
+//! unit (docs/conventions.md, "Units"). Eight quantities may instead be
+//! given in a human unit, under a second key; giving both keys of one
+//! quantity is an error ([`ConfigError::BothKeys`]):
 //!
 //! | Quantity | SI key | Human-unit key |
 //! | --- | --- | --- |
@@ -26,20 +31,29 @@
 //! | orbital period | `orbital_period_s` | `orbital_period_days` (86,400 s) |
 //! | ocean volume | `ocean_volume_m3` | `ocean_volume_km3` |
 //! | surface pressure | `surface_pressure_pa` | `surface_pressure_bar` |
+//! | erosion time step | `time_step_s` | `time_step_yr` |
+//! | hillslope diffusivity | `diffusivity_m2_s` | `diffusivity_m2_yr` |
 //!
+//! The first six are keys of `[planet]`, the last two of
+//! `[generation.erosion]`, whose year is the Julian year of 31,557,600 s.
 //! The other keys of `[planet]` are `surface_gravity_m_s2`,
 //! `orbital_eccentricity`, `stellar_flux_w_m2`, `continental_crust_fraction`,
 //! `rotation` (`"free"` or `"tidally_locked"`) and `tectonics`
 //! (`"plate_tectonics"` or `"stagnant_lid"`); those of `[generation]` are
-//! `cells`, `plate_count` and `allow_partial`. Floats may be written as TOML
-//! integers (`radius_km = 6371`). Human units are converted with
-//! [`kuniumi_math::units`]. Missing keys take the values of
-//! [`PlanetParams::earth`] and [`Settings::default`]. The seed is not part of
-//! the file: `kuniumi_sim::generate` takes it separately.
+//! `cells`, `plate_count` and `allow_partial`; those of
+//! `[generation.erosion]` are `erodibility`, `discharge_exponent` and
+//! `steps`. The erodibility `K` of the stream-power law has the SI unit
+//! m^(1−3m) s^(m−1), which depends on the discharge exponent `m`, so its key
+//! names no unit and has no human-unit twin (ticket M3-03). Floats may be
+//! written as TOML integers (`radius_km = 6371`). Human units are converted
+//! with [`kuniumi_math::units`]. Missing keys take the values of
+//! [`PlanetParams::earth`] and [`Settings::default`]. The seed is not part
+//! of the file: `kuniumi_sim::generate` takes it separately.
 //!
 //! [`load`] reads a file and checks it with [`PlanetParams::validate`] and
 //! [`Settings::validate`]; every error names the key (both keys for a
-//! radius and gravity that do not fit together), or the line and column
+//! radius and gravity that do not fit together, or for an erosion time step
+//! and diffusivity whose product overflows), or the line and column
 //! ([`ConfigError`]). [`write()`] writes a file with the SI keys only, and
 //! `load(&write(p, s))` returns `p` and `s` bit for bit.
 //!
@@ -50,7 +64,9 @@
 use core::fmt::{self, Write as _};
 
 use kuniumi_math::units;
-use kuniumi_world::{ParamError, PlanetParams, RotationRegime, Settings, TectonicRegime};
+use kuniumi_world::{
+    ErosionSettings, ParamError, PlanetParams, RotationRegime, Settings, TectonicRegime,
+};
 use serde::Deserialize;
 
 /// Reads a settings file: the planet's parameters and the generation
@@ -63,8 +79,8 @@ use serde::Deserialize;
 /// regime name); [`ConfigError::BothKeys`] if a quantity is given under both
 /// of its keys; [`ConfigError::Invalid`] if [`PlanetParams::validate`] or,
 /// after it, [`Settings::validate`] rejects a value;
-/// [`ConfigError::Inconsistent`] if [`PlanetParams::validate`] rejects a
-/// combination of values.
+/// [`ConfigError::Inconsistent`] if either rejects a combination of
+/// values.
 pub fn load(text: &str) -> Result<(PlanetParams, Settings), ConfigError> {
     let file: RawFile = toml::from_str(text).map_err(|e| ConfigError::Toml {
         message: e.to_string().trim_end().to_owned(),
@@ -175,6 +191,36 @@ pub fn write(params: &PlanetParams, settings: &Settings) -> String {
         &s.allow_partial.to_string(),
         "return the world so far at a missing stage",
     );
+
+    out.push_str("\n[generation.erosion]\n");
+    let e = &s.erosion;
+    let floats = [
+        (
+            "erodibility",
+            e.erodibility,
+            "stream power K, m^(1-3m) s^(m-1)",
+        ),
+        (
+            "discharge_exponent",
+            e.discharge_exponent,
+            "m of the discharge in K Q^m S",
+        ),
+        (
+            "diffusivity_m2_s",
+            e.diffusivity_m2_s,
+            "hillslope; or diffusivity_m2_yr",
+        ),
+        ("time_step_s", e.time_step_s, "time step; or time_step_yr"),
+    ];
+    for (key, value, comment) in floats {
+        line(&mut out, key, &float(value), comment);
+    }
+    line(
+        &mut out,
+        "steps",
+        &e.steps.to_string(),
+        "number of time steps",
+    );
     out
 }
 
@@ -239,25 +285,30 @@ pub enum ConfigError {
     /// support.
     Invalid {
         /// The key as written in the file, with its table
-        /// (`"planet.radius_km"`, `"generation.cells"`).
+        /// (`"planet.radius_km"`, `"generation.cells"`,
+        /// `"generation.erosion.time_step_yr"`).
         key: &'static str,
         /// The number as written under `key`, in the key's unit, for a value
         /// out of range (`-1` for `radius_km = -1`); `None` for a regime.
         written: Option<f64>,
         /// What [`PlanetParams::validate`] or [`Settings::validate`]
         /// reported; its value is in SI units (`-1000` for the radius
-        /// above).
+        /// above), its name that of the field (`radius_m`), for an erosion
+        /// setting its path from [`Settings`] (`erosion.time_step_s`).
         error: ParamError,
     },
     /// Values, each in range, that do not fit together: a radius and a
-    /// surface gravity whose bulk density is out of range.
+    /// surface gravity whose bulk density is out of range, or an erosion
+    /// diffusivity and time step whose product, the diffusion step, is not
+    /// finite.
     Inconsistent {
         /// The keys of the values, with their table, as written in the file
-        /// (the SI key for a value left at Earth's), in field order
-        /// (`["planet.radius_km", "planet.surface_gravity_m_s2"]`).
+        /// (the SI key for a value left at Earth's or at its default), in
+        /// field order (`["planet.radius_km",
+        /// "planet.surface_gravity_m_s2"]`).
         keys: [&'static str; 2],
-        /// What [`PlanetParams::validate`] reported
-        /// ([`ParamError::Inconsistent`], in SI units).
+        /// What [`PlanetParams::validate`] or [`Settings::validate`]
+        /// reported ([`ParamError::Inconsistent`], in SI units).
         error: ParamError,
     },
 }
@@ -276,8 +327,13 @@ impl fmt::Display for ConfigError {
                 error: ParamError::OutOfRange { name, value },
             } => {
                 write!(f, "`{key}` = {} is out of range", number(*written))?;
-                // A human-unit key: the value that was checked, in SI.
-                if key.rsplit('.').next() != Some(name) {
+                // A human-unit key, one that does not end in the checked
+                // field's name or path (`erosion.time_step_s`): the value
+                // that was checked, in SI.
+                if !key
+                    .strip_suffix(name)
+                    .is_some_and(|table| table.ends_with('.'))
+                {
                     write!(f, " ({name} = {})", number(*value))?;
                 }
                 Ok(())
@@ -354,6 +410,21 @@ struct RawGeneration {
     cells: Option<u32>,
     plate_count: Option<u32>,
     allow_partial: Option<bool>,
+    #[serde(default)]
+    erosion: RawErosion,
+}
+
+/// `[generation.erosion]` as written: one `Option` per accepted key.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "the table [generation.erosion]")]
+struct RawErosion {
+    erodibility: Option<f64>,
+    discharge_exponent: Option<f64>,
+    diffusivity_m2_s: Option<f64>,
+    diffusivity_m2_yr: Option<f64>,
+    time_step_s: Option<f64>,
+    time_step_yr: Option<f64>,
+    steps: Option<u32>,
 }
 
 /// [`RotationRegime`] as written: `"free"` or `"tidally_locked"`.
@@ -372,11 +443,14 @@ enum RawTectonics {
     StagnantLid,
 }
 
-/// One float of [`PlanetParams`] as read: its value in SI units and the key
-/// it came from (the SI key when it took Earth's value).
+/// One float of [`PlanetParams`] or of [`ErosionSettings`] as read: its
+/// value in SI units and the key it came from (the SI key when it took
+/// Earth's or the default value).
 #[derive(Clone, Copy)]
 struct Picked {
-    /// The SI key with its table, `"planet."` and the field's name.
+    /// The SI key with its table: `"planet."` and the field's name, or
+    /// `"generation."` and the field's path from [`Settings`]
+    /// (`"generation.erosion.time_step_s"`).
     si_key: &'static str,
     /// The key the value was read from, with its table.
     key: &'static str,
@@ -386,10 +460,10 @@ struct Picked {
     value: f64,
 }
 
-/// The value of a quantity with an SI key only: `value`, or `earth` if it
-/// is missing.
-fn si_only(si_key: &'static str, value: Option<f64>, earth: f64) -> Picked {
-    let value = value.unwrap_or(earth);
+/// The value of a quantity with an SI key only: `value`, or `default`
+/// (Earth's value, or the default setting) if it is missing.
+fn si_only(si_key: &'static str, value: Option<f64>, default: f64) -> Picked {
+    let value = value.unwrap_or(default);
     Picked {
         si_key,
         key: si_key,
@@ -399,18 +473,19 @@ fn si_only(si_key: &'static str, value: Option<f64>, earth: f64) -> Picked {
 }
 
 /// The value of a quantity with two keys: the SI value, the human-unit
-/// value converted by `to_si`, or `earth` if both are missing.
+/// value converted by `to_si`, or `default` (Earth's value, or the default
+/// setting) if both are missing.
 fn either(
     (si_key, si): (&'static str, Option<f64>),
     (human_key, human): (&'static str, Option<f64>),
     to_si: fn(f64) -> f64,
-    earth: f64,
+    default: f64,
 ) -> Result<Picked, ConfigError> {
     let (key, written, value) = match (si, human) {
         (Some(_), Some(_)) => return Err(ConfigError::BothKeys { si_key, human_key }),
         (Some(v), None) => (si_key, v, v),
         (None, Some(v)) => (human_key, v, to_si(v)),
-        (None, None) => (si_key, earth, earth),
+        (None, None) => (si_key, default, default),
     };
     Ok(Picked {
         si_key,
@@ -550,28 +625,75 @@ fn planet(raw: &RawPlanet) -> Result<PlanetParams, ConfigError> {
     Ok(params)
 }
 
-/// Converts `[generation]` to [`Settings`] and validates it.
+/// Converts `[generation]` and `[generation.erosion]` to [`Settings`] and
+/// validates it, naming the key as written in the error.
 fn generation(raw: &RawGeneration) -> Result<Settings, ConfigError> {
     let default = Settings::default();
+    let (e, d) = (&raw.erosion, &default.erosion);
+    // In the order of the fields of `ErosionSettings`.
+    let picked = [
+        si_only(
+            "generation.erosion.erodibility",
+            e.erodibility,
+            d.erodibility,
+        ),
+        si_only(
+            "generation.erosion.discharge_exponent",
+            e.discharge_exponent,
+            d.discharge_exponent,
+        ),
+        either(
+            ("generation.erosion.diffusivity_m2_s", e.diffusivity_m2_s),
+            ("generation.erosion.diffusivity_m2_yr", e.diffusivity_m2_yr),
+            units::m2_per_year_to_m2_per_s,
+            d.diffusivity_m2_s,
+        )?,
+        either(
+            ("generation.erosion.time_step_s", e.time_step_s),
+            ("generation.erosion.time_step_yr", e.time_step_yr),
+            units::years_to_s,
+            d.time_step_s,
+        )?,
+    ];
+    let [erodibility, discharge_exponent, diffusivity, time_step] = picked;
     let settings = Settings {
         cells: raw.cells.unwrap_or(default.cells),
         plate_count: raw.plate_count.unwrap_or(default.plate_count),
         allow_partial: raw.allow_partial.unwrap_or(default.allow_partial),
+        erosion: ErosionSettings {
+            erodibility: erodibility.value,
+            discharge_exponent: discharge_exponent.value,
+            diffusivity_m2_s: diffusivity.value,
+            time_step_s: time_step.value,
+            steps: e.steps.unwrap_or(d.steps),
+        },
+    };
+    // The erosion setting `name`, its path from `Settings`, as read.
+    let field = |name: &str| {
+        picked
+            .iter()
+            .find(|p| p.si_key.strip_prefix("generation.") == Some(name))
     };
     settings.validate().map_err(|error| {
-        let key = match &error {
-            ParamError::OutOfRange { name: "cells", .. } => "generation.cells",
+        let (key, written) = match &error {
+            // The counts have no human-unit keys: the value is the number
+            // written.
+            ParamError::OutOfRange {
+                name: "cells",
+                value,
+            } => ("generation.cells", Some(*value)),
             ParamError::OutOfRange {
                 name: "plate_count",
-                ..
-            } => "generation.plate_count",
-            _ => "generation",
-        };
-        // The settings have no human-unit keys: the value is the number
-        // written.
-        let written = match &error {
-            ParamError::OutOfRange { value, .. } => Some(*value),
-            ParamError::Inconsistent { .. } | ParamError::Unsupported { .. } => None,
+                value,
+            } => ("generation.plate_count", Some(*value)),
+            ParamError::OutOfRange { name, value } => {
+                field(name).map_or(("generation", Some(*value)), |p| (p.key, Some(p.written)))
+            }
+            ParamError::Inconsistent { fields, .. } => {
+                let keys = fields.map(|name| field(name).map_or("generation", |p| p.key));
+                return ConfigError::Inconsistent { keys, error };
+            }
+            ParamError::Unsupported { .. } => ("generation", None),
         };
         ConfigError::Invalid {
             key,

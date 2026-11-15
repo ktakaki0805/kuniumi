@@ -384,6 +384,16 @@ section: every change after which an existing seed produces a different world
   5 × 10⁻³ m²/yr, the mean of 34 sites of McKean et al. 1993, finite and
   not negative). About
   13 ms per step for an Earth world of 650,000 cells, in release (M3-04).
+- `kuniumi_world::Settings::erosion`, the `ErosionSettings` of a world,
+  defaulting to `ErosionSettings::default()`, checked by
+  `Settings::validate` after the cells and the plate count and recorded in
+  `world.json` (`settings.erosion`, `kuniumi_io::world_dir::ErosionJson`).
+  Settings files have the table `[generation.erosion]`: `erodibility`,
+  `discharge_exponent`, `diffusivity_m2_s` or `diffusivity_m2_yr`,
+  `time_step_s` or `time_step_yr` (Julian years) and `steps`, each error
+  naming its key; `kuniumi params` prints the table, and `kuniumi generate
+  --planet` takes it from the file. `kuniumi_math::units::years_to_s` and
+  `m2_per_year_to_m2_per_s` (M3-07).
 
 ### Changed
 
@@ -592,6 +602,15 @@ section: every change after which an existing seed produces a different world
   incision in every step (step 5 of the design's erosion step); with
   `diffusivity_m2_s` 0 it is the incision of M3-03 bit for bit. The
   Erosion stage is not yet in the pipeline, so no world changes (M3-04).
+- `world.json` has `format_version` 3, with the erosion settings under
+  `settings`; a world directory of version 2 is refused
+  (`ReadError::Version`) and must be generated again (M3-07).
+- `ErosionSettings::validate` also rejects a diffusion step `K_d Δt` that
+  overflows (above 1.8 × 10³⁰⁸ m², `ParamError::Inconsistent` named
+  `diffusion_step_m2`), on which `erode` panicked; `Settings::validate`
+  names the erosion settings by their path, `erosion.time_step_s`. The
+  documentation of `ParamError::OutOfRange` and `Inconsistent` says so
+  (M3-07).
 
 ### Removed
 

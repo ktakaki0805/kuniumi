@@ -38,11 +38,13 @@ cargo run --release -p kuniumi-cli -- generate --planet planet.toml --seed 1 --o
 ```
 
 `params` prints the settings file of Earth with the default settings (TOML):
-the planet's parameters under `[planet]` and the generation settings under
-`[generation]`. Keys spell their SI unit (`radius_m`); some quantities may be
-given in a human unit instead (`radius_km`, `obliquity_deg`,
-`rotation_period_h`, `orbital_period_days`, `ocean_volume_km3`,
-`surface_pressure_bar`), and missing keys take Earth's values. `generate
+the planet's parameters under `[planet]`, the generation settings under
+`[generation]` and the erosion settings under `[generation.erosion]`. Keys
+spell their SI unit (`radius_m`); some quantities may be given in a human
+unit instead (`radius_km`, `obliquity_deg`, `rotation_period_h`,
+`orbital_period_days`, `ocean_volume_km3`, `surface_pressure_bar`, and
+`time_step_yr` and `diffusivity_m2_yr` in Julian years), and missing keys
+take Earth's values and the default settings. `generate
 --planet FILE` reads such a file; `--cells` on the command line replaces the
 file's.
 
