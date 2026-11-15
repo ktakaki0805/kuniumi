@@ -656,6 +656,74 @@ fn generate_writes_the_metrics_of_the_reference() {
 }
 
 #[test]
+fn generate_writes_the_drainage_metrics() {
+    // The golden world after 10 erosion steps (ticket M3-08): its largest
+    // basin drains 66 cells, so no basin reaches the 100 cells of the fit;
+    // the largest drainage area and the exceedance shares agree with those
+    // computed here from the `.kfield` files and the sea level of
+    // `world.json`, independently of the graph that `metrics.txt` rebuilds.
+    let dir = golden_world("generate_writes_the_drainage_metrics", 10);
+    let text = std::fs::read_to_string(dir.join("metrics.txt")).expect("metrics.txt");
+    let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+    let sea_level = sea_level_m(&json);
+    let height = read_kfield(&dir.join("surface_height.kfield")).values;
+    let area = read_kfield(&dir.join("drainage_area.kfield")).values;
+    let cell = read_kfield(&dir.join("cell_area.kfield")).values;
+    let land: Vec<usize> = (0..height.len())
+        .filter(|&i| height[i] > sea_level)
+        .collect();
+    assert_eq!(metric(&text, "hack_min_cells"), "100");
+    // 100 · 4π (6,371 km)² / 10,000 = 5.1006e12 m².
+    assert_eq!(metric(&text, "hack_min_area_m2"), "5.1006e12");
+    assert_eq!(metric(&text, "hack_basins"), "0");
+    assert_eq!(metric(&text, "hack_exponent"), "none");
+    assert_eq!(metric(&text, "hack_coefficient"), "none");
+    let largest = land.iter().map(|&i| area[i]).fold(0.0_f64, f64::max);
+    assert_eq!(
+        metric(&text, "largest_drainage_area_m2"),
+        format!("{largest:.4e}")
+    );
+    let land_sr: f64 = land.iter().map(|&i| cell[i]).sum();
+    let lines: Vec<(f64, f64)> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("exceedance_"))
+        .map(|l| {
+            let (key, share) = l.split_once("_m2 = ").expect("an exceedance line");
+            (
+                key.parse().expect("an area"),
+                share.parse().expect("a share"),
+            )
+        })
+        .collect();
+    assert!(lines.len() >= 5, "{text}");
+    for &(a, share) in &lines {
+        let above: f64 = land
+            .iter()
+            .filter(|&&i| area[i] >= a)
+            .map(|&i| cell[i])
+            .sum();
+        assert!(
+            (share - above / land_sr).abs() <= 5e-7 * (1.0 + 1e-9),
+            "{a:e}: {share} against {}",
+            above / land_sr
+        );
+    }
+    // From the largest value not above the smallest drainage area on land
+    // to the smallest above the largest: shares 1 and 0.
+    let smallest = land.iter().map(|&i| area[i]).fold(f64::INFINITY, f64::min);
+    assert!(lines[0].0 <= smallest && smallest < lines[1].0, "{lines:?}");
+    let last = lines.len() - 1;
+    assert!(
+        lines[last - 1].0 <= largest && largest < lines[last].0,
+        "{lines:?}"
+    );
+    assert_eq!((lines[0].1, lines[last].1), (1.0, 0.0));
+    // The section comes before the histogram, which ends the file.
+    let section = text.find("\nhack_min_cells = ").expect("the section");
+    assert!(section < text.find("\nbin_width_m = ").expect("the histogram"));
+}
+
+#[test]
 fn bad_arguments_exit_with_code_2() {
     for args in [
         &["grid", "--cells", "999", "--seed", "1", "--out", "x"][..],

@@ -4,14 +4,15 @@
 //! The design asks that worlds be judged by statistics that can be measured
 //! on Earth, not by eye. This module holds pure functions over per-cell
 //! values; they read no files and draw no random numbers. So far: the land
-//! fraction and the hypsometry of the solid surface ([`ElevationMetrics`]).
-//! Drainage and climate metrics follow (tickets M3-08 and M5-06).
+//! fraction and the hypsometry of the solid surface ([`ElevationMetrics`],
+//! ticket M2-06) and the shape of the river networks ([`DrainageMetrics`],
+//! ticket M3-08). Climate metrics follow (ticket M5-06).
 //!
 //! # Elevation
 //!
-//! Every metric is weighted by the cells' areas `a_i` and uses the heights
-//! `h_i` (m, on the datum of the reference radius) relative to the sea level
-//! `z` (m): the elevation `x_i = h_i − z`, correctly rounded.
+//! Every elevation metric is weighted by the cells' areas `a_i` and uses the
+//! heights `h_i` (m, on the datum of the reference radius) relative to the
+//! sea level `z` (m): the elevation `x_i = h_i − z`, correctly rounded.
 //!
 //! - A cell is **ocean** where it lies below the sea level, `h_i < z`
 //!   (water stands `z − h_i > 0` deep on it), and **land** everywhere else,
@@ -28,9 +29,9 @@
 //!
 //! # Limits
 //!
-//! Every metric takes the areas `a_i`, the heights `h_i` and the sea level
-//! `z` and panics (naming the first offending cell where there is one)
-//! unless (ticket M2-15):
+//! Every elevation metric takes the areas `a_i`, the heights `h_i` and the
+//! sea level `z` and panics (naming the first offending cell where there is
+//! one) unless (ticket M2-15):
 //!
 //! 1. there is one area per height, and at least one cell;
 //! 2. every area is finite and positive, and their total, summed in cell
@@ -52,19 +53,64 @@
 //! steradians summing to 4π, so for [`ElevationMetrics::of_world`] only the
 //! heights and the sea level matter.
 //!
-//! Within these limits no metric returns NaN or infinity. The land fraction
-//! and the shares are ratios of finite sums of areas; the percentiles and
-//! the extremes are elevations. The means `Σ a_i v_i / Σ a_i` of elevations
+//! Within these limits no elevation metric returns NaN or infinity. The land
+//! fraction and the shares are ratios of finite sums of areas; the
+//! percentiles and the extremes are elevations. The means `Σ a_i v_i / Σ a_i` of elevations
 //! and depths `v_i ≥ 0` keep this form where it is finite; where it
 //! overflows (two cells of area 1 at 1e308 m, or a sea level 1.7e308 m
 //! above a grid of 4π sr) they are `Σ (a_i / W) v_i`, with `W = Σ a_i`,
 //! capped at the largest `v_i`, since a weighted mean lies within its
 //! values. Products `a_i v_i` in the subnormal range (below about 2e-308)
 //! lose precision.
+//!
+//! # Drainage
+//!
+//! [`DrainageMetrics`] measures the rivers of the final surface on the
+//! drainage graph of the Erosion stage, routed across the closed
+//! depressions (`stages::erosion::routed_drainage`). Land is `h_i > z`
+//! here, as in the drainage graph, which makes a cell at the sea level an
+//! outlet (the elevation metrics count it as land). For each cell:
+//!
+//! - the drainage area `A_i` (m²): `a_i R²` summed over the cell and every
+//!   cell upstream, the field `drainage_area` of the Erosion stage;
+//! - the main-stream length `L_i` (m, [`main_stream_lengths_m`]): the
+//!   longest flow path from the cell up to a source, a cell without
+//!   donors, summed over the distances between the centres along it. Hack
+//!   (1957, "Studies of longitudinal stream profiles in Virginia and
+//!   Maryland", USGS Professional Paper 294-B) measures along the longest
+//!   stream to the divide; the half cell between a source's centre and the
+//!   divide is not counted, as is usual on elevation models.
+//!
+//! **Hack's law** `L = c A^h` ([`HackFit`]): least squares of `ln L` on
+//! `ln A` over the land cells whose drainage area is at least
+//! [`HACK_MIN_CELLS`] mean cell areas, each the outlet of its sub-basin,
+//! as Hack measured along streams (also Rigon et al. 1996, "On Hack's
+//! law", *Water Resources Research* 32(11), 3367–3374). Earth: `h` about
+//! 0.6 ([`earth::HACK_EXPONENT`]).
+//!
+//! **Exceedance** ([`exceedance`]): the share of the land whose drainage
+//! area is at least `a`, for `a` = 1, 2 and 5 × 10^k m² from the smallest
+//! drainage area on land to the largest. Earth: `P(A ≥ a) ∝ a^−β` with
+//! β ≈ 0.43 ([`earth::AREA_EXCEEDANCE_EXPONENT`]).
+//!
+//! The graph and the sums run in the order of the drainage stack and of
+//! the cells; besides `+ − × ÷`, comparisons and conversions of integers
+//! only `det::ln` and `det::exp` are used, so the results are the same on
+//! every platform. The metrics take a surface within
+//! [`DrainageMetrics::heights_in_limits`] (finite heights of at most
+//! 10³⁰⁰ m) on a planet whose radius is within
+//! [`DrainageMetrics::radius_in_limits`] (a surface of at most 10³⁰⁰ m²,
+//! cells of at least 10⁻³⁰⁰ m²), and then no metric is NaN or infinite.
 
 use kuniumi_world::World;
 
 use crate::stages::crust::SURFACE_HEIGHT;
+
+mod drainage;
+
+pub use drainage::{
+    DrainageMetrics, Exceedance, HACK_MIN_CELLS, HackFit, exceedance, main_stream_lengths_m,
+};
 
 /// The width (m) of the bins of the elevation histogram ([`Hypsometry`]):
 /// 100 m (ticket M2-06).
@@ -129,6 +175,16 @@ pub mod earth {
     /// The mode of the ocean floor's elevation (m): about −4,500 m (ticket
     /// M2-06).
     pub const OCEAN_MODE_M: f64 = -4_500.0;
+
+    /// Hack's exponent `h` of `L = c A^h`: about 0.6 (design: 長さは面積の約
+    /// 0.6乗に比例; Hack 1957).
+    pub const HACK_EXPONENT: f64 = 0.6;
+
+    /// The exponent β of the exceedance of the drainage areas,
+    /// `P(A ≥ a) ∝ a^−β`: about 0.43 (Rodríguez-Iturbe & Rinaldo 1997,
+    /// *Fractal River Basins: Chance and Self-Organization*, Cambridge
+    /// University Press, over the elevation models of many river basins).
+    pub const AREA_EXCEEDANCE_EXPONENT: f64 = 0.43;
 }
 
 /// The share of the surface that is land (module documentation):

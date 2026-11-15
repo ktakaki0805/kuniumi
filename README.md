@@ -53,12 +53,13 @@ output directory: the cell grid (`grid.kgrid`); a `.kfield` file and a PNG
 map per field; once the Crust stage has run, `metrics.txt` (land fraction
 and hypsometry against Earth's values) and `hypsometry.png` (the elevation
 histogram); once the Erosion stage has run, `rivers.png` (the rivers over
-the elevation map); and `world.json` with the metadata. The Climate stage
-does not exist yet and is skipped: erosion runs under a uniform rain of
-1 m/yr, and its default 1,000 steps take about two minutes at 650,000
-cells. While later stages are missing it then exits with code 2, naming
-the first of them. The directory can be read back into the same world
-(`kuniumi_io::world_dir::read`).
+the elevation map) and, in `metrics.txt`, the drainage metrics (Hack's law
+and the distribution of drainage areas); and `world.json` with the
+metadata. The Climate stage does not exist yet and is skipped: erosion
+runs under a uniform rain of 1 m/yr, and its default 1,000 steps take
+about two minutes at 650,000 cells. While later stages are missing it
+then exits with code 2, naming the first of them. The directory can be
+read back into the same world (`kuniumi_io::world_dir::read`).
 
 A world directory can be explored as a 3D globe (Rust 1.87 or later, and a
 GPU with Vulkan, Metal or Direct3D 12):

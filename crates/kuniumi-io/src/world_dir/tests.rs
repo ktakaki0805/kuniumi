@@ -34,7 +34,12 @@
 //! - `river_colours_by_hand`, `river_colours_without_rivers`,
 //!   `river_colours_need_one_discharge_per_height`,
 //!   `writes_the_river_map_after_the_metrics` and
-//!   `rejects_the_name_rivers_before_writing_anything` (ticket M3-05).
+//!   `rejects_the_name_rivers_before_writing_anything` (ticket M3-05);
+//! - `metrics_txt_with_drainage_by_hand`, `drainage_lines_by_hand`,
+//!   `writes_drainage_metrics_after_erosion`,
+//!   `rejects_a_radius_beyond_the_drainage_limits_before_writing_anything`
+//!   and `rejects_heights_beyond_the_drainage_limits_before_writing_anything`
+//!   (ticket M3-08).
 //!
 //! Reading directories back (ticket MV-01) is tested in `read_tests.rs`,
 //! with the worlds of this file.
@@ -49,7 +54,7 @@ use kuniumi_world::{
     World,
 };
 
-use kuniumi_sim::metrics::{ElevationMetrics, earth};
+use kuniumi_sim::metrics::{DrainageMetrics, ElevationMetrics, Exceedance, HackFit, earth};
 
 use super::*;
 use crate::chart;
@@ -1069,7 +1074,7 @@ fn metrics_txt_by_hand() {
     let world = octahedron_world();
     let metrics = ElevationMetrics::of_world(&world).unwrap();
     assert_eq!(kuniumi_world::GENERATOR_VERSION, "0.0.1");
-    let text = metrics_txt(&world, &metrics);
+    let text = metrics_txt(&world, &metrics, None);
     let expected = octahedron_metrics_txt();
     for (k, (a, b)) in text.lines().zip(expected.lines()).enumerate() {
         assert_eq!(a, b, "line {}", k + 1);
@@ -1082,7 +1087,7 @@ fn metrics_txt_without_land_or_peaks() {
     // A water world: no land, so no mean elevation, land mode or valley.
     let mut world = octahedron_world();
     world.sea_level_m = 10_000.0;
-    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap());
+    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap(), None);
     for line in [
         "land_fraction = 0.000000",
         "mean_land_elevation_m = none",
@@ -1098,7 +1103,7 @@ fn metrics_txt_without_land_or_peaks() {
     }
     // No water: no ocean.
     world.sea_level_m = -5_000.0;
-    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap());
+    let text = metrics_txt(&world, &ElevationMetrics::of_world(&world).unwrap(), None);
     for line in [
         "land_fraction = 1.000000",
         "mean_ocean_depth_m = none",
@@ -1261,7 +1266,7 @@ fn writes_metrics_and_the_chart_before_world_json() {
     let metrics = ElevationMetrics::of_world(&world).unwrap();
     assert_eq!(
         read(&dir.join(METRICS_FILE)),
-        metrics_txt(&world, &metrics).as_bytes()
+        metrics_txt(&world, &metrics, None).as_bytes()
     );
     let (width, height, pixels) = decode_png(&dir.join(HYPSOMETRY_FILE));
     assert_eq!((width, height), (CHART_WIDTH_PX, CHART_HEIGHT_PX));
@@ -1454,7 +1459,7 @@ fn fields_may_take_the_stems_of_the_other_fixed_files() {
     let metrics = ElevationMetrics::of_world(&world).unwrap();
     assert_eq!(
         read(&dir.join(METRICS_FILE)),
-        metrics_txt(&world, &metrics).as_bytes()
+        metrics_txt(&world, &metrics, None).as_bytes()
     );
     let (width, height, pixels) = decode_png(&dir.join(HYPSOMETRY_FILE));
     assert_eq!((width, height), (CHART_WIDTH_PX, CHART_HEIGHT_PX));
@@ -1897,4 +1902,241 @@ fn rejects_the_name_rivers_before_writing_anything() {
         assert_eq!(err.to_string(), RIVERS_RESERVED);
         assert!(!dir.exists(), "nothing is written");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The drainage metrics (ticket M3-08).
+
+/// [`octahedron_world`] after the Erosion stage: with a `drainage_area`
+/// (whose values the metrics do not read).
+fn octahedron_world_with_drainage() -> World {
+    let mut world = octahedron_world();
+    world.stages.push("erosion".into());
+    world
+        .add_field("drainage_area", "m^2", vec![1.0; 6])
+        .unwrap();
+    world
+}
+
+/// The drainage section of `metrics.txt` for
+/// [`octahedron_world_with_drainage`], written by hand: on Earth's radius
+/// the four land cells (+X, +Y, +Z and −Z) each drain straight into the
+/// ocean (−X or −Y, lower than every other neighbour), so each drains its
+/// own area, 4πR²/6 = 8.501 074 5 × 10¹³ m² (Python, `4 * math.pi *
+/// 6371000.0**2 / 6`), and no main stream is longer than 0: no basin. The
+/// threshold is 100 such areas; the exceedance runs from 5e13 m², the
+/// largest value of the ladder not above the land's drainage areas, to
+/// 1e14 m², the smallest above.
+fn octahedron_drainage_lines() -> &'static str {
+    "
+# Drainage (ticket M3-08): the rivers of the final surface, routed across
+# its closed depressions. Land is above the sea level here, as in the
+# drainage graph. Hack's law L = c A^h: least squares of ln L on ln A over
+# the land cells whose drainage area A (m²) is at least hack_min_area_m2
+# (hack_min_cells mean cell areas) and whose main-stream length L (m), the
+# longest flow path up to a source, is positive; c is in m^(1-2h). Earth:
+# h about 0.6 (Hack 1957).
+hack_min_cells = 100
+hack_min_area_m2 = 8.5011e15
+hack_basins = 0
+hack_exponent = none
+hack_coefficient = none
+largest_drainage_area_m2 = 8.5011e13
+
+# Exceedance: the share of the land whose drainage area is at least the
+# area in the key (m²), for 1, 2 and 5 times the powers of ten from the
+# smallest drainage area on land to the largest. Earth: the share falls
+# as a^-0.43 (Rodríguez-Iturbe & Rinaldo 1997).
+exceedance_5e13_m2 = 1.000000
+exceedance_1e14_m2 = 0.000000
+"
+}
+
+/// `text` with `section` inserted before the blank line that precedes the
+/// histogram's comment.
+fn with_section_before_histogram(text: &str, section: &str) -> String {
+    let at = text
+        .find("\n\n# Histogram")
+        .expect("the histogram's comment");
+    format!("{}{section}{}", &text[..at + 1], &text[at + 1..])
+}
+
+#[test]
+fn metrics_txt_with_drainage_by_hand() {
+    let world = octahedron_world_with_drainage();
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let drainage = DrainageMetrics::of_world(&world).unwrap();
+    let text = metrics_txt(&world, &metrics, Some(&drainage));
+    let expected =
+        with_section_before_histogram(&octahedron_metrics_txt(), octahedron_drainage_lines());
+    for (k, (a, b)) in text.lines().zip(expected.lines()).enumerate() {
+        assert_eq!(a, b, "line {}", k + 1);
+    }
+    assert_eq!(text, expected);
+    // The histogram stays last.
+    assert!(text.ends_with("3000 3100 0.16666667\n"), "{text}");
+    // Without drainage metrics the file is that of ticket M2-06.
+    assert_eq!(
+        metrics_txt(&world, &metrics, None),
+        octahedron_metrics_txt()
+    );
+}
+
+#[test]
+fn drainage_lines_by_hand() {
+    // A fit, a ladder below and above 1 m², shares in 6 decimals.
+    let world = octahedron_world_with_drainage();
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let ladder = |m: u32, k: i32, a: f64, share: f64| Exceedance {
+        mantissa: m,
+        power_of_ten: k,
+        drainage_area_m2: a,
+        share,
+    };
+    let drainage = DrainageMetrics {
+        hack_min_cells: 12.5,
+        hack_min_area_m2: 9.812_345e10,
+        hack_basins: 9_339,
+        hack: Some(HackFit {
+            exponent: 0.524_702_864_681_634_2,
+            coefficient: 0.907_098_300_575_099,
+        }),
+        largest_drainage_area_m2: Some(4.933_9e12),
+        exceedance: vec![
+            ladder(5, -1, 0.5, 1.0),
+            ladder(1, 0, 1.0, 0.533_562_4),
+            ladder(2, 0, 2.0, 0.000_000_4),
+            ladder(5, 0, 5.0, 0.0),
+        ],
+    };
+    let text = metrics_txt(&world, &metrics, Some(&drainage));
+    for line in [
+        "hack_min_cells = 12.5",
+        "hack_min_area_m2 = 9.8123e10",
+        "hack_basins = 9339",
+        "hack_exponent = 0.5247",
+        "hack_coefficient = 9.0710e-1",
+        "largest_drainage_area_m2 = 4.9339e12",
+        "exceedance_5e-1_m2 = 1.000000",
+        "exceedance_1e0_m2 = 0.533562",
+        "exceedance_2e0_m2 = 0.000000",
+        "exceedance_5e0_m2 = 0.000000",
+    ] {
+        assert!(text.lines().any(|l| l == line), "`{line}` missing:\n{text}");
+    }
+    // Without land: no fit, no largest area, no exceedance lines.
+    let drainage = DrainageMetrics {
+        hack_basins: 0,
+        hack: None,
+        largest_drainage_area_m2: None,
+        exceedance: Vec::new(),
+        ..drainage
+    };
+    let text = metrics_txt(&world, &metrics, Some(&drainage));
+    for line in [
+        "hack_basins = 0",
+        "hack_exponent = none",
+        "hack_coefficient = none",
+        "largest_drainage_area_m2 = none",
+    ] {
+        assert!(text.lines().any(|l| l == line), "`{line}` missing:\n{text}");
+    }
+    assert!(!text.contains("exceedance_"), "{text}");
+    assert!(text.contains("(Rodríguez-Iturbe & Rinaldo 1997).\n\n# Histogram"));
+}
+
+/// [`world_with_relief`] after the Erosion stage: with a `drainage_area`.
+fn world_with_drainage() -> World {
+    let mut world = world_with_relief();
+    world.stages.push("erosion".into());
+    let n = world.grid.len();
+    world
+        .add_field("drainage_area", "m^2", vec![1.0; n])
+        .unwrap();
+    world
+}
+
+#[test]
+fn writes_drainage_metrics_after_erosion() {
+    let dir = scratch("drainage");
+    let world = world_with_drainage();
+    let written = write_maps_of_width(&dir, &world, 64).unwrap();
+    assert!(written.iter().any(|p| p.ends_with(METRICS_FILE)));
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let drainage = DrainageMetrics::of_world(&world).unwrap();
+    assert_eq!(
+        read(&dir.join(METRICS_FILE)),
+        metrics_txt(&world, &metrics, Some(&drainage)).as_bytes()
+    );
+    // The cap of 1,000 cells south of z ≈ −0.02 is land, all draining
+    // towards the coast: rivers, and a section with lines.
+    let text = String::from_utf8(read(&dir.join(METRICS_FILE))).unwrap();
+    assert!(text.contains("\nhack_min_cells = 100\n"), "{text}");
+    assert!(text.contains("\nexceedance_"), "{text}");
+    assert!(drainage.largest_drainage_area_m2.is_some());
+    // A world without `drainage_area` writes no section.
+    write_maps_of_width(&dir, &world_with_relief(), 64).unwrap();
+    let text = String::from_utf8(read(&dir.join(METRICS_FILE))).unwrap();
+    assert!(!text.contains("hack_"), "{text}");
+    remove(&dir);
+}
+
+#[test]
+fn rejects_a_radius_beyond_the_drainage_limits_before_writing_anything() {
+    for radius_m in [0.0, -1.0, 1e160, 1e-160] {
+        let mut world = world_with_drainage();
+        world.params.radius_m = radius_m;
+        let dir = scratch("drainage_radius");
+        let err = write(&dir, &world).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "the planet's radius of {radius_m:e} m is beyond the limits of the drainage \
+                 metrics of metrics.txt (DrainageMetrics::radius_in_limits)"
+            )
+        );
+        assert!(!dir.exists(), "nothing is written");
+        // Without a surface height there are no metrics, and no limit.
+        world.fields.retain(|f| f.name != "surface_height");
+        write_maps_of_width(&dir, &world, 64).unwrap();
+        assert!(!dir.join(METRICS_FILE).exists());
+        remove(&dir);
+    }
+}
+
+#[test]
+fn rejects_heights_beyond_the_drainage_limits_before_writing_anything() {
+    // Heights above 1e300 m pass the checks of the elevation metrics (one
+    // bin of the histogram when all are equal) but would overflow the fill
+    // of the depressions that the drainage metrics rebuild (review round 1,
+    // R1-1).
+    for h in [f64::MAX, 1.5e300] {
+        let mut world = octahedron_world_with_drainage();
+        world.fields[0].values = vec![h; 6];
+        let dir = scratch("drainage_heights");
+        let err = write(&dir, &world).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "field `surface_height` has the value {h:e} at cell 0, above the 1e300 m that \
+                 the drainage metrics of metrics.txt take (DrainageMetrics::heights_in_limits)"
+            )
+        );
+        assert!(!dir.exists(), "nothing is written");
+        // Without `drainage_area` the elevation metrics are written.
+        world.fields.retain(|f| f.name != "drainage_area");
+        write_maps_of_width(&dir, &world, 64).unwrap();
+        assert!(dir.join(METRICS_FILE).exists());
+        remove(&dir);
+    }
+    // At 1e300 m the metrics are written.
+    let mut world = octahedron_world_with_drainage();
+    world.fields[0].values = vec![1e300; 6];
+    let dir = scratch("drainage_heights_at_the_limit");
+    write_maps_of_width(&dir, &world, 64).unwrap();
+    let text = String::from_utf8(read(&dir.join(METRICS_FILE))).unwrap();
+    assert!(text.contains("\nhack_basins = 0\n"), "{text}");
+    remove(&dir);
 }

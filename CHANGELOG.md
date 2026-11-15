@@ -411,6 +411,18 @@ section: every change after which an existing seed produces a different world
   the elevation map, their colour mixed in by the logarithm of the
   discharge, from the larger of 10⁻³ of the largest discharge on land and
   five times the smallest up to the largest (M3-05).
+- Drainage metrics, `kuniumi_sim::metrics::DrainageMetrics` (`new`,
+  `with_min_cells`, `of_world`, `heights_in_limits`, `radius_in_limits`):
+  on the drainage graph
+  of the final surface routed across its depressions (land `h > z`), the
+  main-stream lengths (`main_stream_lengths_m`, the longest flow path up to
+  a source), the least-squares fit of Hack's law `L = c A^h` over the land
+  cells draining at least `HACK_MIN_CELLS` = 100 mean cell areas
+  (`HackFit`), the largest drainage area on land and the exceedance of the
+  drainage areas at 1, 2 and 5 × 10^k m² (`exceedance`, `Exceedance`);
+  `earth::HACK_EXPONENT` (0.6) and `earth::AREA_EXCEEDANCE_EXPONENT`
+  (0.43). For Earth's defaults at 650,000 cells, `h` = 0.509–0.525 over
+  9,000–10,000 basins for seeds 1–5 (M3-08).
 
 ### Changed
 
@@ -637,6 +649,16 @@ section: every change after which an existing seed produces a different world
   (the erosion's 1,000 steps print 101 lines) and names `rivers.png` in
   its help; `rivers` is a reserved field name in world directories, like
   `hypsometry` (M3-05).
+- `metrics.txt` of a world with `surface_height` and `drainage_area` (the
+  Erosion stage has run) holds the drainage metrics before the histogram,
+  which stays last: `hack_min_cells`, `hack_min_area_m2`, `hack_basins`,
+  `hack_exponent`, `hack_coefficient`, `largest_drainage_area_m2` and the
+  lines `exceedance_<m>e<k>_m2`; the file of other worlds is unchanged.
+  `world_dir::metrics_txt` takes the drainage metrics as a third argument,
+  and `world_dir::write` refuses such a world whose heights or radius are
+  beyond the limits of the metrics (`DrainageMetrics::heights_in_limits`:
+  a height above 10³⁰⁰ m; `radius_in_limits`: a surface above 10³⁰⁰ m², a
+  cell below 10⁻³⁰⁰ m²) before writing anything (M3-08).
 
 ### Removed
 

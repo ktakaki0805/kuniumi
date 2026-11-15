@@ -21,8 +21,11 @@
 //!
 //! - `metrics.txt` ([`METRICS_FILE`], [`metrics_txt`]): the land fraction,
 //!   the mean land elevation and ocean depth, the extremes, percentiles,
-//!   the modes of the elevation histogram and the histogram itself, as
-//!   `key = value` lines with Earth's values in comments;
+//!   the modes of the elevation histogram, for a world that also has
+//!   `drainage_area` (the Erosion stage has run) the drainage metrics
+//!   (Hack's law and the exceedance of the drainage areas, ticket M3-08),
+//!   and last the histogram itself, as `key = value` lines with Earth's
+//!   values in comments;
 //! - `hypsometry.png` ([`HYPSOMETRY_FILE`], [`hypsometry_chart`]): the
 //!   histogram as a bar chart, [`CHART_WIDTH_PX`] × [`CHART_HEIGHT_PX`],
 //!   whose axes `metrics.txt` describes;
@@ -157,11 +160,11 @@ use std::path::{Path, PathBuf};
 
 use kuniumi_math::det;
 use kuniumi_sim::metrics::{
-    ElevationMetrics, HYPSOMETRY_BIN_M, Hypsometry, MAX_HYPSOMETRY_BINS, PERCENTILES, VALLEY_RATIO,
-    earth,
+    DrainageMetrics, ElevationMetrics, HYPSOMETRY_BIN_M, Hypsometry, MAX_HYPSOMETRY_BINS,
+    PERCENTILES, VALLEY_RATIO, earth,
 };
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
-use kuniumi_sim::stages::erosion::DISCHARGE;
+use kuniumi_sim::stages::erosion::{DISCHARGE, DRAINAGE_AREA};
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
     ErosionSettings, Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings,
@@ -804,17 +807,28 @@ pub fn hypsometry_chart(metrics: &ElevationMetrics) -> Vec<Rgb8> {
     chart::histogram(&bars, &axes, &markers, CHART_WIDTH_PX, CHART_HEIGHT_PX)
 }
 
-/// The text of [`METRICS_FILE`] for `world` and its `metrics`: `key =
-/// value` lines with `#` comments, as `stats.txt` of `kuniumi grid`.
+/// The text of [`METRICS_FILE`] for `world`, its `metrics` and, after the
+/// Erosion stage, its `drainage` metrics: `key = value` lines with `#`
+/// comments, as `stats.txt` of `kuniumi grid`.
 ///
 /// The generator version, the seed, the number of cells and the sea level
 /// (m, 3 decimals); the metrics of `kuniumi_sim::metrics` in SI, shares with
 /// 6 decimals and metres with 1 (`none` for a mean, mode or valley that does
 /// not exist), with Earth's values ([`earth`]) in the comments; the modes,
 /// the valley and `separate_peaks = yes` or `no`; the axes of
-/// [`HYPSOMETRY_FILE`] ([`hypsometry_axes`]); and the histogram, one line
-/// per bin: lower edge (m), upper edge (m) and share (8 decimals).
-pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
+/// [`HYPSOMETRY_FILE`] ([`hypsometry_axes`]); with `drainage` (ticket
+/// M3-08), the basins of the fit of Hack's law (`hack_min_cells`,
+/// `hack_min_area_m2`, `hack_basins`), its exponent (4 decimals) and
+/// coefficient and the largest drainage area on land (5 significant digits,
+/// `none` where they do not exist), with Earth's values in the comments,
+/// then one line `exceedance_<m>e<k>_m2 = <share>` per value of the
+/// exceedance ladder (6 decimals); and last the histogram, one line per
+/// bin: lower edge (m), upper edge (m) and share (8 decimals).
+pub fn metrics_txt(
+    world: &World,
+    metrics: &ElevationMetrics,
+    drainage: Option<&DrainageMetrics>,
+) -> String {
     let hyps = &metrics.hypsometry;
     let axes = hypsometry_axes(metrics);
     let metres = |v: Option<f64>| v.map_or_else(|| "none".to_owned(), |v| format!("{v:.1}"));
@@ -894,6 +908,12 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
         format!("chart_x_step_m = {}", axes.x_step),
         format!("chart_y_max_fraction = {:.3}", axes.y_max),
         format!("chart_y_step_fraction = {:.3}", axes.y_step),
+    ]);
+    if let Some(drainage) = drainage {
+        lines.push(String::new());
+        lines.extend(drainage_lines(drainage));
+    }
+    lines.extend([
         String::new(),
         "# Histogram: bins of bin_width_m from the lowest elevation to the highest:".to_owned(),
         "# lower edge (m), upper edge (m), share of the surface.".to_owned(),
@@ -909,6 +929,54 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
     let mut text = lines.join("\n");
     text.push('\n');
     text
+}
+
+/// The lines of the drainage metrics in [`METRICS_FILE`] (ticket M3-08),
+/// as [`metrics_txt`] describes them.
+fn drainage_lines(drainage: &DrainageMetrics) -> Vec<String> {
+    let none = || "none".to_owned();
+    let hack = drainage.hack.as_ref();
+    let mut lines = vec![
+        "# Drainage (ticket M3-08): the rivers of the final surface, routed across".to_owned(),
+        "# its closed depressions. Land is above the sea level here, as in the".to_owned(),
+        "# drainage graph. Hack's law L = c A^h: least squares of ln L on ln A over".to_owned(),
+        "# the land cells whose drainage area A (m²) is at least hack_min_area_m2".to_owned(),
+        "# (hack_min_cells mean cell areas) and whose main-stream length L (m), the".to_owned(),
+        "# longest flow path up to a source, is positive; c is in m^(1-2h). Earth:".to_owned(),
+        format!("# h about {} (Hack 1957).", earth::HACK_EXPONENT),
+        format!("hack_min_cells = {}", drainage.hack_min_cells),
+        format!("hack_min_area_m2 = {:.4e}", drainage.hack_min_area_m2),
+        format!("hack_basins = {}", drainage.hack_basins),
+        format!(
+            "hack_exponent = {}",
+            hack.map_or_else(none, |fit| format!("{:.4}", fit.exponent))
+        ),
+        format!(
+            "hack_coefficient = {}",
+            hack.map_or_else(none, |fit| format!("{:.4e}", fit.coefficient))
+        ),
+        format!(
+            "largest_drainage_area_m2 = {}",
+            drainage
+                .largest_drainage_area_m2
+                .map_or_else(none, |a| format!("{a:.4e}"))
+        ),
+        String::new(),
+        "# Exceedance: the share of the land whose drainage area is at least the".to_owned(),
+        "# area in the key (m²), for 1, 2 and 5 times the powers of ten from the".to_owned(),
+        "# smallest drainage area on land to the largest. Earth: the share falls".to_owned(),
+        format!(
+            "# as a^-{} (Rodríguez-Iturbe & Rinaldo 1997).",
+            earth::AREA_EXCEEDANCE_EXPONENT
+        ),
+    ];
+    lines.extend(drainage.exceedance.iter().map(|e| {
+        format!(
+            "exceedance_{}e{}_m2 = {:.6}",
+            e.mantissa, e.power_of_ten, e.share
+        )
+    }));
+    lines
 }
 
 /// Writes `world` into the directory `dir`, creating it if needed (module
@@ -933,11 +1001,15 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 /// elevation above the sea level, `h − z`, overflows, or elevations that
 /// need more bins of 100 m than the histogram holds,
 /// [`MAX_HYPSOMETRY_BINS`] (10⁶, a relief of about 100,000 km; ticket
-/// M2-18); otherwise the error of the file system, with the path in its
-/// message. With these checks every world that passes them
-/// meets the limits of `kuniumi_sim::metrics` (the grid's areas, summing to
-/// 4π, always meet theirs, and every finite elevation divided by 100 m is
-/// finite), so its metrics are computed without a panic.
+/// M2-18); if the world has `surface_height` and `drainage_area` and a
+/// height above 10³⁰⁰ m or a planet's radius beyond the limits of the
+/// drainage metrics ([`DrainageMetrics::heights_in_limits`],
+/// [`DrainageMetrics::radius_in_limits`]; ticket M3-08); otherwise the
+/// error of the file system, with the path in its message. With these
+/// checks every world that passes them meets the limits of
+/// `kuniumi_sim::metrics` (the grid's areas, summing to 4π, always meet
+/// theirs, and every finite elevation divided by 100 m is finite), so its
+/// metrics are computed without a panic.
 pub fn write(dir: &Path, world: &World) -> io::Result<Vec<PathBuf>> {
     write_maps_of_width(dir, world, MAP_WIDTH_PX)
 }
@@ -948,6 +1020,10 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
     check_fields(world)?;
     let json = world_json(world)?;
     let metrics = elevation_metrics(world)?;
+    let drainage = match metrics {
+        Some(_) => drainage_metrics(world)?,
+        None => None,
+    };
     std::fs::create_dir_all(dir).map_err(|e| with_path(dir, e))?;
     // The metadata and the metrics of an earlier world must not outlive a
     // failed rewrite, nor a world without them.
@@ -979,7 +1055,8 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
     }
     if let Some(metrics) = &metrics {
         let path = dir.join(METRICS_FILE);
-        std::fs::write(&path, metrics_txt(world, metrics)).map_err(|e| with_path(&path, e))?;
+        std::fs::write(&path, metrics_txt(world, metrics, drainage.as_ref()))
+            .map_err(|e| with_path(&path, e))?;
         written.push(path);
         let path = dir.join(HYPSOMETRY_FILE);
         let bytes = png::encode_rgb8(CHART_WIDTH_PX, CHART_HEIGHT_PX, &hypsometry_chart(metrics));
@@ -1044,6 +1121,48 @@ fn elevation_metrics(world: &World) -> io::Result<Option<ElevationMetrics>> {
         }
     }
     Ok(ElevationMetrics::of_world(world))
+}
+
+/// The drainage metrics of `world` ([`DrainageMetrics::of_world`]), `None`
+/// without a `drainage_area` or a `surface_height`; the fields, the heights
+/// and the sea level are checked already ([`check_fields`],
+/// [`elevation_metrics`], [`world_json`]).
+///
+/// # Errors
+///
+/// [`io::ErrorKind::InvalidInput`] if the world has both fields and a
+/// height or the planet's radius is beyond the limits of the metrics
+/// ([`DrainageMetrics::heights_in_limits`]: finite heights of at most
+/// 10³⁰⁰ m; [`DrainageMetrics::radius_in_limits`]: a surface of at most
+/// 10³⁰⁰ m², cells of at least 10⁻³⁰⁰ m²), which [`DrainageMetrics::new`]
+/// would refuse with a panic.
+fn drainage_metrics(world: &World) -> io::Result<Option<DrainageMetrics>> {
+    let Some(height) = world.field(SURFACE_HEIGHT) else {
+        return Ok(None);
+    };
+    if world.field(DRAINAGE_AREA).is_none() {
+        return Ok(None);
+    }
+    if let Some(cell) = height
+        .values
+        .iter()
+        .position(|&h| !DrainageMetrics::heights_in_limits(&[h]))
+    {
+        return Err(invalid_input(format!(
+            "field `{SURFACE_HEIGHT}` has the value {:e} at cell {cell}, above the 1e300 m \
+             that the drainage metrics of {METRICS_FILE} take \
+             (DrainageMetrics::heights_in_limits)",
+            height.values[cell]
+        )));
+    }
+    let radius_m = world.params.radius_m;
+    if !DrainageMetrics::radius_in_limits(&world.grid, radius_m) {
+        return Err(invalid_input(format!(
+            "the planet's radius of {radius_m:e} m is beyond the limits of the drainage \
+             metrics of {METRICS_FILE} (DrainageMetrics::radius_in_limits)"
+        )));
+    }
+    Ok(DrainageMetrics::of_world(world))
 }
 
 /// Checks that every field has a valid name that is not reserved
