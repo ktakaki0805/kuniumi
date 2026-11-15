@@ -162,10 +162,11 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         );
     }
     let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
-    // The default erosion settings as Python's repr prints them:
-    // repr(5e-3 / 31557600.0), repr(1e4 * 31557600.0).
+    // The default erosion settings and Earth's longitude of perihelion as
+    // Python's repr prints them: repr(5e-3 / 31557600.0),
+    // repr(1e4 * 31557600.0), repr(102.94 * (math.pi / 180)).
     for line in [
-        "  \"format_version\": 3,",
+        "  \"format_version\": 4,",
         "  \"seed\": 1,",
         "    \"cells\": 1000,",
         "    \"plate_count\": 12,",
@@ -177,6 +178,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"time_step_s\": 315576000000.0,",
         "      \"steps\": 1000",
         "    \"radius_m\": 6371000.0,",
+        "    \"perihelion_longitude_rad\": 1.7966419320029627,",
         "    \"grid\",",
         "    \"tectonics\",",
         "    \"crust\",",
@@ -838,6 +840,7 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
     let planet = settings_file(
         "generate_planet_file",
         "[planet]\nradius_km = 3389.5\nobliquity_deg = 25.19\n\
+         perihelion_longitude_deg = 336.04\n\
          [generation]\ncells = 1000\nplate_count = 5\nallow_partial = false\n\
          [generation.erosion]\ntime_step_yr = 20000\nsteps = 5\n",
     );
@@ -857,8 +860,9 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
             stderr(&o)
         );
         let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
-        // 3,389.5 km = 3,389,500 m; 25.19° from Python,
-        // repr(25.19 * (math.pi / 180)); 20,000 Julian years,
+        // 3,389.5 km = 3,389,500 m; 25.19° and 336.04° (Mars's longitude
+        // of perihelion) from Python, repr(25.19 * (math.pi / 180)) and
+        // repr(336.04 * (math.pi / 180)); 20,000 Julian years,
         // 631,152,000,000 s.
         for line in [
             format!("    \"cells\": {expected},"),
@@ -869,6 +873,7 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
             "      \"steps\": 5".into(),
             "    \"radius_m\": 3389500.0,".into(),
             "    \"obliquity_rad\": 0.4396484385773716,".into(),
+            "    \"perihelion_longitude_rad\": 5.865004418401745,".into(),
             "    \"surface_gravity_m_s2\": 9.80665,".into(),
         ] {
             assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");

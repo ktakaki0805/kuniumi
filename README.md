@@ -42,11 +42,11 @@ the planet's parameters under `[planet]`, the generation settings under
 `[generation]` and the erosion settings under `[generation.erosion]`. Keys
 spell their SI unit (`radius_m`); some quantities may be given in a human
 unit instead (`radius_km`, `obliquity_deg`, `rotation_period_h`,
-`orbital_period_days`, `ocean_volume_km3`, `surface_pressure_bar`, and
-`time_step_yr` and `diffusivity_m2_yr` in Julian years), and missing keys
-take Earth's values and the default settings. `generate
---planet FILE` reads such a file; `--cells` on the command line replaces the
-file's.
+`orbital_period_days`, `perihelion_longitude_deg`, `ocean_volume_km3`,
+`surface_pressure_bar`, and `time_step_yr` and `diffusivity_m2_yr` in
+Julian years), and missing keys take Earth's values and the default
+settings. `generate --planet FILE` reads such a file; `--cells` on the
+command line replaces the file's.
 
 `generate` runs the stages that exist so far and writes the world into the
 output directory: the cell grid (`grid.kgrid`); a `.kfield` file and a PNG

@@ -5,8 +5,9 @@ use super::*;
 
 /// The settings file of Earth with the default settings, written by hand:
 /// the decimal literals of `PlanetParams::earth()`, `Settings::default()`
-/// and `ErosionSettings::default()`, the obliquity from Python's
-/// `repr(23.44 * (math.pi / 180))`, and the default diffusivity and time
+/// and `ErosionSettings::default()`, the obliquity and the longitude of
+/// perihelion from Python's `repr(23.44 * (math.pi / 180))` and
+/// `repr(102.94 * (math.pi / 180))`, and the default diffusivity and time
 /// step from `repr(5e-3 / 31557600.0)` and `repr(1e4 * 31557600.0)`.
 const EARTH: &str = "\
 # kuniumi settings file: a planet and how to generate it (TOML).
@@ -21,7 +22,8 @@ rotation_period_s = 86164.0905      # sidereal day; or rotation_period_h
 obliquity_rad = 0.40910517666747087 # axial tilt; or obliquity_deg
 orbital_period_s = 31558149.8       # year; or orbital_period_days
 orbital_eccentricity = 0.0167       # 0 for a circular orbit
-stellar_flux_w_m2 = 1361.0          # mean flux at the orbit
+perihelion_longitude_rad = 1.7966419320029627 # or perihelion_longitude_deg
+stellar_flux_w_m2 = 1361.0          # flux at the semi-major axis
 ocean_volume_m3 = 1.335e18          # surface water; or ocean_volume_km3
 surface_pressure_pa = 101325.0      # mean air pressure; or surface_pressure_bar
 continental_crust_fraction = 0.4    # share of the surface
@@ -43,7 +45,7 @@ steps = 1000                        # number of time steps
 
 /// The bits of every float of `p`, field by field. The destructuring lists
 /// every field, so a new field fails to compile here until it is added.
-fn bits(p: &PlanetParams) -> [u64; 10] {
+fn bits(p: &PlanetParams) -> [u64; 11] {
     let PlanetParams {
         radius_m,
         surface_gravity_m_s2,
@@ -51,6 +53,7 @@ fn bits(p: &PlanetParams) -> [u64; 10] {
         obliquity_rad,
         orbital_period_s,
         orbital_eccentricity,
+        perihelion_longitude_rad,
         stellar_flux_w_m2,
         ocean_volume_m3,
         surface_pressure_pa,
@@ -65,6 +68,7 @@ fn bits(p: &PlanetParams) -> [u64; 10] {
         obliquity_rad,
         orbital_period_s,
         orbital_eccentricity,
+        perihelion_longitude_rad,
         stellar_flux_w_m2,
         ocean_volume_m3,
         surface_pressure_pa,
@@ -157,8 +161,9 @@ fn next_down(v: f64) -> f64 {
 
 /// Planets of awkward numbers, each valid: the extremes of every range,
 /// subnormals and −0 where zero is allowed (the ocean volume, the
-/// obliquity, the eccentricity and the continental fraction; the discharge
-/// exponent and the diffusivity), 17-digit values and numbers whose
+/// obliquity, the eccentricity, the longitude of perihelion and the
+/// continental fraction; the discharge exponent and the diffusivity),
+/// 17-digit values and numbers whose
 /// shortest decimal needs an exponent.
 fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
     let earth = PlanetParams::earth();
@@ -174,6 +179,7 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 obliquity_rad: -0.0,
                 orbital_period_s: PlanetParams::MIN_ORBITAL_PERIOD_S,
                 orbital_eccentricity: -0.0,
+                perihelion_longitude_rad: -0.0,
                 stellar_flux_w_m2: 4_000.0 / 3.0,
                 ocean_volume_m3: -0.0,
                 surface_pressure_pa: PlanetParams::MIN_SURFACE_PRESSURE_PA,
@@ -202,6 +208,7 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 obliquity_rad: core::f64::consts::PI,
                 orbital_period_s: PlanetParams::MAX_ORBITAL_PERIOD_S,
                 orbital_eccentricity: 0.99,
+                perihelion_longitude_rad: 2.0 * core::f64::consts::PI,
                 stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
                 ocean_volume_m3: PlanetParams::MAX_OCEAN_VOLUME_M3, // 1e20
                 surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
@@ -230,6 +237,7 @@ fn awkward_planets() -> Vec<(PlanetParams, Settings)> {
                 obliquity_rad: tiny,
                 orbital_period_s: 123_456_789.012_345_68,
                 orbital_eccentricity: tiny,
+                perihelion_longitude_rad: tiny,
                 stellar_flux_w_m2: next_down(PlanetParams::MAX_STELLAR_FLUX_W_M2),
                 ocean_volume_m3: tiny,
                 surface_pressure_pa: next_up(PlanetParams::MIN_SURFACE_PRESSURE_PA),
@@ -291,6 +299,7 @@ fn random_planet(rng: &mut Rng) -> (PlanetParams, Settings) {
                 PlanetParams::MAX_ORBITAL_PERIOD_S,
             ),
             orbital_eccentricity: within(rng, 0.0, 0.99),
+            perihelion_longitude_rad: within(rng, 0.0, 2.0 * core::f64::consts::PI),
             stellar_flux_w_m2: within(
                 rng,
                 PlanetParams::MIN_STELLAR_FLUX_W_M2,
@@ -529,6 +538,45 @@ surface_pressure_bar = 1.01325
     let (p, _) = ok("[planet]\nobliquity_deg = 180\nocean_volume_km3 = 0\n");
     assert_eq!(p.obliquity_rad.to_bits(), core::f64::consts::PI.to_bits());
     assert_eq!(p.ocean_volume_m3.to_bits(), 0.0_f64.to_bits());
+    // The longitude of perihelion: 102.94° is Earth's value bit for bit,
+    // 360° is 2π exactly (Python: 360 * (math.pi / 180) == 2 * math.pi),
+    // 0° is 0, and 283.2° (perihelion in July instead of January) is
+    // repr(283.2 * (math.pi / 180)).
+    for (text, expected) in [
+        (
+            "perihelion_longitude_deg = 102.94",
+            PlanetParams::earth().perihelion_longitude_rad,
+        ),
+        (
+            "perihelion_longitude_deg = 360",
+            2.0 * core::f64::consts::PI,
+        ),
+        ("perihelion_longitude_deg = 0", 0.0),
+        ("perihelion_longitude_deg = 283.2", 4.942_772_441_647_941),
+        (
+            "perihelion_longitude_rad = 1.7966419320029627",
+            1.796_641_932_002_962_7,
+        ),
+    ] {
+        let text = format!("[planet]\n{text}\n");
+        let (p, _) = ok(&text);
+        assert_eq!(
+            p.perihelion_longitude_rad.to_bits(),
+            expected.to_bits(),
+            "{text}"
+        );
+        assert_eq!(
+            bits(&PlanetParams {
+                perihelion_longitude_rad: 0.0,
+                ..p
+            }),
+            bits(&PlanetParams {
+                perihelion_longitude_rad: 0.0,
+                ..PlanetParams::earth()
+            }),
+            "{text}"
+        );
+    }
 
     // Mars-like values, with a thicker air than Mars's 0.006 bar, which
     // is below the bounds: 3,389.5 km = 3,389,500 m exactly; from Python,
@@ -1012,6 +1060,11 @@ fn both_keys_of_a_quantity_are_an_error() {
         ("planet", "rotation_period_s", "rotation_period_h"),
         ("planet", "obliquity_rad", "obliquity_deg"),
         ("planet", "orbital_period_s", "orbital_period_days"),
+        (
+            "planet",
+            "perihelion_longitude_rad",
+            "perihelion_longitude_deg",
+        ),
         ("planet", "ocean_volume_m3", "ocean_volume_km3"),
         ("planet", "surface_pressure_pa", "surface_pressure_bar"),
         (
@@ -1266,6 +1319,27 @@ fn out_of_range_values_name_the_key_as_written() {
             -365.0 * 86_400.0,
         ),
         (
+            "[planet]\nperihelion_longitude_deg = 360.000001\n",
+            "planet.perihelion_longitude_deg",
+            360.000_001,
+            "perihelion_longitude_rad",
+            360.000_001 * (core::f64::consts::PI / 180.0),
+        ),
+        (
+            "[planet]\nperihelion_longitude_deg = -77.06\n",
+            "planet.perihelion_longitude_deg",
+            -77.06,
+            "perihelion_longitude_rad",
+            -77.06 * (core::f64::consts::PI / 180.0),
+        ),
+        (
+            "[planet]\nperihelion_longitude_rad = 6.3\n",
+            "planet.perihelion_longitude_rad",
+            6.3,
+            "perihelion_longitude_rad",
+            6.3,
+        ),
+        (
             "[planet]\norbital_eccentricity = 0.995\n",
             "planet.orbital_eccentricity",
             0.995,
@@ -1417,6 +1491,10 @@ fn out_of_range_values_name_the_key_as_written() {
     for (text, key) in [
         ("[planet]\nradius_m = nan\n", "planet.radius_m"),
         ("[planet]\nobliquity_deg = -nan\n", "planet.obliquity_deg"),
+        (
+            "[planet]\nperihelion_longitude_deg = nan\n",
+            "planet.perihelion_longitude_deg",
+        ),
         (
             "[generation.erosion]\nerodibility = nan\n",
             "generation.erosion.erodibility",

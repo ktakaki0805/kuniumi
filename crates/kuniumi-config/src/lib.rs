@@ -19,7 +19,7 @@
 //! ```
 //!
 //! Every field has its own key, the field's name, so that a key spells its
-//! unit (docs/conventions.md, "Units"). Eight quantities may instead be
+//! unit (docs/conventions.md, "Units"). Nine quantities may instead be
 //! given in a human unit, under a second key; giving both keys of one
 //! quantity is an error ([`ConfigError::BothKeys`]):
 //!
@@ -29,12 +29,13 @@
 //! | rotation period | `rotation_period_s` | `rotation_period_h` |
 //! | obliquity | `obliquity_rad` | `obliquity_deg` |
 //! | orbital period | `orbital_period_s` | `orbital_period_days` (86,400 s) |
+//! | longitude of perihelion | `perihelion_longitude_rad` | `perihelion_longitude_deg` |
 //! | ocean volume | `ocean_volume_m3` | `ocean_volume_km3` |
 //! | surface pressure | `surface_pressure_pa` | `surface_pressure_bar` |
 //! | erosion time step | `time_step_s` | `time_step_yr` |
 //! | hillslope diffusivity | `diffusivity_m2_s` | `diffusivity_m2_yr` |
 //!
-//! The first six are keys of `[planet]`, the last two of
+//! The first seven are keys of `[planet]`, the last two of
 //! `[generation.erosion]`, whose year is the Julian year of 31,557,600 s.
 //! The other keys of `[planet]` are `surface_gravity_m_s2`,
 //! `orbital_eccentricity`, `stellar_flux_w_m2`, `continental_crust_fraction`,
@@ -127,9 +128,14 @@ pub fn write(params: &PlanetParams, settings: &Settings) -> String {
             "0 for a circular orbit",
         ),
         (
+            "perihelion_longitude_rad",
+            p.perihelion_longitude_rad,
+            "or perihelion_longitude_deg",
+        ),
+        (
             "stellar_flux_w_m2",
             p.stellar_flux_w_m2,
-            "mean flux at the orbit",
+            "flux at the semi-major axis",
         ),
         (
             "ocean_volume_m3",
@@ -393,6 +399,8 @@ struct RawPlanet {
     orbital_period_s: Option<f64>,
     orbital_period_days: Option<f64>,
     orbital_eccentricity: Option<f64>,
+    perihelion_longitude_rad: Option<f64>,
+    perihelion_longitude_deg: Option<f64>,
     stellar_flux_w_m2: Option<f64>,
     ocean_volume_m3: Option<f64>,
     ocean_volume_km3: Option<f64>,
@@ -535,6 +543,18 @@ fn planet(raw: &RawPlanet) -> Result<PlanetParams, ConfigError> {
             raw.orbital_eccentricity,
             earth.orbital_eccentricity,
         ),
+        either(
+            (
+                "planet.perihelion_longitude_rad",
+                raw.perihelion_longitude_rad,
+            ),
+            (
+                "planet.perihelion_longitude_deg",
+                raw.perihelion_longitude_deg,
+            ),
+            units::deg_to_rad,
+            earth.perihelion_longitude_rad,
+        )?,
         si_only(
             "planet.stellar_flux_w_m2",
             raw.stellar_flux_w_m2,
@@ -565,6 +585,7 @@ fn planet(raw: &RawPlanet) -> Result<PlanetParams, ConfigError> {
         obliquity,
         orbital_period,
         eccentricity,
+        perihelion,
         flux,
         ocean,
         pressure,
@@ -577,6 +598,7 @@ fn planet(raw: &RawPlanet) -> Result<PlanetParams, ConfigError> {
         obliquity_rad: obliquity.value,
         orbital_period_s: orbital_period.value,
         orbital_eccentricity: eccentricity.value,
+        perihelion_longitude_rad: perihelion.value,
         stellar_flux_w_m2: flux.value,
         ocean_volume_m3: ocean.value,
         surface_pressure_pa: pressure.value,

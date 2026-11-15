@@ -53,12 +53,25 @@ pub struct PlanetParams {
     /// [`MAX_ORBITAL_PERIOD_S`](Self::MAX_ORBITAL_PERIOD_S) (90 to 3,650
     /// days).
     pub orbital_period_s: f64,
-    /// Orbital eccentricity, in `[0, 1)`.
+    /// Orbital eccentricity `e`, in `[0, 0.99]`.
     pub orbital_eccentricity: f64,
-    /// Mean stellar flux at the planet's orbit (W/m²), in
+    /// Longitude of periapsis `ϖ` (rad), in `[0, 2π]`: the astronomical
+    /// longitude of perihelion, the angle at the star, in the orbital plane
+    /// and in the direction of the planet's motion, from the vernal equinox
+    /// direction (the direction of the star seen from the planet at its
+    /// northern spring equinox) to the planet at periapsis. Seen from the
+    /// planet, the star's longitude at periapsis is `ϖ + π`. Earth: 102.94°
+    /// (J2000: 102.937°, the longitude of perihelion of the Earth–Moon
+    /// barycentre in the Keplerian elements of Standish & Williams, JPL),
+    /// which puts perihelion on about 3 January. It has no effect on a
+    /// circular orbit (ticket M4-01).
+    pub perihelion_longitude_rad: f64,
+    /// Stellar flux `S` at the distance of the semi-major axis (W/m²; for
+    /// Earth the solar constant), in
     /// [`MIN_STELLAR_FLUX_W_M2`](Self::MIN_STELLAR_FLUX_W_M2)`..=`
     /// [`MAX_STELLAR_FLUX_W_M2`](Self::MAX_STELLAR_FLUX_W_M2) (400 to
-    /// 2,500 W/m²).
+    /// 2,500 W/m²). On an eccentric orbit the mean over the year is
+    /// `S / √(1 − e²)` (Kepler's second law; ticket M4-01).
     pub stellar_flux_w_m2: f64,
     /// Total volume of surface water (m³), in
     /// `0..=`[`MAX_OCEAN_VOLUME_M3`](Self::MAX_OCEAN_VOLUME_M3) (0 to
@@ -190,6 +203,7 @@ impl PlanetParams {
             obliquity_rad: deg_to_rad(23.44),
             orbital_period_s: 31_558_149.8,
             orbital_eccentricity: 0.0167,
+            perihelion_longitude_rad: deg_to_rad(102.94),
             stellar_flux_w_m2: 1361.0,
             ocean_volume_m3: 1.335e18,
             surface_pressure_pa: 101_325.0,
@@ -247,12 +261,7 @@ impl PlanetParams {
             Self::MIN_ROTATION_PERIOD_S,
             Self::MAX_ROTATION_PERIOD_S,
         )?;
-        within(
-            "obliquity_rad",
-            self.obliquity_rad,
-            0.0,
-            core::f64::consts::PI,
-        )?;
+        within("obliquity_rad", self.obliquity_rad, 0.0, PI)?;
         within(
             "orbital_period_s",
             self.orbital_period_s,
@@ -260,6 +269,12 @@ impl PlanetParams {
             Self::MAX_ORBITAL_PERIOD_S,
         )?;
         within("orbital_eccentricity", self.orbital_eccentricity, 0.0, 0.99)?;
+        within(
+            "perihelion_longitude_rad",
+            self.perihelion_longitude_rad,
+            0.0,
+            2.0 * PI,
+        )?;
         within(
             "stellar_flux_w_m2",
             self.stellar_flux_w_m2,
@@ -756,6 +771,72 @@ mod tests {
             (densest_break_up_s - 6_861.0).abs() < 1.0,
             "{densest_break_up_s}"
         );
+    }
+
+    #[test]
+    fn the_perihelion_longitude_is_an_angle_of_one_turn() {
+        // Earth: 102.94° (Python: repr(102.94 * (math.pi / 180))).
+        let e = earth();
+        assert_eq!(
+            e.perihelion_longitude_rad.to_bits(),
+            1.796_641_932_002_962_7_f64.to_bits()
+        );
+        let with = |v: f64| PlanetParams {
+            perihelion_longitude_rad: v,
+            ..earth()
+        };
+        // 0 to 2π inclusive; 360° converts to 2π exactly.
+        assert_eq!(
+            units::deg_to_rad(360.0).to_bits(),
+            (2.0 * PI).to_bits(),
+            "360°"
+        );
+        for v in [0.0, -0.0, PI, 2.0 * PI, units::deg_to_rad(360.0)] {
+            assert_eq!(with(v).validate(), Ok(()), "{v:e}");
+        }
+        for v in [
+            next_down(0.0),
+            next_up(2.0 * PI),
+            -1.0,
+            7.0,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            match with(v).validate() {
+                Err(ParamError::OutOfRange { name, value }) => {
+                    assert_eq!(name, "perihelion_longitude_rad");
+                    assert_eq!(value.to_bits(), v.to_bits());
+                }
+                other => panic!("{v:e}: {other:?}"),
+            }
+        }
+        // Checked in field order: after the eccentricity, before the flux.
+        let p = PlanetParams {
+            orbital_eccentricity: 1.0,
+            perihelion_longitude_rad: -1.0,
+            stellar_flux_w_m2: 0.0,
+            ..earth()
+        };
+        assert!(matches!(
+            p.validate(),
+            Err(ParamError::OutOfRange {
+                name: "orbital_eccentricity",
+                ..
+            })
+        ));
+        let p = PlanetParams {
+            perihelion_longitude_rad: -1.0,
+            stellar_flux_w_m2: 0.0,
+            ..earth()
+        };
+        assert!(matches!(
+            p.validate(),
+            Err(ParamError::OutOfRange {
+                name: "perihelion_longitude_rad",
+                ..
+            })
+        ));
     }
 
     #[test]

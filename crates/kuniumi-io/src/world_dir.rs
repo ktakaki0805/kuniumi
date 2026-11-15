@@ -101,7 +101,7 @@
 //!
 //! ```json
 //! {
-//!   "format_version": 3,
+//!   "format_version": 4,
 //!   "generator_version": "0.0.1",
 //!   "seed": 1,
 //!   "settings": {
@@ -123,6 +123,7 @@
 //!     "obliquity_rad": 0.40910517666747087,
 //!     "orbital_period_s": 31558149.8,
 //!     "orbital_eccentricity": 0.0167,
+//!     "perihelion_longitude_rad": 1.7966419320029627,
 //!     "stellar_flux_w_m2": 1361.0,
 //!     "ocean_volume_m3": 1.335e+18,
 //!     "surface_pressure_pa": 101325.0,
@@ -178,12 +179,14 @@ use crate::{Rgb8, field_file, grid_file, png, render};
 
 /// The version of the layout of a world directory, the key
 /// `format_version` of `world.json`: 1 (ticket M2-01) had no grid file, 2
-/// (ticket MV-01) added [`GRID_FILE`], 3 (ticket M3-07) adds the erosion
-/// settings, `settings.erosion` ([`ErosionJson`]). [`read()`] reads only
-/// this version: a directory of an earlier one is generated again (a
-/// version-2 world read with the default erosion settings would record
-/// settings that its generator never had).
-pub const FORMAT_VERSION: u32 = 3;
+/// (ticket MV-01) added [`GRID_FILE`], 3 (ticket M3-07) added the erosion
+/// settings, `settings.erosion` ([`ErosionJson`]), 4 (ticket M4-01) adds
+/// the longitude of perihelion, `planet.perihelion_longitude_rad`.
+/// [`read()`] reads only this version: a directory of an earlier one is
+/// generated again (a version-2 world read with the default erosion
+/// settings, or a version-3 world with Earth's longitude of perihelion,
+/// would record values that its generator never had).
+pub const FORMAT_VERSION: u32 = 4;
 
 /// The name of the metadata file.
 pub const METADATA_FILE: &str = "world.json";
@@ -342,6 +345,8 @@ pub struct PlanetJson {
     pub orbital_period_s: f64,
     /// [`PlanetParams::orbital_eccentricity`].
     pub orbital_eccentricity: f64,
+    /// [`PlanetParams::perihelion_longitude_rad`] (rad).
+    pub perihelion_longitude_rad: f64,
     /// [`PlanetParams::stellar_flux_w_m2`] (W/m²).
     pub stellar_flux_w_m2: f64,
     /// [`PlanetParams::ocean_volume_m3`] (m³).
@@ -416,7 +421,7 @@ impl WorldJson {
     }
 
     /// Every number of type `f64`, with its key, in the order written.
-    fn floats(&self) -> [(&'static str, f64); 15] {
+    fn floats(&self) -> [(&'static str, f64); 16] {
         let e = &self.settings.erosion;
         let p = &self.planet;
         [
@@ -430,6 +435,10 @@ impl WorldJson {
             ("planet.obliquity_rad", p.obliquity_rad),
             ("planet.orbital_period_s", p.orbital_period_s),
             ("planet.orbital_eccentricity", p.orbital_eccentricity),
+            (
+                "planet.perihelion_longitude_rad",
+                p.perihelion_longitude_rad,
+            ),
             ("planet.stellar_flux_w_m2", p.stellar_flux_w_m2),
             ("planet.ocean_volume_m3", p.ocean_volume_m3),
             ("planet.surface_pressure_pa", p.surface_pressure_pa),
@@ -498,6 +507,7 @@ impl PlanetJson {
             obliquity_rad: params.obliquity_rad,
             orbital_period_s: params.orbital_period_s,
             orbital_eccentricity: params.orbital_eccentricity,
+            perihelion_longitude_rad: params.perihelion_longitude_rad,
             stellar_flux_w_m2: params.stellar_flux_w_m2,
             ocean_volume_m3: params.ocean_volume_m3,
             surface_pressure_pa: params.surface_pressure_pa,
@@ -522,6 +532,7 @@ impl PlanetJson {
             obliquity_rad: self.obliquity_rad,
             orbital_period_s: self.orbital_period_s,
             orbital_eccentricity: self.orbital_eccentricity,
+            perihelion_longitude_rad: self.perihelion_longitude_rad,
             stellar_flux_w_m2: self.stellar_flux_w_m2,
             ocean_volume_m3: self.ocean_volume_m3,
             surface_pressure_pa: self.surface_pressure_pa,

@@ -60,6 +60,7 @@ fn contents(world: &World) -> Vec<String> {
                 p.obliquity_rad,
                 p.orbital_period_s,
                 p.orbital_eccentricity,
+                p.perihelion_longitude_rad,
                 p.stellar_flux_w_m2,
                 p.ocean_volume_m3,
                 p.surface_pressure_pa,
@@ -219,11 +220,11 @@ fn assert_error(what: &str, err: &ReadError, dir: &Path, file: &str, kind: &str,
 
 #[test]
 fn rejects_other_format_versions() {
-    for version in ["0", "1", "2", "4", "18446744073709551615"] {
+    for version in ["0", "1", "2", "3", "5", "18446744073709551615"] {
         let (dir, err) = read_spoiled("version", |dir| {
             edit_world_json(dir, |text| {
                 text.replace(
-                    "\"format_version\": 3,",
+                    "\"format_version\": 4,",
                     &format!("\"format_version\": {version},"),
                 )
             })
@@ -236,11 +237,33 @@ fn rejects_other_format_versions() {
             "version",
             &format!(
                 "world directory format version {version} is not supported: this build reads \
-                 only version 3 (generate the world again)"
+                 only version 4 (generate the world again)"
             ),
         );
         remove(&dir);
     }
+    // A version 3 directory as ticket M3-07 wrote it: the planet without
+    // `perihelion_longitude_rad` (ticket M4-01 refuses it rather than read
+    // it with Earth's value, which its generator never had).
+    let (dir, err) = read_spoiled("version_3", |dir| {
+        edit_world_json(dir, |text| {
+            let start = text.find("\n    \"perihelion_longitude_rad\": ").unwrap();
+            let end = start + 1 + text[start + 1..].find('\n').unwrap();
+            let text = format!("{}{}", &text[..start], &text[end..]);
+            assert!(!text.contains("perihelion"), "{text}");
+            text.replace("\"format_version\": 4,", "\"format_version\": 3,")
+        })
+    });
+    assert_error(
+        "version 3",
+        &err,
+        &dir,
+        "world.json",
+        "version",
+        "world directory format version 3 is not supported: this build reads only version 4 \
+         (generate the world again)",
+    );
+    remove(&dir);
     // A version 2 directory as ticket MV-01 wrote it: the settings without
     // `erosion` (ticket M3-07 refuses it rather than read it with the
     // default erosion settings, which its generator never had).
@@ -250,7 +273,7 @@ fn rejects_other_format_versions() {
             let end = start + text[start..].find("\n    }").unwrap() + "\n    }".len();
             let text = format!("{}{}", &text[..start], &text[end..]);
             assert!(text.contains("\"allow_partial\": true\n  },"), "{text}");
-            text.replace("\"format_version\": 3,", "\"format_version\": 2,")
+            text.replace("\"format_version\": 4,", "\"format_version\": 2,")
         })
     });
     assert_error(
@@ -259,7 +282,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 2 is not supported: this build reads only version 3 \
+        "world directory format version 2 is not supported: this build reads only version 4 \
          (generate the world again)",
     );
     remove(&dir);
@@ -268,7 +291,7 @@ fn rejects_other_format_versions() {
     let (dir, err) = read_spoiled("version_first", |dir| {
         edit_world_json(dir, |text| {
             text.replace(
-                "\"format_version\": 3,",
+                "\"format_version\": 4,",
                 "\"format_version\": 1, \"old\": 0,",
             )
         })
@@ -279,7 +302,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 1 is not supported: this build reads only version 3 \
+        "world directory format version 1 is not supported: this build reads only version 4 \
          (generate the world again)",
     );
     remove(&dir);
@@ -288,7 +311,7 @@ fn rejects_other_format_versions() {
     let (dir, err) = read_spoiled("version_layout", |dir| {
         edit_world_json(dir, |text| {
             let text = text
-                .replace("\"format_version\": 3,", "\"format_version\": 4,")
+                .replace("\"format_version\": 4,", "\"format_version\": 5,")
                 .replace("\"seed\": 1,", "")
                 .replace(
                     "\"rotation\": \"free\"",
@@ -310,12 +333,12 @@ fn rejects_other_format_versions() {
         })
     });
     assert_error(
-        "version 4, another layout",
+        "version 5, another layout",
         &err,
         &dir,
         "world.json",
         "version",
-        "world directory format version 4 is not supported: this build reads only version 3 \
+        "world directory format version 5 is not supported: this build reads only version 4 \
          (generate the world again)",
     );
     remove(&dir);
@@ -454,24 +477,24 @@ fn rejects_malformed_world_json() {
         ),
         (
             "no version",
-            Box::new(replace("\"format_version\": 3,", "")),
+            Box::new(replace("\"format_version\": 4,", "")),
             "missing field `format_version`",
         ),
         (
             "a version that is not a number",
             Box::new(replace(
-                "\"format_version\": 3,",
-                "\"format_version\": \"3\",",
+                "\"format_version\": 4,",
+                "\"format_version\": \"4\",",
             )),
-            "`format_version` is \"3\", not an unsigned integer",
+            "`format_version` is \"4\", not an unsigned integer",
         ),
         (
             "a fractional version",
             Box::new(replace(
-                "\"format_version\": 3,",
-                "\"format_version\": 3.0,",
+                "\"format_version\": 4,",
+                "\"format_version\": 4.0,",
             )),
-            "`format_version` is 3.0, not an unsigned integer",
+            "`format_version` is 4.0, not an unsigned integer",
         ),
         (
             "a missing key",
@@ -1055,7 +1078,7 @@ fn spoiled_files_read_from_memory_fail_as_from_disk() {
         "truncated" => put(dir, &file, &full[..full.len() - 3]),
         "trailing" => put(dir, &file, &[full.as_slice(), &[0]].concat()),
         "version" => edit_world_json(dir, |t| {
-            t.replace("\"format_version\": 3", "\"format_version\": 9")
+            t.replace("\"format_version\": 4", "\"format_version\": 9")
         }),
         "grid" => {
             let bytes = bytes_of(&dir.join(GRID_FILE));

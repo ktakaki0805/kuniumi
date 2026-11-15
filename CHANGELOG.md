@@ -428,6 +428,24 @@ section: every change after which an existing seed produces a different world
   (`erosion/roughness`) and `INITIAL_ROUGHNESS_M` (1 m): every land cell
   raised by `A u`, `u` uniform in [0, 1) drawn per cell in index order,
   the ocean unchanged (M3-06).
+- `PlanetParams::perihelion_longitude_rad`, the astronomical longitude of
+  perihelion `ϖ` (Earth 102.94°, perihelion on about 3 January), checked
+  in `[0, 2π]` by `validate`; in settings files as
+  `perihelion_longitude_rad` or `perihelion_longitude_deg`, and in
+  `world.json` (M4-01).
+- `kuniumi_sim::stages::climate::insolation`: the daily-mean insolation at
+  the top of the atmosphere (Berger 1978; `daily_mean_insolation_w_m2`,
+  exactly 0 in polar night), the orbit (`Orbit`: the star's longitude at a
+  time of year through Kepler's equation, `eccentric_anomaly_rad`, the
+  declination and `(a/r)²`), and the monthly means of every cell
+  (`MonthlyInsolation`, `monthly_insolation`): twelve months of equal
+  length with the northern spring equinox at 79.5/365 of the year (PMIP),
+  integrated over the star's longitude in sub-steps of at most 0.5°. For
+  Earth the annual means are 415.59 W/m² at the equator and 172.35 W/m²
+  at the poles, the global mean `S/4 (1 − e²)^−½`; 650,000 cells take
+  about 2 s. Not yet used by the pipeline (M4-01).
+- `tools/insolation_reference.py`: reference values of the insolation by
+  integration in time (mpmath) (M4-01).
 
 ### Changed
 
@@ -673,6 +691,12 @@ section: every change after which an existing seed produces a different world
   defaults at 650,000 cells the networks of the interiors become
   dendritic and Hack's exponent rises from 0.51–0.52 to 0.58–0.61 for
   seeds 1–5 (M3-06; the design document, 侵食と地形発達 / 1ステップの処理).
+- `world.json` has `format_version` 4, with
+  `planet.perihelion_longitude_rad`; a world directory of version 3 is
+  refused (`ReadError::Version`) and must be generated again. Settings
+  files written by `kuniumi params` gain the key, and the stellar flux is
+  documented as the flux at the semi-major axis (the annual mean is
+  `S / √(1 − e²)`) (M4-01).
 
 ### Removed
 

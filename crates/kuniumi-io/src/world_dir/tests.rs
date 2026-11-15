@@ -105,6 +105,7 @@ pub(super) fn awkward_world() -> World {
             obliquity_rad: 0.1,
             orbital_period_s: 1e23,
             orbital_eccentricity: 1.0 / 3.0,
+            perihelion_longitude_rad: -1e300,
             stellar_flux_w_m2: 2.225_073_858_507_201e-308,
             ocean_volume_m3: 9_007_199_254_740_991.0,
             surface_pressure_pa: -0.0,
@@ -146,6 +147,7 @@ fn world_floats(world: &World) -> Vec<u64> {
         p.obliquity_rad,
         p.orbital_period_s,
         p.orbital_eccentricity,
+        p.perihelion_longitude_rad,
         p.stellar_flux_w_m2,
         p.ocean_volume_m3,
         p.surface_pressure_pa,
@@ -171,6 +173,7 @@ fn json_floats(json: &WorldJson) -> Vec<u64> {
         p.obliquity_rad,
         p.orbital_period_s,
         p.orbital_eccentricity,
+        p.perihelion_longitude_rad,
         p.stellar_flux_w_m2,
         p.ocean_volume_m3,
         p.surface_pressure_pa,
@@ -188,7 +191,7 @@ fn world_json_parses_back_bit_exactly() {
         let back: WorldJson = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back, WorldJson::of(&world));
         assert_eq!(json_floats(&back), world_floats(&world));
-        assert_eq!(back.format_version, 3);
+        assert_eq!(back.format_version, 4);
         assert_eq!(back.generator_version, kuniumi_world::GENERATOR_VERSION);
         assert_eq!(back.seed, world.seed);
         let s = &back.settings;
@@ -283,12 +286,13 @@ fn serde_json_round_trips_every_finite_f64() {
 /// `world.json` for Earth after the Grid stage, written by hand: the decimal
 /// literals of `PlanetParams::earth()` and `ErosionSettings::default()`,
 /// the obliquity `23.44 · (π/180)` as `repr(23.44 * (math.pi / 180))`
-/// prints it in Python 3 (0.40910517666747087), and the default
+/// prints it in Python 3 (0.40910517666747087), the longitude of
+/// perihelion as `repr(102.94 * (math.pi / 180))`, and the default
 /// diffusivity and time step as `repr(5e-3 / 31557600.0)` and
 /// `repr(1e4 * 31557600.0)` print them. It is the example in the module
 /// documentation.
 const EARTH_JSON: &str = r#"{
-  "format_version": 3,
+  "format_version": 4,
   "generator_version": "0.0.1",
   "seed": 1,
   "settings": {
@@ -310,6 +314,7 @@ const EARTH_JSON: &str = r#"{
     "obliquity_rad": 0.40910517666747087,
     "orbital_period_s": 31558149.8,
     "orbital_eccentricity": 0.0167,
+    "perihelion_longitude_rad": 1.7966419320029627,
     "stellar_flux_w_m2": 1361.0,
     "ocean_volume_m3": 1.335e+18,
     "surface_pressure_pa": 101325.0,
@@ -377,7 +382,7 @@ fn earth_world_json_has_the_documented_layout() {
 /// serde_json's float formatter, whose digit writers differ between
 /// targets, on subnormals, 17-digit values, the extremes and −0.
 const AWKWARD_JSON: &str = r#"{
-  "format_version": 3,
+  "format_version": 4,
   "generator_version": "0.0.1",
   "seed": 18446744073709551615,
   "settings": {
@@ -399,6 +404,7 @@ const AWKWARD_JSON: &str = r#"{
     "obliquity_rad": 0.1,
     "orbital_period_s": 1e+23,
     "orbital_eccentricity": 0.3333333333333333,
+    "perihelion_longitude_rad": -1e+300,
     "stellar_flux_w_m2": 2.225073858507201e-308,
     "ocean_volume_m3": 9007199254740991.0,
     "surface_pressure_pa": -0.0,
@@ -455,7 +461,7 @@ type Spoil = fn(&mut World);
 
 #[test]
 fn rejects_non_finite_metadata() {
-    let cases: [(Spoil, &str); 8] = [
+    let cases: [(Spoil, &str); 9] = [
         (|w| w.sea_level_m = f64::NAN, "`sea_level_m`"),
         (
             |w| w.settings.erosion.erodibility = f64::NAN,
@@ -484,6 +490,10 @@ fn rejects_non_finite_metadata() {
         (
             |w| w.params.continental_crust_fraction = f64::NAN,
             "`planet.continental_crust_fraction`",
+        ),
+        (
+            |w| w.params.perihelion_longitude_rad = f64::NEG_INFINITY,
+            "-inf of `planet.perihelion_longitude_rad`",
         ),
     ];
     for (spoil, key) in cases {
