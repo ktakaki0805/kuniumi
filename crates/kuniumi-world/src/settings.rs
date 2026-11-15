@@ -1,3 +1,5 @@
+use kuniumi_math::units::SECONDS_PER_YEAR;
+
 use crate::ParamError;
 
 /// How a planet is generated, as opposed to what it is ([`PlanetParams`]):
@@ -87,9 +89,231 @@ impl Default for Settings {
     }
 }
 
+/// The settings of the river erosion of the Erosion stage (design document,
+/// 侵食と地形発達 / 基本方程式; ticket M3-03): the stream-power law
+/// `E = K Qᵐ S` (n = 1) with the erosion rate `E` (m/s), the discharge `Q`
+/// (m³/s) and the slope `S` to the receiver (m/m), solved implicitly in
+/// [`steps`](Self::steps) steps of [`time_step_s`](Self::time_step_s)
+/// (Braun & Willett 2013).
+///
+/// Not yet a field of [`Settings`]: ticket M3-07 adds it there and records
+/// it in `world.json` and in settings files. Until then the solver of
+/// `kuniumi_sim::stages::erosion` takes it as an argument.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ErosionSettings {
+    /// The erodibility `K` of the stream-power law, in the SI unit
+    /// m^(1−3m) s^(m−1) that makes `K Qᵐ S` an erosion rate in m/s for a
+    /// discharge in m³/s; the unit depends on
+    /// [`discharge_exponent`](Self::discharge_exponent), so the name has no
+    /// suffix. Finite and positive. Default
+    /// [`DEFAULT_ERODIBILITY`](Self::DEFAULT_ERODIBILITY).
+    pub erodibility: f64,
+    /// The exponent `m` of the discharge (dimensionless), finite and not
+    /// negative. Default
+    /// [`DEFAULT_DISCHARGE_EXPONENT`](Self::DEFAULT_DISCHARGE_EXPONENT).
+    pub discharge_exponent: f64,
+    /// The time step `Δt` (s), finite and positive. Default
+    /// [`DEFAULT_TIME_STEP_S`](Self::DEFAULT_TIME_STEP_S).
+    pub time_step_s: f64,
+    /// The number of time steps; 0 leaves the surface unchanged. Default
+    /// [`DEFAULT_STEPS`](Self::DEFAULT_STEPS).
+    pub steps: u32,
+}
+
+impl ErosionSettings {
+    /// The default erodibility: 7.5 × 10⁻¹⁰ m^(1−3m) s^(m−1) (with
+    /// `m` = 0.45: m^−0.35 s^−0.55).
+    ///
+    /// The design tunes `K` by its results, since its value depends on the
+    /// units and the grid spacing: the major orogens 2–4 km high on
+    /// average, the highest peaks 8–9 km (design document, 侵食と地形発達 /
+    /// 調整の目安). At steady state the slope is `S = U / (K Qᵐ)`. Take a
+    /// river crossing a belt that rises at the rate `U`, on the default
+    /// grid (650,000 cells: `a` = 7.85 × 10⁸ m² per cell, `L` = 28.0 km
+    /// between centres, `√(4π/n) R`), with 1 m/yr of runoff `P`, its
+    /// drainage area growing as in Hack's law, `A_k = a k^(1/0.6)` at the
+    /// k-th cell from the divide. Its divide stands at
+    /// `Σ_k U L / (K (P A_k)ᵐ)` above the foreland: 3.0–3.8 km for 5–8
+    /// cells (140–220 km) at 4 mm/yr, the uplift of a collision front
+    /// converging at 4 cm/yr (`COLLISION_UPLIFT_RATIO` of the Tectonics
+    /// stage, 0.1), and 7.5–9.4 km at 10 mm/yr, the fastest uplift of the
+    /// Tectonics stage (ticket M3-03 has the numbers). The same law written
+    /// for drainage area instead of discharge, `E = K_A Aᵐ S` with
+    /// `K = K_A / Pᵐ`, has `K_A` = 1.0 × 10⁻⁵ m^0.1 yr⁻¹. Calibration
+    /// against the metrics of the design is left to tickets M3-05 and M7.
+    pub const DEFAULT_ERODIBILITY: f64 = 7.5e-10;
+
+    /// The default discharge exponent: 0.45, in the 0.4–0.5 of the design
+    /// document (侵食と地形発達 / 基本方程式).
+    pub const DEFAULT_DISCHARGE_EXPONENT: f64 = 0.45;
+
+    /// The default time step: 10,000 years (3.15576 × 10¹¹ s), the lower
+    /// end of the 10,000 to 100,000 years that the design allows the
+    /// implicit solve (侵食と地形発達 / 基本方程式). On the default grid, the
+    /// factor `F = Δt K Qᵐ / L` of the solve then runs from 0.036 for the
+    /// runoff of one cell to 1.5 for 10⁵ m³/s, so that knickpoints move
+    /// up the rivers without much numerical smearing; longer steps stay
+    /// stable.
+    pub const DEFAULT_TIME_STEP_S: f64 = 1.0e4 * SECONDS_PER_YEAR;
+
+    /// The default number of steps: 1,000, the lower end of the design's
+    /// 1,000–3,000 (侵食と地形発達), so 10 Myr in all with the default time
+    /// step: a few Myr for each of the two or three rounds of erosion
+    /// between which the climate is computed again (侵食と地形発達 /
+    /// 気候との交互反復).
+    pub const DEFAULT_STEPS: u32 = 1_000;
+
+    /// Checks every setting, in the order of the fields; the error names
+    /// the first one that is not finite or out of its domain
+    /// ([`ParamError::OutOfRange`] with the field's name, such as
+    /// `"erodibility"`): the erodibility and the time step must be finite
+    /// and positive, the discharge exponent finite and not negative; every
+    /// number of steps is valid. Within these the law is defined and the
+    /// solver's results are finite.
+    pub fn validate(&self) -> Result<(), ParamError> {
+        // Written so that NaN fails every check.
+        let checks = [
+            (
+                "erodibility",
+                self.erodibility,
+                self.erodibility > 0.0 && self.erodibility.is_finite(),
+            ),
+            (
+                "discharge_exponent",
+                self.discharge_exponent,
+                self.discharge_exponent >= 0.0 && self.discharge_exponent.is_finite(),
+            ),
+            (
+                "time_step_s",
+                self.time_step_s,
+                self.time_step_s > 0.0 && self.time_step_s.is_finite(),
+            ),
+        ];
+        match checks.into_iter().find(|&(_, _, valid)| !valid) {
+            Some((name, value, _)) => Err(ParamError::OutOfRange { name, value }),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Default for ErosionSettings {
+    fn default() -> Self {
+        Self {
+            erodibility: Self::DEFAULT_ERODIBILITY,
+            discharge_exponent: Self::DEFAULT_DISCHARGE_EXPONENT,
+            time_step_s: Self::DEFAULT_TIME_STEP_S,
+            steps: Self::DEFAULT_STEPS,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn erosion_defaults_are_the_documented_values_and_valid() {
+        let s = ErosionSettings::default();
+        assert_eq!(s.erodibility.to_bits(), 7.5e-10_f64.to_bits());
+        assert_eq!(s.discharge_exponent.to_bits(), 0.45_f64.to_bits());
+        // 10,000 Julian years, an integer number of seconds.
+        assert_eq!(s.time_step_s.to_bits(), 315_576_000_000.0_f64.to_bits());
+        assert_eq!(s.steps, 1_000);
+        assert_eq!(s.validate(), Ok(()));
+    }
+
+    #[test]
+    fn erosion_settings_accept_their_whole_domain() {
+        for (erodibility, discharge_exponent, time_step_s, steps) in [
+            (f64::MIN_POSITIVE, 0.0, f64::MIN_POSITIVE, 0),
+            (5e-324, 1.0, 5e-324, 1),
+            (1.0, 0.5, 1.0, u32::MAX),
+            (f64::MAX, f64::MAX, f64::MAX, 7),
+        ] {
+            let s = ErosionSettings {
+                erodibility,
+                discharge_exponent,
+                time_step_s,
+                steps,
+            };
+            assert_eq!(s.validate(), Ok(()), "{s:?}");
+        }
+    }
+
+    #[test]
+    fn erosion_settings_reject_values_out_of_their_domain_by_name() {
+        let bad_positive = [0.0, -0.0, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+        let bad_exponent = [-5e-324, -1.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+        let cases = bad_positive
+            .iter()
+            .map(|&v| {
+                (
+                    ErosionSettings {
+                        erodibility: v,
+                        ..ErosionSettings::default()
+                    },
+                    "erodibility",
+                    v,
+                )
+            })
+            .chain(bad_exponent.iter().map(|&v| {
+                (
+                    ErosionSettings {
+                        discharge_exponent: v,
+                        ..ErosionSettings::default()
+                    },
+                    "discharge_exponent",
+                    v,
+                )
+            }))
+            .chain(bad_positive.iter().map(|&v| {
+                (
+                    ErosionSettings {
+                        time_step_s: v,
+                        ..ErosionSettings::default()
+                    },
+                    "time_step_s",
+                    v,
+                )
+            }));
+        for (s, name, value) in cases {
+            match s.validate() {
+                Err(ParamError::OutOfRange {
+                    name: n,
+                    value: got,
+                }) => {
+                    assert_eq!(n, name, "{s:?}");
+                    assert_eq!(got.to_bits(), value.to_bits(), "{s:?}");
+                }
+                other => panic!("{s:?}: {other:?}"),
+            }
+        }
+        // The fields are checked in order.
+        let all_bad = ErosionSettings {
+            erodibility: -1.0,
+            discharge_exponent: -1.0,
+            time_step_s: -1.0,
+            steps: 0,
+        };
+        assert_eq!(
+            all_bad.validate(),
+            Err(ParamError::OutOfRange {
+                name: "erodibility",
+                value: -1.0,
+            })
+        );
+        let two_bad = ErosionSettings {
+            erodibility: 1.0,
+            ..all_bad
+        };
+        assert_eq!(
+            two_bad.validate(),
+            Err(ParamError::OutOfRange {
+                name: "discharge_exponent",
+                value: -1.0,
+            })
+        );
+    }
 
     #[test]
     fn default_has_650_000_cells_12_plates_and_is_valid() {

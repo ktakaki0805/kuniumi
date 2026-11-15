@@ -34,14 +34,14 @@
 //! assert!(depth_m[4] > 190.0 && depth_m[4] < 190.0 + 1e-9);
 //! ```
 //!
-//! The Erosion stage rebuilds the graph at every step (M3-03) on the
-//! filled surface and erodes the original one; the Hydrology stage routes
-//! the runoff on the final one (M5-01), and its lakes (M5-02) start from
-//! [`depression_depth_m`]. Graph and fill depend only on their inputs,
-//! through integer bookkeeping, IEEE `−`, `×`, `÷`, comparisons and exact
-//! operations on bit patterns (docs/conventions.md, "Determinism", rule
-//! 2), so they are the same on every platform; they draw no random
-//! numbers.
+//! The Erosion stage rebuilds the graph at every step on the filled
+//! surface and erodes the original one ([`crate::stages::erosion::erode`],
+//! ticket M3-03); the Hydrology stage routes the runoff on the final one
+//! (M5-01), and its lakes (M5-02) start from [`depression_depth_m`]. Graph
+//! and fill depend only on their inputs, through integer bookkeeping, IEEE
+//! `−`, `×`, `÷`, comparisons and exact operations on bit patterns
+//! (docs/conventions.md, "Determinism", rule 2), so they are the same on
+//! every platform; they draw no random numbers.
 
 use core::cmp::Ordering;
 
@@ -49,6 +49,7 @@ use kuniumi_sphere::SphereGrid;
 
 mod depressions;
 
+pub(crate) use depressions::next_up;
 pub use depressions::{depression_depth_m, fill_depressions};
 
 /// Where the water of each cell goes, and the order in which to follow it

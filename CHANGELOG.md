@@ -348,6 +348,21 @@ section: every change after which an existing seed produces a different world
   the lowest cell is the one outlet. `depression_depth_m` gives
   `h_fill − h` (m) for the lakes. Fill plus routing: 56 ms for an Earth
   world of 650,000 cells, 220 ms for random heights, in release (M3-02).
+- River incision against uplift, `∂h/∂t = U − K Qᵐ S` (n = 1), solved
+  implicitly along the drainage stack after Braun & Willett (2013):
+  `kuniumi_sim::stages::erosion::incise` (one step on a network given as
+  slices), `receiver_distances_m` and the driver `erode`, which per step
+  fills the depressions, routes on the filled surface, accumulates the
+  discharge from the precipitation and erodes the original surface, and
+  reports progress per step. Rivers grade to the water surface (the sea
+  level, or a lake's surface), cells under a lake are only uplifted, and
+  every eroded cell ends strictly above its receiver's water surface for
+  any time step; ocean cells are fixed. `kuniumi_world::ErosionSettings`
+  (erodibility K = 7.5 × 10⁻¹⁰ m^(1−3m) s^(m−1), discharge exponent
+  m = 0.45, time step 10⁴ yr, 1,000 steps; `validate`) and the placeholder
+  precipitation of 1 m/yr. About 90 ms per step for an Earth world of
+  650,000 cells, in release. The Erosion stage is wired into the pipeline
+  by M3-05 (M3-03).
 
 ### Changed
 

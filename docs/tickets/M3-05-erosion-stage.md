@@ -2,7 +2,7 @@
 
 - Status: ready
 - Milestone: M3
-- Depends on: M3-04, M2-06
+- Depends on: M3-04, M3-07, M2-06
 - Crates: kuniumi-sim, kuniumi-io, kuniumi-cli
 - Design: 侵食と地形発達; 検証方法
 - Decisions: none
@@ -29,6 +29,19 @@ In:
 
 Out:
 - Climate coupling (M7-01).
+
+## Implementation notes
+
+From M3-03 (its Result, item 5), to settle when this ticket is refined:
+with the default `ErosionSettings` (1,000 steps of 10⁴ yr, 10 Myr) the
+continental interiors of the Earth worlds, which have no uplift, are cut
+down to the sea level: on the world of seed 1 at 100,000 cells the median
+land elevation falls from 1,017 m to 0 m (mean 1,096 m to 79 m), while the
+uplifted belts keep their relief (highest 5,960 m). After 1 Myr (100
+steps) dendritic valleys cover the continents. Isostatic rebound (M7-03),
+deposition (M7-02) and harder old crust (M7-04), which would slow this,
+come later; the drainage networks drawn on the planed interiors may show
+the parallel flow lines of M3-06.
 
 ## Acceptance criteria
 
