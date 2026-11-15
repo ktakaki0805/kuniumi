@@ -423,6 +423,11 @@ section: every change after which an existing seed produces a different world
   `earth::HACK_EXPONENT` (0.6) and `earth::AREA_EXCEEDANCE_EXPONENT`
   (0.43). For Earth's defaults at 650,000 cells, `h` = 0.509–0.525 over
   9,000–10,000 basins for seeds 1–5 (M3-08).
+- The initial roughness of the Erosion stage,
+  `kuniumi_sim::stages::erosion::roughen`, `ROUGHNESS_STREAM`
+  (`erosion/roughness`) and `INITIAL_ROUGHNESS_M` (1 m): every land cell
+  raised by `A u`, `u` uniform in [0, 1) drawn per cell in index order,
+  the ocean unchanged (M3-06).
 
 ### Changed
 
@@ -659,6 +664,15 @@ section: every change after which an existing seed produces a different world
   beyond the limits of the metrics (`DrainageMetrics::heights_in_limits`:
   a height above 10³⁰⁰ m; `radius_in_limits`: a surface above 10³⁰⁰ m², a
   cell below 10⁻³⁰⁰ m²) before writing anything (M3-08).
+- The Erosion stage roughens the land of the Crust stage's surface by up
+  to 1 m (`roughen`, the stream `erosion/roughness` of the world's seed)
+  before the first step, and not at all with 0 steps: on exactly level
+  land the routing of Priority-Flood+ε drew straight parallel rivers and
+  pinnate tributaries, which the flat resolution of Barnes, Lehman & Mulla
+  (2014b) does not remove on flats hundreds of cells wide. For Earth's
+  defaults at 650,000 cells the networks of the interiors become
+  dendritic and Hack's exponent rises from 0.51–0.52 to 0.58–0.61 for
+  seeds 1–5 (M3-06; the design document, 侵食と地形発達 / 1ステップの処理).
 
 ### Removed
 
@@ -753,6 +767,14 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M3-06: every world generated with erosion steps changes:
+  `surface_height` (its land roughened by up to 1 m before the first step),
+  `drainage_area`, `discharge`, `depression_depth`, their maps,
+  `rivers.png`, `metrics.txt` and `hypsometry.png`. For Earth's defaults at
+  650,000 cells the highest peaks of seeds 1–5 become 14.1, 8.0, 12.6, 5.6
+  and 8.9 km (were 15.0, 7.9, 12.5, 5.2 and 8.6 km). The fields of the
+  earlier stages and the sea level are unchanged, and so is every world
+  with 0 erosion steps.
 - M3-05: `kuniumi generate` erodes `surface_height` (the default 10 Myr of
   erosion under 1 m/yr of rain) and adds `drainage_area`, `discharge` and
   `depression_depth`, so every world's `surface_height`, its map,

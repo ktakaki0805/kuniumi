@@ -159,8 +159,8 @@ impl ErosionSettings {
     /// `K = K_A / Pᵐ`, has `K_A` = 1.0 × 10⁻⁵ m^0.1 yr⁻¹. Calibration
     /// against the metrics of the design is left to milestone 7 (tickets
     /// M7-03 and M7-05): at 650,000 cells the highest peaks of the Earth
-    /// worlds of seeds 1–5 reach 5.2 to 15.0 km after the default run
-    /// (ticket M3-05), against Earth's 8.8 km.
+    /// worlds of seeds 1–5 reach 5.6 to 14.1 km after the default run
+    /// (tickets M3-05 and M3-06), against Earth's 8.8 km.
     pub const DEFAULT_ERODIBILITY: f64 = 7.5e-10;
 
     /// The default discharge exponent: 0.45, in the 0.4–0.5 of the design

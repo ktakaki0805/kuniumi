@@ -23,14 +23,19 @@
 //! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere.
 //!
 //! The stage ([`run`], ticket M3-05) runs [`erode`] on the world's
-//! `surface_height` with its `uplift_rate` and its erosion settings,
+//! `surface_height`, its land first roughened by up to 1 m ([`roughen`],
+//! ticket M3-06: on land that is exactly level, the routing would
+//! otherwise draw straight parallel rivers), with its `uplift_rate` and
+//! its erosion settings,
 //! `Settings::erosion` (ticket M3-07), after the Crust stage (the runner
 //! skips the Climate stage until it exists), and adds the rivers of the
 //! final surface ([`Rivers`]): [`DRAINAGE_AREA`] (m²), [`DISCHARGE`] (m³/s)
 //! and [`DEPRESSION_DEPTH`] (m). With the default settings, 1,000 steps of
 //! 10⁴ yr, the continental interiors, which have no uplift, are planed down
-//! to the sea level and the highest peaks depend on the resolution (5.2 to
-//! 15.0 km at 650,000 cells, seeds 1–5); calibrating them waits for
+//! to the sea level and the highest peaks depend on the resolution (5.6 to
+//! 14.1 km at 650,000 cells, seeds 1–5, ticket M3-06); the river networks
+//! of the interiors are dendritic, with Hack exponents of 0.58 to 0.61
+//! (Earth's about 0.6). Calibrating the peaks waits for
 //! isostatic rebound and the calibration of milestone 7 (tickets M7-03 and
 //! M7-05).
 //!
@@ -38,14 +43,16 @@
 //! bookkeeping, IEEE `+ − × ÷`, `sqrt`, comparisons, [`det::pow`] and exact
 //! operations on bit patterns, in the fixed order of the drainage stack and
 //! of the cells (docs/conventions.md, "Determinism", rule 2), so it gives
-//! the same result on every platform; it draws no random numbers.
+//! the same result on every platform. The only random numbers are those of
+//! the initial roughness, which [`run`] draws from the stream
+//! [`ROUGHNESS_STREAM`] of the world's seed; [`erode`] draws none.
 //!
 //! The implicit solves are sequential, along the drainage stack and over
 //! the cells; the future GPU path will need different algorithms and is
 //! only statistically equivalent.
 
-use kuniumi_math::det;
 use kuniumi_math::units::SECONDS_PER_YEAR;
+use kuniumi_math::{Rng, det};
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{ErosionSettings, FieldError, World};
 
@@ -177,8 +184,11 @@ fn inflow_m3_s(inputs: &ErosionInputs<'_>) -> Vec<f64> {
 }
 
 /// Runs the Erosion stage on `world` (a
-/// [`StageFn`](crate::pipeline::StageFn); module documentation): erodes
-/// the field [`SURFACE_HEIGHT`] of the Crust stage by [`erode`], with the
+/// [`StageFn`](crate::pipeline::StageFn); module documentation): roughens
+/// the land of the field [`SURFACE_HEIGHT`] of the Crust stage by
+/// [`roughen`], with the amplitude [`INITIAL_ROUGHNESS_M`] and the stream
+/// [`ROUGHNESS_STREAM`] of the world's seed, unless there are no steps;
+/// erodes it by [`erode`], with the
 /// field [`UPLIFT_RATE`] of the Tectonics stage, the settings
 /// `world.settings.erosion`, the planet's radius, the world's sea level and
 /// the placeholder precipitation [`PLACEHOLDER_PRECIPITATION_M_S`] on every
@@ -187,7 +197,7 @@ fn inflow_m3_s(inputs: &ErosionInputs<'_>) -> Vec<f64> {
 /// [`DRAINAGE_AREA`] (`m^2`), [`DISCHARGE`] (`m^3/s`) and
 /// [`DEPRESSION_DEPTH`] (`m`), in that order. The progress of [`erode`],
 /// `(k + 1) / steps` after step `k`, is passed on. The sea level and the
-/// other fields are not changed.
+/// other fields are not changed; with 0 steps neither are the heights.
 ///
 /// One step costs about 0.1 s at 650,000 cells, so the default 1,000 steps
 /// take about two minutes there (107 s of the 112 s that `kuniumi
@@ -201,8 +211,10 @@ fn inflow_m3_s(inputs: &ErosionInputs<'_>) -> Vec<f64> {
 /// # Panics
 ///
 /// If the world lacks [`SURFACE_HEIGHT`] or [`UPLIFT_RATE`], which the
-/// runner's earlier stages always add; as [`erode`] for settings, heights
-/// or uplift that are not valid (the runner checks the settings first).
+/// runner's earlier stages always add; as [`roughen`] for heights or a sea
+/// level that are not finite, when there are steps; as [`erode`] for
+/// settings, heights or uplift that are not valid (the runner checks the
+/// settings first).
 pub fn run(world: &mut World, progress: &mut dyn FnMut(f64)) -> Result<(), SimError> {
     for name in [DRAINAGE_AREA, DISCHARGE, DEPRESSION_DEPTH] {
         if world.field(name).is_some() {
@@ -219,6 +231,15 @@ pub fn run(world: &mut World, progress: &mut dyn FnMut(f64)) -> Result<(), SimEr
             precipitation_m_s: &precipitation_m_s,
         };
         let mut height_m = input(world, SURFACE_HEIGHT, "Crust").to_vec();
+        if world.settings.erosion.steps > 0 {
+            let mut rng = Rng::for_stream(world.seed, ROUGHNESS_STREAM);
+            roughen(
+                &mut height_m,
+                world.sea_level_m,
+                INITIAL_ROUGHNESS_M,
+                &mut rng,
+            );
+        }
         erode(&inputs, &world.settings.erosion, &mut height_m, progress);
         let rivers = Rivers::new(&inputs, &height_m);
         (height_m, rivers)
@@ -242,6 +263,87 @@ fn input<'a>(world: &'a World, name: &str, stage: &str) -> &'a [f64] {
     match world.field(name) {
         Some(field) => &field.values,
         None => panic!("the Erosion stage needs the field `{name}` of the {stage} stage"),
+    }
+}
+
+/// The random stream of the initial roughness that [`run`] draws from
+/// ([`roughen`]): a sub-stream of the Erosion stage (docs/conventions.md,
+/// "Determinism", rule 7). Renaming it changes every eroded world.
+pub const ROUGHNESS_STREAM: &str = "erosion/roughness";
+
+/// The amplitude of the initial roughness (m) that [`run`] gives the land
+/// before the first step ([`roughen`]): 1 m.
+///
+/// It only has to break the symmetry of land that is exactly level, which
+/// no real surface is: a cell of the default grid, 28 km across, averages
+/// real relief of tens to hundreds of metres, and 1 m is far below that and
+/// far above the rounding of the heights. On the Earth world of seed 1 at
+/// 650,000 cells, amplitudes of 1 cm, 1 m and 10 m give Hack exponents of
+/// 0.603, 0.611 and 0.607 after the default 1,000 steps (ticket M3-06,
+/// Implementation notes).
+pub const INITIAL_ROUGHNESS_M: f64 = 1.0;
+
+/// Roughens the land of `height_m` (m, on the datum of `sea_level_m`, in
+/// place): draws `u_i = rng.next_f64()`, uniform in [0, 1), for every cell
+/// in index order, land or ocean, so that the perturbation of a cell does
+/// not depend on which other cells are land, and raises every land cell
+/// (`h_i > sea_level_m`) to `h_i + amplitude_m · u_i`.
+///
+/// Ocean cells keep their heights bit for bit, land stays land, and a
+/// land cell rises by less than `amplitude_m` but for the rounding of the
+/// sum; where `amplitude_m · u_i` is 0 the height keeps its bits, sign of
+/// zero included (so amplitude 0 changes nothing).
+///
+/// Why: on land that is exactly level, the routing across the filled
+/// surface follows the ε gradient of [`fill_depressions`], the gradient
+/// towards lower terrain of Barnes, Lehman & Mulla (2014b, "An efficient
+/// assignment of drainage direction over flat surfaces in raster digital
+/// elevation models", *Computers & Geosciences* 62, 128–135, §2.1), which
+/// draws straight parallel lines to the nearest outlet; the first steps of
+/// erosion cut these lines into valleys, and the planed interiors keep
+/// them as parallel rivers and pinnate tributaries (Hack exponents
+/// 0.51–0.52 at 650,000 cells, seeds 1–5). Their combination with the
+/// gradient away from higher terrain leaves the flow parallel on flats
+/// hundreds of cells wide. A slightly perturbed initial surface gives
+/// dendritic networks instead (Hack exponents 0.58–0.61, Earth's about
+/// 0.6); Cordonnier, Bovy & Braun (2019, "A versatile, linear complexity
+/// algorithm for flow routing in topographies with depressions", *Earth
+/// Surface Dynamics* 7, 549–562, Fig. 1 and §3.3) likewise start their runs
+/// of the FastScape model (Braun & Willett 2013) from "a flat surface with
+/// small random perturbations". Measurements in ticket M3-06.
+///
+/// The arithmetic is one IEEE multiplication and addition per land cell,
+/// in index order, and the draws of [`Rng`], so the result is the same on
+/// every platform.
+///
+/// # Panics
+///
+/// If `amplitude_m` is negative or not finite, if the sea level or a height
+/// is not finite, or if a raised height would not be finite.
+pub fn roughen(height_m: &mut [f64], sea_level_m: f64, amplitude_m: f64, rng: &mut Rng) {
+    // Written so that NaN fails; −0 is a valid amplitude of 0.
+    assert!(
+        amplitude_m >= 0.0 && amplitude_m.is_finite(),
+        "roughen needs a finite, non-negative amplitude, got {amplitude_m}"
+    );
+    assert!(
+        sea_level_m.is_finite(),
+        "roughen needs a finite sea level, got {sea_level_m}"
+    );
+    if let Some(i) = height_m.iter().position(|h| !h.is_finite()) {
+        panic!("roughen needs finite heights: cell {i} has {}", height_m[i]);
+    }
+    for (i, h) in height_m.iter_mut().enumerate() {
+        let rise_m = amplitude_m * rng.next_f64();
+        if *h > sea_level_m && rise_m > 0.0 {
+            let raised_m = *h + rise_m;
+            assert!(
+                raised_m.is_finite(),
+                "roughen cannot raise cell {i} above {:e} m: the height would not be finite",
+                *h
+            );
+            *h = raised_m;
+        }
     }
 }
 
@@ -771,3 +873,6 @@ mod diffusion_tests;
 
 #[cfg(test)]
 mod stage_tests;
+
+#[cfg(test)]
+mod roughness_tests;

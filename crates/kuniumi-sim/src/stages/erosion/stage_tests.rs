@@ -1,13 +1,16 @@
 //! Tests of the Erosion stage in the pipeline (ticket M3-05):
 //!
 //! - `the_stage_erodes_and_routes_the_final_surface`: [`run`] equals
-//!   [`erode`] of the Crust stage's surface, followed by the routing of the
-//!   final surface composed by hand from the drainage primitives;
+//!   [`erode`] of the Crust stage's surface roughened by [`roughen`] with
+//!   the stream `erosion/roughness` of the world's seed and an amplitude of
+//!   1 m (ticket M3-06), followed by the routing of the final surface
+//!   composed by hand from the drainage primitives;
 //! - `the_rivers_conserve_area_and_water`: drainage area and discharge of
 //!   the base levels against the planet's area and rain, discharge against
 //!   the rate times the area, depression depths;
 //! - `the_stage_uses_every_erosion_setting` (review round 1, R1-1);
-//! - `zero_steps_keep_the_surface_of_the_crust_stage`;
+//! - `zero_steps_keep_the_surface_of_the_crust_stage` (without steps, no
+//!   roughness either);
 //! - `existing_outputs_leave_the_world_unchanged` and the panics, of the
 //!   stage and of [`Rivers::new`];
 //! - `golden_fingerprints_of_the_erosion_stage`.
@@ -15,6 +18,7 @@
 
 use core::f64::consts::PI;
 
+use kuniumi_math::Rng;
 use kuniumi_math::rng::fnv1a64;
 use kuniumi_math::units::SECONDS_PER_YEAR;
 use kuniumi_world::{ErosionSettings, FieldError, FieldKind, World};
@@ -57,9 +61,11 @@ fn run_stage(world: &mut World) -> Vec<f64> {
 }
 
 /// What the stage should produce from the world `before` of the Crust
-/// stage, composed by hand from the primitives: the eroded heights, the
-/// graph of the final surface routed across its depressions, the filled
-/// surface, and the three outputs.
+/// stage, composed by hand from the primitives: the eroded heights (of the
+/// surface roughened by 1 m from the stream `erosion/roughness` of the
+/// world's seed, when there are steps), the graph of the final surface
+/// routed across its depressions, the filled surface, and the three
+/// outputs.
 struct Expected {
     height_m: Vec<f64>,
     drainage: Drainage,
@@ -81,6 +87,10 @@ fn expected(before: &World, settings: &ErosionSettings) -> Expected {
         precipitation_m_s: &rain,
     };
     let mut height_m = values(before, SURFACE_HEIGHT).to_vec();
+    if settings.steps > 0 {
+        let mut rng = Rng::for_stream(before.seed, "erosion/roughness");
+        roughen(&mut height_m, z, 1.0, &mut rng);
+    }
     erode(&inputs, settings, &mut height_m, &mut |_| {});
     let filled_m = fill_depressions(grid, &height_m, z);
     let drainage = Drainage::build(grid, &filled_m, z, r);
@@ -147,6 +157,22 @@ fn the_stage_erodes_and_routes_the_final_surface() {
         // The heights were eroded: the stage did something.
         assert!(
             bits(values(&world, SURFACE_HEIGHT)) != bits(values(before, SURFACE_HEIGHT)),
+            "seed {}",
+            world.seed
+        );
+        // And roughened first: not the erosion of the bare surface.
+        let mut bare = values(before, SURFACE_HEIGHT).to_vec();
+        let rain = vec![PLACEHOLDER_PRECIPITATION_M_S; bare.len()];
+        let inputs = ErosionInputs {
+            grid: &before.grid,
+            radius_m: before.params.radius_m,
+            sea_level_m: before.sea_level_m,
+            uplift_rate_m_s: values(before, UPLIFT_RATE),
+            precipitation_m_s: &rain,
+        };
+        erode(&inputs, &world.settings.erosion, &mut bare, &mut |_| {});
+        assert!(
+            bits(values(&world, SURFACE_HEIGHT)) != bits(&bare),
             "seed {}",
             world.seed
         );
@@ -390,8 +416,11 @@ fn golden_fingerprints_of_the_erosion_stage() {
     // bits of each field's values (f64, little-endian). A change means that
     // the same world erodes or drains differently. Recorded after the other
     // tests passed and the maps of out/M3-05 were viewed (ticket M3-05,
-    // Result); `kuniumi generate` writes the same values (the CLI's golden
-    // test, through `.kfield` fingerprints).
+    // Result), and again by ticket M3-06 (the land roughened by up to 1 m
+    // before the first step, world-breaking) after the tests of
+    // `roughness_tests.rs` and of this file passed and the maps of
+    // out/M3-06 were viewed; `kuniumi generate` writes the same values (the
+    // CLI's golden test, through `.kfield` fingerprints).
     let mut world = with_steps(&worlds()[0], 10);
     run_stage(&mut world);
     let fingerprints: Vec<(&str, u64)> = GOLDEN_FINGERPRINTS
@@ -410,14 +439,15 @@ fn golden_fingerprints_of_the_erosion_stage() {
     assert_eq!(fingerprints, GOLDEN_FINGERPRINTS);
 }
 
-/// The fingerprints of `golden_fingerprints_of_the_erosion_stage`. The
-/// heights' equals that of
+/// The fingerprints of `golden_fingerprints_of_the_erosion_stage`. Until
+/// ticket M3-06 the heights' equalled that of
 /// `diffusion_tests::golden_fingerprint_of_an_eroded_and_diffused_earth_world`
 /// (ticket M3-04), which runs `erode` on the same world with the same
-/// settings outside the pipeline.
+/// settings outside the pipeline; the stage now erodes the roughened
+/// surface instead.
 const GOLDEN_FINGERPRINTS: [(&str, u64); 4] = [
-    (SURFACE_HEIGHT, 0xB715_B888_F60A_A864),
-    (DRAINAGE_AREA, 0xB9C8_68AF_21CA_DD7E),
-    (DISCHARGE, 0xC007_E763_6E04_DC4B),
-    (DEPRESSION_DEPTH, 0x9B85_A68C_7829_4D25),
+    (SURFACE_HEIGHT, 0xFDE1_B5E3_689C_E2AE),
+    (DRAINAGE_AREA, 0x381B_B3AE_6288_1477),
+    (DISCHARGE, 0x423E_19A2_C079_1331),
+    (DEPRESSION_DEPTH, 0xBF73_131B_22D5_2440),
 ];

@@ -119,7 +119,7 @@ parallel with later milestones.
 | [M3-07](M3-07-erosion-settings.md) | Erosion settings in `Settings`, `world.json` and settings files | M3-03, M3-04 |
 | [M3-05](M3-05-erosion-stage.md) | Erosion stage and river maps | M3-04, M3-07, M2-06 |
 | [M3-08](M3-08-drainage-metrics.md) | Drainage metrics: Hack's law and area exceedance | M3-05 |
-| [M3-06](M3-06-convergent-flats.md) | Convergent flow across flats | M3-05 |
+| [M3-06](M3-06-convergent-flats.md) | Convergent flow across flats | M3-05, M3-08 |
 
 ### M4 — Climate
 

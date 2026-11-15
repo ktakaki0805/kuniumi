@@ -492,7 +492,10 @@ fn generate_writes_a_world_that_reads_back() {
 /// erodes it: the surface height after 10 steps of the Erosion stage and
 /// its three rivers were recorded by ticket M3-05 after the tests of
 /// `stages::erosion` (`stage_tests.rs`) passed and the maps of `out/M3-05`
-/// were looked at (world-breaking).
+/// were looked at (world-breaking), and again by ticket M3-06 (the land
+/// roughened by up to 1 m before the first erosion step, world-breaking)
+/// after the tests of `stages::erosion` (`roughness_tests.rs`,
+/// `stage_tests.rs`) passed and the maps of `out/M3-06` were looked at.
 const GOLDEN_FIELDS: [(&str, u64); 16] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
@@ -506,10 +509,10 @@ const GOLDEN_FIELDS: [(&str, u64); 16] = [
     ("crust_age", 0x8B16_21E7_DFBF_D241),
     ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
-    ("surface_height", 0x4319_DD31_578B_0CBA),
-    ("drainage_area", 0x80FC_D935_B5B2_9C63),
-    ("discharge", 0xCFD7_1C8C_363C_7B90),
-    ("depression_depth", 0xEF23_61A8_67CD_35FA),
+    ("surface_height", 0xDB1E_0D68_718E_F38C),
+    ("drainage_area", 0x74B7_97DE_863F_9C2A),
+    ("discharge", 0x714B_06C0_204A_48F6),
+    ("depression_depth", 0x2128_8731_7CB9_00EB),
 ];
 
 /// The fingerprint of `surface_height` of the same world without erosion

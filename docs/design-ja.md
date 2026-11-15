@@ -232,8 +232,10 @@ ExoPlaSim（系外惑星向けの大気大循環モデル）は比較の基準�
 
 ### 1ステップの処理
 
+侵食は、地殻段階の面の陸セルに最大 1 m の一様乱数（ワールドのシードから導く乱数ストリーム `erosion/roughness`）を加えた面から始めます。完全に水平な陸では、窪地処理の ε 勾配が最寄りの出口へ向かう平行な直線の流路を引き、最初の数ステップの侵食がそれを谷に刻んで、平行な川と羽状の支流が残ります。Barnes ほか（2014b）の平坦地処理（高い側から離れる勾配の重ね合わせ）も、数百セルに及ぶ平坦地では流れを平行のままにします。わずかに乱した初期面から始めると樹枝状の水系になります。Cordonnier・Bovy・Braun（2019）も FastScape の計算を「小さな乱れを加えた平坦面」から始めています。侵食のステップ数が 0 のときは加えません（チケット M3-06）。
+
 1. **流向。** 各セルから最急降下方向の隣接セルを受け手にします。
-2. **窪地の処理。** 流れが閉じた窪地に溜まらないよう、Priority-Flood（Barnes ほか 2014）で窪地を埋めた面の上で流路を決めます。侵食は元の面に対して行います。より効率的な Cordonnier・Bovy・Braun（2019）の流域グラフ法は、必要になったら導入します。
+2. **窪地の処理。** 流れが閉じた窪地に溜まらないよう、Priority-Flood（Barnes ほか 2014a）で窪地を埋めた面の上で流路を決めます。侵食は元の面に対して行います。より効率的な Cordonnier・Bovy・Braun（2019）の流域グラフ法は、必要になったら導入します。
 3. **並び順と流量。** 河口から上流へ向かう並び順（スタック）を作り、逆順に降水×面積を足し合わせて Q を求めます。
 4. **河川侵食。** スタック順に陰解法で標高を更新します。
 5. **斜面拡散。** 拡散項を陰的に解きます。
@@ -381,7 +383,8 @@ NPP = \min\!\left( \frac{3000}{1 + e^{\,1.315 - 0.119\,T}},\; 3000\,(1 - e^{-0.0
 - Cordonnier, Bovy, Braun (2019). [A versatile, linear complexity algorithm for flow routing in topographies with depressions](https://esurf.copernicus.org/articles/7/549/2019/). Earth Surface Dynamics 7.
 - Yuan ほか (2019). A new efficient method to solve the stream power law model taking into account sediment deposition. JGR Earth Surface 124(6).
 - Deal & Prasicek (2021). Modeling glacial and fluvial landform evolution at large scales using a stream-power approach. Earth Surface Dynamics 9.
-- Barnes, Lehman, Mulla (2014). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm. Computers & Geosciences 62.
+- Barnes, Lehman, Mulla (2014a). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm. Computers & Geosciences 62.
+- Barnes, Lehman, Mulla (2014b). [An efficient assignment of drainage direction over flat surfaces in raster digital elevation models](https://arxiv.org/abs/1511.04433). Computers & Geosciences 62, 128–135.
 - Barnes ほか (2021). Computing water flow through complex landscapes, Part 3: Fill–Spill–Merge. Earth Surface Dynamics 9.
 - Hack (1957). Studies of longitudinal stream profiles in Virginia and Maryland. USGS Professional Paper 294-B.
 
