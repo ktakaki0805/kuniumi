@@ -29,6 +29,18 @@ To be refined: rebound on oceanic cells (sediment loading of the ocean floor),
 whether rebound is applied every step or every few steps, interaction with the
 sea-level recomputation between rounds.
 
+From M3-05 (the owner kept the default erosion settings, 1,000 steps of
+10⁴ yr, and asked that the issue be recorded here): without rebound the
+continental interiors, which have no uplift, are planed to the sea level
+within the default 10 Myr. On the Earth worlds of seeds 1–5 at 650,000
+cells, 92–96 % of the land ends within 1 m of the sea level (median land
+elevation 0 m, against 309–391 m after 1 Myr), and the river networks on
+these plains are held only by height differences near the rounding of
+the heights (about 1e-13 m). Rebound (with deposition, M7-02, and harder
+old crust, M7-04) should keep the interiors above the sea level; check the
+median land elevation and the share of land within 1 m of the sea level
+before and after.
+
 ## Acceptance criteria
 
 - [ ] Uniform erosion of Δ lowers the surface by 0.152 Δ (1e-12 relative) with

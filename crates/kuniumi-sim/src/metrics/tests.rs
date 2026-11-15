@@ -26,7 +26,6 @@ use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{PlanetParams, Settings, World};
 
 use super::*;
-use crate::generate;
 
 /// The areas of the cells of `grid` (sr), in cell order.
 fn areas_sr(grid: &SphereGrid) -> Vec<f64> {
@@ -57,7 +56,7 @@ fn earth_like(cells: u32, seed: u64) -> World {
         allow_partial: true,
         ..Settings::default()
     };
-    generate(&PlanetParams::earth(), &settings, seed, &mut |_| {}).expect("a partial world")
+    crate::generate_through_crust(&PlanetParams::earth(), &settings, seed).expect("a partial world")
 }
 
 #[test]

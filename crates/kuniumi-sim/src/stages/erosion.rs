@@ -20,9 +20,19 @@
 //! precipitation down that graph ([`Drainage::accumulate`]), erodes the
 //! original surface along it ([`incise`]), and diffuses the land
 //! ([`diffuse`]). Until the Climate stage exists the
-//! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere. Ticket
-//! M3-05 wires the stage into the pipeline, with the world's erosion
-//! settings, `Settings::erosion` (ticket M3-07).
+//! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere.
+//!
+//! The stage ([`run`], ticket M3-05) runs [`erode`] on the world's
+//! `surface_height` with its `uplift_rate` and its erosion settings,
+//! `Settings::erosion` (ticket M3-07), after the Crust stage (the runner
+//! skips the Climate stage until it exists), and adds the rivers of the
+//! final surface ([`Rivers`]): [`DRAINAGE_AREA`] (m²), [`DISCHARGE`] (m³/s)
+//! and [`DEPRESSION_DEPTH`] (m). With the default settings, 1,000 steps of
+//! 10⁴ yr, the continental interiors, which have no uplift, are planed down
+//! to the sea level and the highest peaks depend on the resolution (5.2 to
+//! 15.0 km at 650,000 cells, seeds 1–5); calibrating them waits for
+//! isostatic rebound and the calibration of milestone 7 (tickets M7-03 and
+//! M7-05).
 //!
 //! Everything here depends only on its inputs, through integer
 //! bookkeeping, IEEE `+ − × ÷`, `sqrt`, comparisons, [`det::pow`] and exact
@@ -37,10 +47,203 @@
 use kuniumi_math::det;
 use kuniumi_math::units::SECONDS_PER_YEAR;
 use kuniumi_sphere::SphereGrid;
-use kuniumi_world::ErosionSettings;
+use kuniumi_world::{ErosionSettings, FieldError, World};
 
-use crate::drainage::{Drainage, fill_depressions, next_up};
+use crate::SimError;
+use crate::drainage::{Drainage, depression_depth_m, fill_depressions, next_up};
 use crate::operators::{Laplacian, Solve};
+use crate::stages::crust::SURFACE_HEIGHT;
+use crate::stages::tectonics::UPLIFT_RATE;
+
+/// The field of the drainage area (m²): the area of the cell and of every
+/// cell upstream of it on the final surface ([`Rivers::drainage_area_m2`]).
+pub const DRAINAGE_AREA: &str = "drainage_area";
+
+/// The field of the discharge (m³/s): the precipitation on the cell and on
+/// every cell upstream of it ([`Rivers::discharge_m3_s`]).
+pub const DISCHARGE: &str = "discharge";
+
+/// The field of the depression depth (m): how deep the water of a closed
+/// depression, filled to its spill level, stands on the cell, and a few
+/// ULPs on drained flats ([`Rivers::depression_depth_m`]).
+pub const DEPRESSION_DEPTH: &str = "depression_depth";
+
+/// The rivers of a surface: what the Erosion stage adds besides the eroded
+/// heights, on the drainage graph of the surface routed across its closed
+/// depressions ([`routed_drainage`]), one value per cell.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Rivers {
+    /// The drainage area (m²): `a_i R²` summed over the cell and every cell
+    /// upstream of it ([`Drainage::accumulate`]). An ocean cell counts the
+    /// rivers that enter it; the base levels sum to `4πR²` within rounding.
+    pub drainage_area_m2: Vec<f64>,
+    /// The discharge (m³/s): `P_i a_i R²` summed likewise, `P_i` the
+    /// precipitation (m/s); with the uniform placeholder `P` it is `P`
+    /// times the drainage area, within rounding.
+    pub discharge_m3_s: Vec<f64>,
+    /// The depression depth (m): the filled surface minus the surface
+    /// ([`depression_depth_m`]), positive where a closed depression would
+    /// hold water, the ε gradient of the fill alone (at most `2n` ULPs of
+    /// the largest height) on drained flats, and +0 elsewhere and on the
+    /// ocean. The lakes of the Hydrology stage start from it (ticket M5-02).
+    pub depression_depth_m: Vec<f64>,
+}
+
+impl Rivers {
+    /// The rivers of the surface `height_m` (m, one height per cell of
+    /// `inputs.grid`) under `inputs.precipitation_m_s`, on the planet and
+    /// sea level of `inputs` (the uplift is not used).
+    ///
+    /// # Panics
+    ///
+    /// As [`routed_drainage`], and if the precipitation does not hold one
+    /// value per cell or a rate is negative or not finite.
+    pub fn new(inputs: &ErosionInputs<'_>, height_m: &[f64]) -> Self {
+        let ErosionInputs {
+            grid,
+            radius_m,
+            sea_level_m,
+            ..
+        } = *inputs;
+        let (drainage, filled_m) = routed_drainage(grid, height_m, sea_level_m, radius_m);
+        let area_m2: Vec<f64> = (0..grid.len() as u32)
+            .map(|i| grid.area_sr(i) * radius_m * radius_m)
+            .collect();
+        Self {
+            drainage_area_m2: drainage.accumulate(&area_m2),
+            discharge_m3_s: drainage.accumulate(&inflow_m3_s(inputs)),
+            depression_depth_m: depression_depth_m(height_m, &filled_m),
+        }
+    }
+}
+
+/// The drainage graph of the surface `height_m` (m, one height per cell of
+/// `grid`, on the datum of `sea_level_m`) routed across its closed
+/// depressions, on a planet of radius `radius_m` (m): the graph that
+/// [`Drainage::build`] builds on the surface filled by [`fill_depressions`],
+/// and that filled surface. Each step of [`erode`] follows it, and
+/// [`Rivers`] accumulates along it.
+///
+/// # Panics
+///
+/// As [`fill_depressions`] and [`Drainage::build`]: if `height_m` does not
+/// hold one height per cell, a height or the sea level is not finite, or
+/// the radius is not finite and positive.
+pub fn routed_drainage(
+    grid: &SphereGrid,
+    height_m: &[f64],
+    sea_level_m: f64,
+    radius_m: f64,
+) -> (Drainage, Vec<f64>) {
+    let filled_m = fill_depressions(grid, height_m, sea_level_m);
+    let drainage = Drainage::build(grid, &filled_m, sea_level_m, radius_m);
+    (drainage, filled_m)
+}
+
+/// `P_i a_i R²` (m³/s) for every cell of `inputs.grid`: the water that
+/// falls on it.
+///
+/// # Panics
+///
+/// If the precipitation does not hold one value per cell, or a rate is
+/// negative or not finite.
+fn inflow_m3_s(inputs: &ErosionInputs<'_>) -> Vec<f64> {
+    let ErosionInputs {
+        grid,
+        radius_m,
+        precipitation_m_s,
+        ..
+    } = *inputs;
+    assert_eq!(
+        precipitation_m_s.len(),
+        grid.len(),
+        "the rivers need one precipitation rate per cell: {} values for {} cells",
+        precipitation_m_s.len(),
+        grid.len()
+    );
+    // Written so that NaN fails.
+    if let Some(i) = precipitation_m_s
+        .iter()
+        .position(|&p| !(p >= 0.0 && p.is_finite()))
+    {
+        panic!(
+            "the rivers need finite, non-negative precipitation: cell {i} has {}",
+            precipitation_m_s[i]
+        );
+    }
+    (0..grid.len() as u32)
+        .map(|i| precipitation_m_s[i as usize] * grid.area_sr(i) * radius_m * radius_m)
+        .collect()
+}
+
+/// Runs the Erosion stage on `world` (a
+/// [`StageFn`](crate::pipeline::StageFn); module documentation): erodes
+/// the field [`SURFACE_HEIGHT`] of the Crust stage by [`erode`], with the
+/// field [`UPLIFT_RATE`] of the Tectonics stage, the settings
+/// `world.settings.erosion`, the planet's radius, the world's sea level and
+/// the placeholder precipitation [`PLACEHOLDER_PRECIPITATION_M_S`] on every
+/// cell (until the Climate stage exists), replacing the heights in place;
+/// then adds the [`Rivers`] of the final surface as the fields
+/// [`DRAINAGE_AREA`] (`m^2`), [`DISCHARGE`] (`m^3/s`) and
+/// [`DEPRESSION_DEPTH`] (`m`), in that order. The progress of [`erode`],
+/// `(k + 1) / steps` after step `k`, is passed on. The sea level and the
+/// other fields are not changed.
+///
+/// One step costs about 0.1 s at 650,000 cells, so the default 1,000 steps
+/// take about two minutes there (107 s of the 112 s that `kuniumi
+/// generate` takes for seed 1, ticket M3-05).
+///
+/// # Errors
+///
+/// [`SimError::Field`] if the world already has one of the three fields;
+/// the world is then unchanged and no progress is reported.
+///
+/// # Panics
+///
+/// If the world lacks [`SURFACE_HEIGHT`] or [`UPLIFT_RATE`], which the
+/// runner's earlier stages always add; as [`erode`] for settings, heights
+/// or uplift that are not valid (the runner checks the settings first).
+pub fn run(world: &mut World, progress: &mut dyn FnMut(f64)) -> Result<(), SimError> {
+    for name in [DRAINAGE_AREA, DISCHARGE, DEPRESSION_DEPTH] {
+        if world.field(name).is_some() {
+            return Err(FieldError::Duplicate { name: name.into() }.into());
+        }
+    }
+    let precipitation_m_s = vec![PLACEHOLDER_PRECIPITATION_M_S; world.grid.len()];
+    let (height_m, rivers) = {
+        let inputs = ErosionInputs {
+            grid: &world.grid,
+            radius_m: world.params.radius_m,
+            sea_level_m: world.sea_level_m,
+            uplift_rate_m_s: input(world, UPLIFT_RATE, "Tectonics"),
+            precipitation_m_s: &precipitation_m_s,
+        };
+        let mut height_m = input(world, SURFACE_HEIGHT, "Crust").to_vec();
+        erode(&inputs, &world.settings.erosion, &mut height_m, progress);
+        let rivers = Rivers::new(&inputs, &height_m);
+        (height_m, rivers)
+    };
+    if let Some(field) = world.field_mut(SURFACE_HEIGHT) {
+        field.values = height_m;
+    }
+    world.add_field(DRAINAGE_AREA, "m^2", rivers.drainage_area_m2)?;
+    world.add_field(DISCHARGE, "m^3/s", rivers.discharge_m3_s)?;
+    world.add_field(DEPRESSION_DEPTH, "m", rivers.depression_depth_m)?;
+    Ok(())
+}
+
+/// The values of the field `name` of `world`, an output of the `stage`
+/// stage.
+///
+/// # Panics
+///
+/// If the world has no such field.
+fn input<'a>(world: &'a World, name: &str, stage: &str) -> &'a [f64] {
+    match world.field(name) {
+        Some(field) => &field.values,
+        None => panic!("the Erosion stage needs the field `{name}` of the {stage} stage"),
+    }
+}
 
 /// The precipitation (m/s) that drives erosion until the Climate stage
 /// exists: 1 m/yr everywhere (3.17 × 10⁻⁸ m/s), about Earth's global mean
@@ -435,12 +638,9 @@ pub fn erode(
     // Without diffusivity `diffuse` changes nothing: skip it, and the
     // Laplacian (about 30 ms at 650,000 cells).
     let laplacian = (settings.diffusivity_m2_s > 0.0).then(|| Laplacian::new(grid));
-    let inflow_m3_s: Vec<f64> = (0..n as u32)
-        .map(|i| precipitation_m_s[i as usize] * grid.area_sr(i) * radius_m * radius_m)
-        .collect();
+    let inflow_m3_s = inflow_m3_s(inputs);
     for k in 0..settings.steps {
-        let filled_m = fill_depressions(grid, height_m, sea_level_m);
-        let drainage = Drainage::build(grid, &filled_m, sea_level_m, radius_m);
+        let (drainage, _) = routed_drainage(grid, height_m, sea_level_m, radius_m);
         let discharge_m3_s = drainage.accumulate(&inflow_m3_s);
         let distance_m = receiver_distances_m(grid, &drainage, radius_m);
         let network = Network {
@@ -568,3 +768,6 @@ mod tests;
 
 #[cfg(test)]
 mod diffusion_tests;
+
+#[cfg(test)]
+mod stage_tests;

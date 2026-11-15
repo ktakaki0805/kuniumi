@@ -85,9 +85,9 @@ fn grid_writes_maps_and_statistics() {
     }
 }
 
-/// The fields of a world stopped after the Crust stage, in the order
-/// `generate` writes them.
-const WORLD_FIELDS: [&str; 13] = [
+/// The fields of a world stopped after the Erosion stage (the Climate stage
+/// skipped), in the order `generate` writes them.
+const WORLD_FIELDS: [&str; 16] = [
     "cell_area",
     "neighbor_count",
     "plate_id",
@@ -101,12 +101,15 @@ const WORLD_FIELDS: [&str; 13] = [
     "uplift_rate",
     "trench",
     "surface_height",
+    "drainage_area",
+    "discharge",
+    "depression_depth",
 ];
 
-/// The files of a world stopped after the Crust stage, in the order
+/// The files of a world stopped after the Erosion stage, in the order
 /// `generate` writes them: the grid (ticket MV-01), `<name>.kfield` and
-/// `<name>.png` of each field, the metrics (ticket M2-06), then
-/// `world.json`.
+/// `<name>.png` of each field, the metrics (ticket M2-06), the river map
+/// (ticket M3-05), then `world.json`.
 fn world_files() -> Vec<String> {
     let mut files = vec!["grid.kgrid".to_owned()];
     files.extend(
@@ -114,7 +117,11 @@ fn world_files() -> Vec<String> {
             .iter()
             .flat_map(|f| [format!("{f}.kfield"), format!("{f}.png")]),
     );
-    files.extend(["metrics.txt".into(), "hypsometry.png".into()]);
+    files.extend([
+        "metrics.txt".into(),
+        "hypsometry.png".into(),
+        "rivers.png".into(),
+    ]);
     files.push("world.json".into());
     files
 }
@@ -125,12 +132,17 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     let out = dir.to_str().expect("UTF-8 path");
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "1000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
-    assert_eq!(
-        stderr(&o),
+    // Each stage's progress in whole percent, each line once: the 1,000
+    // steps of the Erosion stage give every percent from 0 to 100.
+    let mut expected = String::from(
         "[grid] 0%\n[grid] 100%\n[tectonics] 0%\n[tectonics] 100%\n\
-         [crust] 0%\n[crust] 100%\n\
-         error: stage `climate` is not implemented yet\n"
+         [crust] 0%\n[crust] 100%\n",
     );
+    for percent in 0..=100 {
+        expected.push_str(&format!("[erosion] {percent}%\n"));
+    }
+    expected.push_str("error: stage `hydrology` is not implemented yet\n");
+    assert_eq!(stderr(&o), expected);
     let expected: String = world_files()
         .iter()
         .map(|f| format!("wrote {}\n", dir.join(f).display()))
@@ -141,6 +153,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         assert_eq!(png_size(&dir.join(&map)), (2048, 1024), "{map}");
     }
     assert_eq!(png_size(&dir.join("hypsometry.png")), (1040, 540));
+    assert_eq!(png_size(&dir.join("rivers.png")), (2048, 1024));
     let metrics = std::fs::read_to_string(dir.join("metrics.txt")).expect("metrics.txt");
     for line in ["seed = 1", "cells = 1000", "bin_width_m = 100"] {
         assert!(
@@ -166,7 +179,8 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "    \"radius_m\": 6371000.0,",
         "    \"grid\",",
         "    \"tectonics\",",
-        "    \"crust\"",
+        "    \"crust\",",
+        "    \"erosion\"",
         "      \"name\": \"cell_area\",",
         "      \"unit\": \"sr\",",
         "      \"kind\": \"class\"",
@@ -183,6 +197,11 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"name\": \"uplift_rate\",",
         "      \"name\": \"trench\",",
         "      \"name\": \"surface_height\",",
+        "      \"name\": \"drainage_area\",",
+        "      \"unit\": \"m^2\",",
+        "      \"name\": \"discharge\",",
+        "      \"unit\": \"m^3/s\",",
+        "      \"name\": \"depression_depth\",",
     ] {
         assert!(json.lines().any(|l| l == line), "`{line}` missing:\n{json}");
     }
@@ -287,22 +306,45 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     // stands at −2,730 m to +5,603 m (Airy isostasy), the ocean floor at
     // 2,500 m to 6,400 m deep (Parsons & Sclater), trenches at −8 km; the sea
     // level lies between the lowest and the highest cell, with both land
-    // and sea.
+    // and sea. The Erosion stage (ticket M3-05) keeps the ocean as it is and
+    // the land above the sea level.
     let height = read_kfield(&dir.join("surface_height.kfield"));
     assert_eq!(height.unit, "m");
+    let sea_level = sea_level_m(&json);
     for i in 0..1_000 {
         let h = height.values[i];
-        if crust.values[i].to_bits() == land {
-            assert!((-2_730.31..=5_603.04).contains(&h), "cell {i}: {h}");
+        if h > sea_level {
+            assert!(crust.values[i].to_bits() == land, "cell {i}: {h}");
+        } else if crust.values[i].to_bits() == land {
+            assert!((-2_730.31..=sea_level).contains(&h), "cell {i}: {h}");
         } else if trench.values[i].to_bits() == 1.0_f64.to_bits() {
             assert_eq!(h.to_bits(), (-8_000.0_f64).to_bits(), "cell {i}");
         } else {
             assert!((-6_400.0..=-2_500.0).contains(&h), "cell {i}: {h}");
         }
     }
-    let sea_level = sea_level_m(&json);
     assert!(height.values.iter().any(|&h| h > sea_level), "{sea_level}");
     assert!(height.values.iter().any(|&h| h < sea_level), "{sea_level}");
+    // The rivers (ticket M3-05): every cell drains at least its own area,
+    // the discharge is 1 m/yr of rain on the drainage area, the depression
+    // depths are not negative.
+    let area = read_kfield(&dir.join("drainage_area.kfield"));
+    let discharge = read_kfield(&dir.join("discharge.kfield"));
+    let depth = read_kfield(&dir.join("depression_depth.kfield"));
+    assert_eq!(
+        [&area, &discharge, &depth].map(|f| f.unit.as_str()),
+        ["m^2", "m^3/s", "m"]
+    );
+    let r2 = 6_371_000.0_f64 * 6_371_000.0;
+    for i in 0..1_000 {
+        assert!(
+            area.values[i] >= areas.values[i] * r2 * (1.0 - 1e-15),
+            "cell {i}"
+        );
+        let q = area.values[i] / 31_557_600.0;
+        assert!((discharge.values[i] - q).abs() <= 1e-12 * q, "cell {i}");
+        assert!(depth.values[i] >= 0.0, "cell {i}");
+    }
     // The map of the surface height (ticket M2-14): the elevation map at
     // the sea level over the chart's x axis, −11 km to +9 km above the sea
     // level for this world, the bounds written here.
@@ -417,7 +459,8 @@ fn generate_writes_a_world_that_reads_back() {
 }
 
 /// Fingerprints of the fields for 10,000 cells, seed 1, as `kuniumi
-/// generate` writes them. The Grid stage's two were recorded by ticket M2-01
+/// generate` writes them with 10 erosion steps ([`erosion_steps_file`]).
+/// The Grid stage's two were recorded by ticket M2-01
 /// after the invariant tests passed and the maps of `out/M2-01` were looked
 /// at; both are exact copies of the grid, whose fingerprints M1-06 recorded
 /// (`stages::grid::tests::golden_fingerprints`). The Tectonics stage's first
@@ -444,8 +487,13 @@ fn generate_writes_a_world_that_reads_back() {
 /// again by ticket M2-13 (a floor of 1 cm/yr on the spreading rate of the
 /// ridges' fronts, world-breaking) after the tests of
 /// `stages::tectonics::crust` (`age_tests.rs`, `tests.rs`) passed and the
-/// maps of `out/M2-13` were looked at.
-const GOLDEN_FIELDS: [(&str, u64); 13] = [
+/// maps of `out/M2-13` were looked at. That surface height, of the Crust
+/// stage, is [`GOLDEN_CRUST_SURFACE_HEIGHT`] since ticket M3-05, which
+/// erodes it: the surface height after 10 steps of the Erosion stage and
+/// its three rivers were recorded by ticket M3-05 after the tests of
+/// `stages::erosion` (`stage_tests.rs`) passed and the maps of `out/M3-05`
+/// were looked at (world-breaking).
+const GOLDEN_FIELDS: [(&str, u64); 16] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
@@ -458,8 +506,22 @@ const GOLDEN_FIELDS: [(&str, u64); 13] = [
     ("crust_age", 0x8B16_21E7_DFBF_D241),
     ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
-    ("surface_height", 0xA90E_8D61_5D3A_E286),
+    ("surface_height", 0x4319_DD31_578B_0CBA),
+    ("drainage_area", 0x80FC_D935_B5B2_9C63),
+    ("discharge", 0xCFD7_1C8C_363C_7B90),
+    ("depression_depth", 0xEF23_61A8_67CD_35FA),
 ];
+
+/// The fingerprint of `surface_height` of the same world without erosion
+/// steps, as the Crust stage leaves it: recorded by ticket M2-05 and again by
+/// tickets M2-10, M2-12 and M2-13 (see [`GOLDEN_FIELDS`]).
+const GOLDEN_CRUST_SURFACE_HEIGHT: u64 = 0xA90E_8D61_5D3A_E286;
+
+/// A settings file of Earth and the default settings with `steps` erosion
+/// steps, in a scratch directory of its own.
+fn erosion_steps_file(name: &str, steps: u32) -> PathBuf {
+    settings_file(name, &format!("[generation.erosion]\nsteps = {steps}\n"))
+}
 
 /// The sea level (m) of the same world, as `world.json` writes it (the
 /// shortest decimal that parses back to the same bits), recorded by ticket
@@ -467,17 +529,29 @@ const GOLDEN_FIELDS: [(&str, u64); 13] = [
 /// (see [`GOLDEN_FIELDS`]).
 const GOLDEN_SEA_LEVEL_M: f64 = -747.218_732_917_737_4;
 
-#[test]
-fn generate_golden_fingerprints() {
-    let dir = scratch("generate_golden_fingerprints");
+/// Runs `kuniumi generate` for 10,000 cells, seed 1, with `steps` erosion
+/// steps, into a scratch directory named `name`, and returns the directory.
+fn golden_world(name: &str, steps: u32) -> PathBuf {
+    let planet = erosion_steps_file(&format!("{name}_settings"), steps);
+    let dir = scratch(name);
     let out = dir.to_str().expect("UTF-8 path");
-    let o = kuniumi(&["generate", "--seed", "1", "--cells", "10000", "--out", out]);
+    let planet = planet.to_str().expect("UTF-8 path");
+    let args = [
+        "generate", "--seed", "1", "--cells", "10000", "--planet", planet, "--out", out,
+    ];
+    let o = kuniumi(&args);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
-    for (name, golden) in GOLDEN_FIELDS {
-        let field = read_kfield(&dir.join(format!("{name}.kfield")));
-        let fingerprint = kuniumi_io::field_file::fingerprint(&field);
-        assert_eq!(fingerprint, golden, "{name}: {fingerprint:#018X}");
-    }
+    dir
+}
+
+/// The fingerprint of the field `name` in the world directory `dir`.
+fn fingerprint_of(dir: &Path, name: &str) -> u64 {
+    kuniumi_io::field_file::fingerprint(&read_kfield(&dir.join(format!("{name}.kfield"))))
+}
+
+/// Checks the sea level of the world directory `dir` against
+/// [`GOLDEN_SEA_LEVEL_M`].
+fn assert_golden_sea_level(dir: &Path) {
     let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
     let sea_level = sea_level_m(&json);
     assert_eq!(
@@ -485,6 +559,34 @@ fn generate_golden_fingerprints() {
         GOLDEN_SEA_LEVEL_M.to_bits(),
         "sea level {sea_level}"
     );
+}
+
+#[test]
+fn generate_golden_fingerprints() {
+    let dir = golden_world("generate_golden_fingerprints", 10);
+    let fingerprints: Vec<(&str, u64)> = GOLDEN_FIELDS
+        .iter()
+        .map(|&(name, _)| (name, fingerprint_of(&dir, name)))
+        .collect();
+    for (name, fingerprint) in &fingerprints {
+        println!("{name}: {fingerprint:#018X}");
+    }
+    assert_eq!(fingerprints, GOLDEN_FIELDS);
+    assert_golden_sea_level(&dir);
+}
+
+#[test]
+fn generate_without_erosion_steps_keeps_the_relief_of_the_crust_stage() {
+    // With 0 steps the Erosion stage leaves the surface height of the Crust
+    // stage bit for bit; the fields of the earlier stages and the sea level
+    // never depend on the erosion settings.
+    let dir = golden_world("generate_without_erosion_steps", 0);
+    for (name, golden) in &GOLDEN_FIELDS[..12] {
+        assert_eq!(fingerprint_of(&dir, name), *golden, "{name}");
+    }
+    let height = fingerprint_of(&dir, "surface_height");
+    assert_eq!(height, GOLDEN_CRUST_SURFACE_HEIGHT, "{height:#018X}");
+    assert_golden_sea_level(&dir);
 }
 
 /// The value of `key` in `metrics.txt`.
@@ -496,9 +598,11 @@ fn metric(text: &str, key: &str) -> String {
         .to_owned()
 }
 
-/// The numbers of `metrics.txt` of the golden world (10,000 cells, seed 1),
-/// from `tools/hypsometry_reference.py out/M2-13/10k` (tickets M2-06, M2-10,
-/// M2-12 and M2-13, run again on the world of the new golden values): exact
+/// The numbers of `metrics.txt` of the golden world (10,000 cells, seed 1)
+/// without erosion steps, whose surface is that of the Crust stage
+/// ([`GOLDEN_CRUST_SURFACE_HEIGHT`]), from `tools/hypsometry_reference.py
+/// out/M2-13/10k` (tickets M2-06, M2-10, M2-12 and M2-13, run again on the
+/// world of the new golden values): exact
 /// rational sums and bins over the `.kfield` files of the world, which
 /// [`GOLDEN_FIELDS`] fixes. Shares are printed with 6 decimals, metres with
 /// 1, so each agrees within half the last digit (and a rounding error).
@@ -528,10 +632,7 @@ const REFERENCE_METRICS: [(&str, f64, f64); 21] = [
 
 #[test]
 fn generate_writes_the_metrics_of_the_reference() {
-    let dir = scratch("generate_writes_the_metrics_of_the_reference");
-    let out = dir.to_str().expect("UTF-8 path");
-    let o = kuniumi(&["generate", "--seed", "1", "--cells", "10000", "--out", out]);
-    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    let dir = golden_world("generate_writes_the_metrics_of_the_reference", 0);
     let text = std::fs::read_to_string(dir.join("metrics.txt")).expect("metrics.txt");
     for (key, reference, tolerance) in REFERENCE_METRICS {
         let value: f64 = metric(&text, key).parse().expect("a number");
@@ -680,7 +781,7 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
         let o = kuniumi(&args);
         assert_eq!(o.status.code(), Some(2), "{args:?}: {o:?}");
         assert!(
-            stderr(&o).ends_with("error: stage `climate` is not implemented yet\n"),
+            stderr(&o).ends_with("error: stage `hydrology` is not implemented yet\n"),
             "{}",
             stderr(&o)
         );

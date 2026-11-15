@@ -51,6 +51,15 @@ cells 4,310 cells differ by more than 1 m from the run without it, by up to
 178.8° E), while the land statistics agree. A flat-resolution step would
 make that choice from the terrain rather than from rounding.
 
+From M3-05 (its Result, item 3): after the default 10 Myr the planed
+interiors carry dendritic networks whose trunks collect pinnate
+tributaries, many of them parallel on each side of a trunk, cut back into
+the formerly flat plateau (`out/M3-05/650k/closeups/east_rivers.png`,
+seed 1 at 650,000 cells, 4° N, 130° E; also the coastal plains of
+`out/M3-05/650k/closeups_s3/southpole_rivers.png`). Since 92–96 % of the
+land ends within 1 m of the sea level, the routing there follows height
+differences near the rounding of the heights.
+
 ## Acceptance criteria
 
 - [ ] The decision and its evidence (M3-05's maps) recorded.

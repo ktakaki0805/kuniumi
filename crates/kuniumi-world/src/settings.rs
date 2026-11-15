@@ -31,9 +31,9 @@ pub struct Settings {
     ///
     /// [`World::settings`]: crate::World::settings
     pub allow_partial: bool,
-    /// The settings of the Erosion stage (ticket M3-05 runs it), checked by
-    /// [`validate`](Self::validate) after the other fields. Default
-    /// [`ErosionSettings::default`].
+    /// The settings of the Erosion stage (run by `kuniumi_sim::generate`
+    /// since ticket M3-05), checked by [`validate`](Self::validate) after
+    /// the other fields. Default [`ErosionSettings::default`].
     pub erosion: ErosionSettings,
 }
 
@@ -157,7 +157,10 @@ impl ErosionSettings {
     /// Tectonics stage (ticket M3-03 has the numbers). The same law written
     /// for drainage area instead of discharge, `E = K_A Aᵐ S` with
     /// `K = K_A / Pᵐ`, has `K_A` = 1.0 × 10⁻⁵ m^0.1 yr⁻¹. Calibration
-    /// against the metrics of the design is left to tickets M3-05 and M7.
+    /// against the metrics of the design is left to milestone 7 (tickets
+    /// M7-03 and M7-05): at 650,000 cells the highest peaks of the Earth
+    /// worlds of seeds 1–5 reach 5.2 to 15.0 km after the default run
+    /// (ticket M3-05), against Earth's 8.8 km.
     pub const DEFAULT_ERODIBILITY: f64 = 7.5e-10;
 
     /// The default discharge exponent: 0.45, in the 0.4–0.5 of the design
@@ -182,7 +185,7 @@ impl ErosionSettings {
     /// grid scale: over the 10 Myr of the default run the diffusion length
     /// `√(K_d t)` is 220 m, so the diffusion changes the heights little
     /// (ticket M3-04). Calibration against the metrics of the design is
-    /// left to tickets M3-05 and M7.
+    /// left to milestone 7 (ticket M7-05).
     pub const DEFAULT_DIFFUSIVITY_M2_S: f64 = 5.0e-3 / SECONDS_PER_YEAR;
 
     /// The default time step: 10,000 years (3.15576 × 10¹¹ s), the lower

@@ -57,7 +57,7 @@ fn worlds() -> &'static [World] {
         };
         (1..=10)
             .map(|seed| {
-                let world = crate::generate(&PlanetParams::earth(), &settings, seed, &mut |_| {})
+                let world = crate::generate_through_crust(&PlanetParams::earth(), &settings, seed)
                     .expect("a partial world");
                 assert_eq!(world.stages, ["grid", "tectonics", "crust"], "seed {seed}");
                 world
@@ -844,7 +844,7 @@ fn deep_water_worlds_against_spherical_shells() {
             ..earth.clone()
         };
         assert_eq!(params.validate(), Ok(()), "{params:?}");
-        let world = crate::generate(&params, &settings, 3, &mut |_| {}).expect("a partial world");
+        let world = crate::generate_through_crust(&params, &settings, 3).expect("a partial world");
         let (grid, heights) = (&world.grid, values(&world, SURFACE_HEIGHT));
         let z = world.sea_level_m;
         let (lowest, highest) = extremes(heights);

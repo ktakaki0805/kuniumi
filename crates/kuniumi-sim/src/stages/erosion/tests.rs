@@ -65,7 +65,7 @@ pub(super) fn worlds() -> &'static [World] {
         };
         (1..=3)
             .map(|seed| {
-                let world = crate::generate(&PlanetParams::earth(), &settings, seed, &mut |_| {})
+                let world = crate::generate_through_crust(&PlanetParams::earth(), &settings, seed)
                     .expect("a partial world");
                 assert_eq!(world.stages, ["grid", "tectonics", "crust"], "seed {seed}");
                 world
@@ -90,7 +90,7 @@ pub(super) fn dry_world() -> &'static World {
             ocean_volume_m3: 0.0,
             ..PlanetParams::earth()
         };
-        let world = crate::generate(&params, &settings, 1, &mut |_| {}).expect("a partial world");
+        let world = crate::generate_through_crust(&params, &settings, 1).expect("a partial world");
         assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
         world
     })

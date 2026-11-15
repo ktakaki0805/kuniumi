@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use kuniumi_world::{ErosionSettings, Field, PlanetParams, Settings, World};
 
 use super::tests::{
-    HYPSOMETRY_RESERVED, awkward_world, octahedron_world, world, world_with_relief,
+    HYPSOMETRY_RESERVED, RIVERS_RESERVED, awkward_world, octahedron_world, world, world_with_relief,
 };
 use super::*;
 
@@ -127,7 +127,7 @@ fn assert_round_trip(world: &World, dir: &Path, copy: &Path) {
 #[test]
 fn reads_back_a_generated_world_bit_exactly() {
     // Erosion settings that are not the defaults, recorded with the world
-    // (no stage reads them yet).
+    // and used by its Erosion stage (7 steps).
     let settings = Settings {
         cells: 20_000,
         allow_partial: true,
@@ -143,9 +143,9 @@ fn reads_back_a_generated_world_bit_exactly() {
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 1, &mut |_| {}).unwrap();
     assert_eq!(world.settings, settings);
     // Every stage that exists so far, with its fields.
-    assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
+    assert_eq!(world.stages, ["grid", "tectonics", "crust", "erosion"]);
     assert_eq!(world.grid.len(), 20_000);
-    assert_eq!(world.fields.len(), 13);
+    assert_eq!(world.fields.len(), 16);
     assert!(world.fields.iter().any(|f| f.kind == FieldKind::Class));
     let (dir, copy) = (scratch("generated"), scratch("generated_copy"));
     assert_round_trip(&world, &dir, &copy);
@@ -588,7 +588,7 @@ fn rejects_malformed_world_json() {
     }
     // The field list: names that are not valid (and could leave the
     // directory), a reserved name (ticket M2-19), twice the same name.
-    let cases: [(&str, &str, &str); 5] = [
+    let cases: [(&str, &str, &str); 6] = [
         (
             "\"name\": \"zone\"",
             "\"name\": \"../zone\"",
@@ -608,6 +608,11 @@ fn rejects_malformed_world_json() {
             "\"name\": \"zone\"",
             "\"name\": \"hypsometry\"",
             HYPSOMETRY_RESERVED,
+        ),
+        (
+            "\"name\": \"zone\"",
+            "\"name\": \"rivers\"",
+            RIVERS_RESERVED,
         ),
         (
             "\"name\": \"zone\"",
@@ -965,12 +970,14 @@ fn reads_through_any_opener() {
         ..Settings::default()
     };
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 3, &mut |_| {}).unwrap();
-    assert_eq!(world.fields.len(), 13);
+    assert_eq!(world.fields.len(), 16);
     let disk = scratch("read_with");
     write_maps_of_width(&disk, &world, 64).unwrap();
     let files = files_of(&disk);
-    // The maps, the metrics and the chart are there but not read.
+    // The maps, the metrics, the chart and the river map are there but not
+    // read.
     assert!(files.contains_key("plate_id.png") && files.contains_key(METRICS_FILE));
+    assert!(files.contains_key(RIVERS_FILE));
     // A directory that exists only in memory.
     let memory = Path::new("in/memory/world");
     let mut asked = Vec::new();

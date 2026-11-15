@@ -29,6 +29,18 @@ In:
 To be refined: which parameters to tune and in what order; whether a Python
 sweep script under `tools/` helps (D-11).
 
+From M3-05 (the owner kept the default erosion settings and asked that
+the issues be recorded here): with the defaults (1,000 steps of 10⁴ yr,
+`K` = 7.5 × 10⁻¹⁰, `m` = 0.45, `K_d` = 5 × 10⁻³ m²/yr) the highest peaks
+of the Earth worlds of seeds 1–5 at 650,000 cells reach 14,955, 7,949,
+12,521, 5,185 and 8,606 m (design: 8–9 km); the steady-state slope
+`U / (K Qᵐ)` steepens as the cells shrink, so the peaks depend on the
+resolution (5,960 m for seed 1 at 100,000 cells). The interiors are planed
+to the sea level (M7-03). The default `K_d` is sub-grid at 28 km between
+cell centres (M3-04: an effective coarse-grid value of about 5,300 m²/yr
+at 100,000 cells visibly widens the valleys); the owner chose no separate
+calibration ticket, so it belongs here.
+
 ## Acceptance criteria
 
 - [ ] Every metric's distribution contains Earth's value (table in the Result).

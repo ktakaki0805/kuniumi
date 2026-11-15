@@ -773,13 +773,17 @@ mod tests {
         }
     }
 
-    /// The scene of `params`, seed 1, 100,000 cells.
+    /// The scene of `params`, seed 1, 100,000 cells, without erosion steps
+    /// (the relief of the Crust stage; 1,000 steps at 100,000 cells take
+    /// most of a minute in a debug build, and the deepest point, which
+    /// bounds the relief, is ocean floor that erosion leaves alone).
     fn scene_of(params: &PlanetParams) -> Scene {
-        let settings = Settings {
+        let mut settings = Settings {
             cells: 100_000,
             allow_partial: true,
             ..Settings::default()
         };
+        settings.erosion.steps = 0;
         let world = kuniumi_sim::generate(params, &settings, 1, &mut |_| {}).unwrap();
         Scene::new("w".into(), world, None).unwrap()
     }

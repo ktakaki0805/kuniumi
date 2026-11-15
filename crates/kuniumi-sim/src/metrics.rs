@@ -5,7 +5,7 @@
 //! on Earth, not by eye. This module holds pure functions over per-cell
 //! values; they read no files and draw no random numbers. So far: the land
 //! fraction and the hypsometry of the solid surface ([`ElevationMetrics`]).
-//! Drainage and climate metrics follow (tickets M3-05 and M5-06).
+//! Drainage and climate metrics follow (tickets M3-08 and M5-06).
 //!
 //! # Elevation
 //!

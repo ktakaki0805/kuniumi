@@ -9,8 +9,20 @@
 //! stage finds the planet parameters, the settings and the seed in the world
 //! itself.
 //!
-//! [`implementation`] is the table of the stages that exist; [`run`] takes
-//! the table as an argument, so tests can run the pipeline with fake stages.
+//! [`implementation`] is the table of the stages: those that exist, those
+//! that are skipped while they do not exist, and those that are missing.
+//! [`run`] takes the table as an argument, so tests can run the pipeline
+//! with fake stages.
+//!
+//! # Skipped stages
+//!
+//! The Climate stage does not exist until ticket M4-07, and the Erosion
+//! stage after it does: until then the runner skips Climate
+//! ([`Implementation::Skipped`]), and the Erosion stage drives its rivers
+//! with a uniform placeholder precipitation
+//! ([`stages::erosion::PLACEHOLDER_PRECIPITATION_M_S`]) instead of the
+//! climate's (ticket M3-05). A skipped stage reports no progress and is not
+//! recorded in [`World::stages`], so a world says which stages it has run.
 
 use kuniumi_world::{Field, FieldKind, PlanetParams, Settings, World};
 
@@ -25,27 +37,57 @@ use crate::{Progress, SimError, StageId, stages};
 /// own errors.
 pub type StageFn = fn(&mut World, &mut dyn FnMut(f64)) -> Result<(), SimError>;
 
-/// The implementation of `stage`, or `None` while it does not exist.
+/// What the runner does at a stage after Grid: the entry of the stage in a
+/// table such as [`implementation`].
+#[derive(Clone, Copy, Debug)]
+pub enum Implementation {
+    /// The stage exists: the runner runs it.
+    Stage(StageFn),
+    /// The stage does not exist yet, and the later stages run without it
+    /// (module documentation, "Skipped stages"): it reports no progress and
+    /// is not recorded in [`World::stages`].
+    Skipped,
+    /// The stage does not exist yet, and the run stops at it.
+    Missing,
+}
+
+/// The implementation of `stage` in the pipeline.
 ///
 /// The Grid stage, which builds the world instead of extending it, is run by
-/// [`run`] itself and has no [`StageFn`]. So far the Tectonics stage
-/// ([`stages::tectonics::run`]) and the Crust stage
-/// ([`stages::crust::run`]) follow it.
-pub fn implementation(stage: StageId) -> Option<StageFn> {
+/// [`run`] itself and has no [`StageFn`]; it is [`Implementation::Missing`]
+/// here. The Tectonics stage ([`stages::tectonics::run`]) and the Crust
+/// stage ([`stages::crust::run`]) follow it; Climate is skipped until ticket
+/// M4-07 (module documentation, "Skipped stages"); then the Erosion stage
+/// ([`stages::erosion::run`]) runs. Hydrology and Biomes are missing.
+pub fn implementation(stage: StageId) -> Implementation {
     match stage {
-        StageId::Tectonics => Some(stages::tectonics::run),
-        StageId::Crust => Some(stages::crust::run),
-        StageId::Grid
-        | StageId::Climate
-        | StageId::Erosion
-        | StageId::Hydrology
-        | StageId::Biomes => None,
+        StageId::Tectonics => Implementation::Stage(stages::tectonics::run),
+        StageId::Crust => Implementation::Stage(stages::crust::run),
+        StageId::Climate => Implementation::Skipped,
+        StageId::Erosion => Implementation::Stage(stages::erosion::run),
+        StageId::Grid | StageId::Hydrology | StageId::Biomes => Implementation::Missing,
     }
+}
+
+/// The first stage of [`StageId::PIPELINE`] that `world` has not run (whose
+/// name is not in [`World::stages`]) and that `implementation` does not
+/// skip: the stage at which a run with that table stopped, or `None` for a
+/// world that has run every stage the table does not skip. The table is
+/// asked only about the stages the world has not run.
+pub fn next_stage(
+    world: &World,
+    implementation: &dyn Fn(StageId) -> Implementation,
+) -> Option<StageId> {
+    StageId::PIPELINE.into_iter().find(|&stage| {
+        !world.stages.iter().any(|name| name == stage.name())
+            && !matches!(implementation(stage), Implementation::Skipped)
+    })
 }
 
 /// Runs the pipeline: checks `params` and `settings`, runs the Grid stage,
 /// then each later stage of [`StageId::PIPELINE`] in order, taking its
-/// implementation from `implementation`.
+/// implementation from `implementation`; a stage the table skips
+/// ([`Implementation::Skipped`]) is passed over without a report.
 ///
 /// For every stage that runs, `progress` receives fraction 0 when it starts,
 /// then the stage's own reports, then fraction 1 when it ends, after which
@@ -55,9 +97,9 @@ pub fn implementation(stage: StageId) -> Option<StageFn> {
 /// that class fields hold class ids, which [`World::field_mut`] could have
 /// broken.
 ///
-/// At the first stage without an implementation the run stops: with
-/// [`Settings::allow_partial`] it returns the world built so far
-/// ([`next_stage`](crate::next_stage) names the stage it stopped at),
+/// At the first stage that is [`Implementation::Missing`] the run stops:
+/// with [`Settings::allow_partial`] it returns the world built so far
+/// ([`next_stage`] with the same table names the stage it stopped at),
 /// otherwise [`SimError::NotImplemented`]. No progress is reported for that
 /// stage.
 ///
@@ -71,7 +113,7 @@ pub fn run(
     params: &PlanetParams,
     settings: &Settings,
     seed: u64,
-    implementation: &dyn Fn(StageId) -> Option<StageFn>,
+    implementation: &dyn Fn(StageId) -> Implementation,
     progress: &mut dyn FnMut(Progress),
 ) -> Result<World, SimError> {
     params.validate()?;
@@ -96,12 +138,16 @@ pub fn run(
     finish(&mut world, grid_stage, progress);
 
     for &stage in &StageId::PIPELINE[1..] {
-        let Some(stage_fn) = implementation(stage) else {
-            return if settings.allow_partial {
-                Ok(world)
-            } else {
-                Err(SimError::NotImplemented { stage })
-            };
+        let stage_fn = match implementation(stage) {
+            Implementation::Stage(stage_fn) => stage_fn,
+            Implementation::Skipped => continue,
+            Implementation::Missing => {
+                return if settings.allow_partial {
+                    Ok(world)
+                } else {
+                    Err(SimError::NotImplemented { stage })
+                };
+            }
         };
         progress(Progress {
             stage,

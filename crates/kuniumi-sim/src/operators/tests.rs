@@ -124,7 +124,7 @@ fn earth_heights_m() -> &'static [f64] {
             allow_partial: true,
             ..Settings::default()
         };
-        let world = crate::generate(&PlanetParams::earth(), &settings, 1, &mut |_| {})
+        let world = crate::generate_through_crust(&PlanetParams::earth(), &settings, 1)
             .expect("a partial world");
         assert_eq!(world.grid, *grid());
         world.field(SURFACE_HEIGHT).expect("heights").values.clone()

@@ -55,8 +55,9 @@ struct GenerateArgs {
     #[arg(long, value_name = "N")]
     seed: u64,
     /// Output directory for world.json, grid.kgrid (the cell grid), a
-    /// .kfield file and a .png map per field, and metrics.txt and
-    /// hypsometry.png once the Crust stage has run (created if missing)
+    /// .kfield file and a .png map per field, metrics.txt and
+    /// hypsometry.png once the Crust stage has run, and rivers.png once the
+    /// Erosion stage has run (created if missing)
     #[arg(long, value_name = "DIR")]
     out: PathBuf,
     /// Settings file (TOML, as `kuniumi params` prints) with the planet's
@@ -146,6 +147,8 @@ fn run(command: Option<Command>) -> Result<(), String> {
 ///
 /// `--cells` replaces the file's `cells`. `allow_partial` is always set,
 /// whatever the file says, so that the stages that exist are written.
+/// Progress goes to the standard error, one line per stage and whole
+/// percent ([`progress_line`]).
 fn generate(args: &GenerateArgs) -> Result<(), String> {
     let (params, mut settings) = match &args.planet {
         Some(path) => read_settings(path)?,
@@ -155,8 +158,13 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
         settings.cells = cells;
     }
     settings.allow_partial = true;
+    let mut last_line = String::new();
     let world = kuniumi_sim::generate(&params, &settings, args.seed, &mut |p| {
-        eprintln!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0);
+        let line = progress_line(p);
+        if line != last_line {
+            eprintln!("{line}");
+            last_line = line;
+        }
     })
     .map_err(|e| e.to_string())?;
     for path in world_dir::write(&args.out, &world).map_err(|e| e.to_string())? {
@@ -166,6 +174,14 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
         Some(stage) => Err(SimError::NotImplemented { stage }.to_string()),
         None => Ok(()),
     }
+}
+
+/// The line that `generate` prints for the progress report `p`: the stage
+/// and its completion in whole percent, `[erosion] 42%`. A line equal to the
+/// one before is not printed again, so a stage of many steps (the 1,000
+/// steps of the Erosion stage) prints at most 101 lines.
+fn progress_line(p: kuniumi_sim::Progress) -> String {
+    format!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0)
 }
 
 /// Reads the settings file at `path` with [`kuniumi_config::load`]; an

@@ -7,7 +7,9 @@
 //!
 //! Stages run in [`StageId::PIPELINE`] order, through the runner in
 //! [`pipeline`]; each adds its outputs to the [`World`] as named fields in SI
-//! units. Climate and erosion will alternate two or three times (see the
+//! units. Until the Climate stage exists, the runner skips it and the
+//! Erosion stage uses a placeholder precipitation ([`pipeline`], "Skipped
+//! stages"). Climate and erosion will alternate two or three times (see the
 //! design document, "侵食と地形発達").
 //!
 //! [`drainage`] routes water over a surface, for erosion and hydrology
@@ -154,9 +156,13 @@ impl From<FieldError> for SimError {
 /// which adds the plates, continents, boundaries and crust: `plate_id`,
 /// `plate_velocity_east`, `plate_velocity_north`, `crust_type`,
 /// `boundary_type`, `convergence_rate`, `crust_thickness`, `crust_age`,
-/// `uplift_rate` and `trench`; and the Crust stage ([`stages::crust`]),
-/// which turns the crust into relief, `surface_height`, and sets the sea
-/// level that holds the planet's water. With
+/// `uplift_rate` and `trench`; the Crust stage ([`stages::crust`]), which
+/// turns the crust into relief, `surface_height`, and sets the sea level
+/// that holds the planet's water; and, the Climate stage being skipped until
+/// ticket M4-07 ([`pipeline`], "Skipped stages"), the Erosion stage
+/// ([`stages::erosion`]), which erodes `surface_height` with the world's
+/// [`Settings::erosion`] under a uniform placeholder precipitation and adds
+/// the rivers: `drainage_area`, `discharge` and `depression_depth`. With
 /// [`Settings::allow_partial`] that world is returned when the next stage
 /// turns out to be missing ([`next_stage`] names it); otherwise it is
 /// dropped and the error names the stage.
@@ -167,7 +173,7 @@ impl From<FieldError> for SimError {
 /// progress is reported; [`SimError::Grid`] if the grid cannot be built
 /// (not expected); without [`Settings::allow_partial`],
 /// [`SimError::NotImplemented`] naming the first stage that does not exist
-/// yet, now always [`StageId::Climate`].
+/// yet and is not skipped, now always [`StageId::Hydrology`].
 pub fn generate(
     params: &PlanetParams,
     settings: &Settings,
@@ -178,12 +184,33 @@ pub fn generate(
 }
 
 /// The first stage of [`StageId::PIPELINE`] that `world` has not run (whose
-/// name is not in [`World::stages`]): the stage a partial world stopped at,
-/// or `None` for a complete world.
+/// name is not in [`World::stages`]) and that the pipeline does not skip
+/// ([`pipeline::next_stage`] with [`pipeline::implementation`]): the stage a
+/// partial world stopped at, or `None` for a complete world. A world
+/// generated now has skipped Climate (until ticket M4-07) and stops at
+/// [`StageId::Hydrology`].
 pub fn next_stage(world: &World) -> Option<StageId> {
-    StageId::PIPELINE
-        .into_iter()
-        .find(|stage| !world.stages.iter().any(|name| name == stage.name()))
+    pipeline::next_stage(world, &pipeline::implementation)
+}
+
+/// [`generate`] through the Crust stage only, for the tests that need the
+/// relief before erosion: the pipeline's table with every stage after Crust
+/// missing, so with [`Settings::allow_partial`] the world that the Crust
+/// stage left.
+#[cfg(test)]
+pub(crate) fn generate_through_crust(
+    params: &PlanetParams,
+    settings: &Settings,
+    seed: u64,
+) -> Result<World, SimError> {
+    let table = |stage: StageId| {
+        if stage <= StageId::Crust {
+            pipeline::implementation(stage)
+        } else {
+            pipeline::Implementation::Missing
+        }
+    };
+    pipeline::run(params, settings, seed, &table, &mut |_| {})
 }
 
 #[cfg(test)]
@@ -255,43 +282,68 @@ mod tests {
         }
     }
 
+    /// The stages that run now: Grid, Tectonics, Crust and, Climate being
+    /// skipped, Erosion.
+    const RUN: [StageId; 4] = [
+        StageId::Grid,
+        StageId::Tectonics,
+        StageId::Crust,
+        StageId::Erosion,
+    ];
+
+    /// The progress reports of a run of [`RUN`] with `steps` erosion steps:
+    /// 0 and 1 for each stage, and `k / steps` after each erosion step.
+    fn expected_reports(steps: u32) -> Vec<Progress> {
+        RUN.into_iter()
+            .flat_map(|stage| {
+                let mut fractions = vec![0.0];
+                if stage == StageId::Erosion {
+                    fractions.extend((1..=steps).map(|k| f64::from(k) / f64::from(steps)));
+                }
+                fractions.push(1.0);
+                fractions
+                    .into_iter()
+                    .map(move |fraction| Progress { stage, fraction })
+            })
+            .collect()
+    }
+
     #[test]
-    fn generate_runs_grid_tectonics_and_crust_then_stops_at_climate() {
+    fn generate_runs_grid_tectonics_crust_and_erosion_then_stops_at_hydrology() {
+        let mut settings = settings(1_000);
+        settings.erosion.steps = 3;
         let mut reports = Vec::new();
-        let result = generate(&PlanetParams::earth(), &settings(1_000), 1, &mut |p| {
+        let result = generate(&PlanetParams::earth(), &settings, 1, &mut |p| {
             reports.push(p)
         });
         assert!(
             matches!(
                 result,
                 Err(SimError::NotImplemented {
-                    stage: StageId::Climate
+                    stage: StageId::Hydrology
                 })
             ),
             "{:?}",
             result.err()
         );
-        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics, StageId::Crust]
-            .into_iter()
-            .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
-            .collect();
-        assert_eq!(reports, expected);
+        assert_eq!(reports, expected_reports(3));
     }
 
     #[test]
     fn generate_returns_the_partial_world_when_allowed() {
-        let settings = Settings {
+        let mut settings = Settings {
             cells: 1_000,
             allow_partial: true,
             ..Settings::default()
         };
+        settings.erosion.steps = 2;
         let mut reports = Vec::new();
         let world = generate(&PlanetParams::earth(), &settings, 7, &mut |p| {
             reports.push(p)
         })
         .expect("a partial world");
-        assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
-        assert_eq!(next_stage(&world), Some(StageId::Climate));
+        assert_eq!(world.stages, ["grid", "tectonics", "crust", "erosion"]);
+        assert_eq!(next_stage(&world), Some(StageId::Hydrology));
         assert_eq!(
             (world.seed, &world.settings, &world.params),
             (7, &settings, &PlanetParams::earth())
@@ -318,21 +370,33 @@ mod tests {
                 ("uplift_rate", "m/s", FieldKind::Quantity),
                 ("trench", "", FieldKind::Class),
                 ("surface_height", "m", FieldKind::Quantity),
+                ("drainage_area", "m^2", FieldKind::Quantity),
+                ("discharge", "m^3/s", FieldKind::Quantity),
+                ("depression_depth", "m", FieldKind::Quantity),
             ]
         );
         let plates = stages::tectonics::partition(&world.grid, 12, 7);
         let ids: Vec<f64> = plates.iter().map(|&p| f64::from(p)).collect();
         assert_eq!(world.fields[2].values, ids);
-        // The sea level holds Earth's water over the surface.
-        let heights = &world.fields[12].values;
-        let sea_level = stages::crust::sea_level_m(&world.grid, heights, 6_371_000.0, 1.335e18);
+        // The sea level holds Earth's water over the surface of the Crust
+        // stage; erosion changes the land, not the ocean or the sea level.
+        let crust = generate_through_crust(&PlanetParams::earth(), &settings, 7)
+            .expect("the world of the Crust stage");
+        let uneroded = &crust.fields[12].values;
+        let sea_level = stages::crust::sea_level_m(&world.grid, uneroded, 6_371_000.0, 1.335e18);
         assert_eq!(world.sea_level_m.to_bits(), sea_level.to_bits());
+        assert_eq!(crust.sea_level_m.to_bits(), sea_level.to_bits());
+        let heights = &world.fields[12].values;
         assert!(heights.iter().any(|&h| h > sea_level) && heights.iter().any(|&h| h < sea_level));
-        let expected: Vec<_> = [StageId::Grid, StageId::Tectonics, StageId::Crust]
-            .into_iter()
-            .flat_map(|stage| [0.0, 1.0].map(|fraction| Progress { stage, fraction }))
-            .collect();
-        assert_eq!(reports, expected);
+        for (h, u) in heights.iter().zip(uneroded) {
+            if *u <= sea_level {
+                assert_eq!(h.to_bits(), u.to_bits());
+            } else {
+                assert!(*h > sea_level);
+            }
+        }
+        assert!(heights != uneroded, "the land is eroded");
+        assert_eq!(reports, expected_reports(2));
     }
 
     #[test]
@@ -397,14 +461,23 @@ mod tests {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
             planets.push(p);
         }
-        let settings = Settings {
+        let mut settings = Settings {
             cells: 1_000,
             allow_partial: true,
             ..Settings::default()
         };
+        // The default 10 Myr of erosion in release builds; a tenth of it in
+        // debug builds, where 129 runs of 1,000 steps take over a minute.
+        if cfg!(debug_assertions) {
+            settings.erosion.steps = 100;
+        }
         for p in &planets {
             let world = generate(p, &settings, 3, &mut |_| {}).expect("a partial world");
-            assert_eq!(world.stages, ["grid", "tectonics", "crust"], "{p:?}");
+            assert_eq!(
+                world.stages,
+                ["grid", "tectonics", "crust", "erosion"],
+                "{p:?}"
+            );
             // Checked here as well as by the runner's debug assertion, so
             // that release builds check it too.
             assert!(world.sea_level_m.is_finite(), "{p:?}");
@@ -420,7 +493,7 @@ mod tests {
 
     #[test]
     fn next_stage_is_the_first_stage_not_run() {
-        let mut world = generate(
+        let mut world = generate_through_crust(
             &PlanetParams::earth(),
             &Settings {
                 cells: 1_000,
@@ -428,21 +501,32 @@ mod tests {
                 ..Settings::default()
             },
             1,
-            &mut |_| {},
         )
         .expect("a partial world");
-        for (k, stage) in StageId::PIPELINE.iter().enumerate() {
+        // The pipeline skips Climate until ticket M4-07: a world without it
+        // goes on with Erosion.
+        for k in 0..StageId::PIPELINE.len() {
             world.stages = StageId::PIPELINE[..k]
                 .iter()
                 .map(|s| s.name().to_owned())
                 .collect();
-            assert_eq!(next_stage(&world), Some(*stage), "{k}");
+            let expected = StageId::PIPELINE[k..]
+                .iter()
+                .copied()
+                .find(|&s| s != StageId::Climate);
+            assert_eq!(next_stage(&world), expected, "{k}");
         }
         world.stages = StageId::PIPELINE
             .iter()
             .map(|s| s.name().to_owned())
             .collect();
         assert_eq!(next_stage(&world), None);
+        world.stages.retain(|s| s != "climate");
+        assert_eq!(next_stage(&world), None);
+        world.stages = StageId::PIPELINE
+            .iter()
+            .map(|s| s.name().to_owned())
+            .collect();
         // With climate and erosion repeated, as they will be (M7-01).
         world.stages.extend(["climate".into(), "erosion".into()]);
         assert_eq!(next_stage(&world), None);

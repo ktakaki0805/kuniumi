@@ -15,8 +15,8 @@
 //! - [`world_dir`]: a world as a directory, written and read back: the grid
 //!   (`grid.kgrid`), a `.kfield` file and a PNG map per field, the
 //!   validation metrics (`metrics.txt` and `hypsometry.png`, from
-//!   `kuniumi_sim::metrics`), and `world.json` with the metadata (through
-//!   `serde_json`).
+//!   `kuniumi_sim::metrics`), the river map (`rivers.png`), and
+//!   `world.json` with the metadata (through `serde_json`).
 //!
 //! Everything that touches the file system lives in this crate (and the CLI),
 //! never in `kuniumi-sim`.

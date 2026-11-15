@@ -56,7 +56,7 @@ fn worlds() -> &'static [World] {
         };
         (1..=3)
             .map(|seed| {
-                let world = crate::generate(&PlanetParams::earth(), &settings, seed, &mut |_| {})
+                let world = crate::generate_through_crust(&PlanetParams::earth(), &settings, seed)
                     .expect("a partial world");
                 assert_eq!(world.stages, ["grid", "tectonics", "crust"], "seed {seed}");
                 world

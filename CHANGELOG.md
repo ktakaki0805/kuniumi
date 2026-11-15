@@ -394,6 +394,23 @@ section: every change after which an existing seed produces a different world
   naming its key; `kuniumi params` prints the table, and `kuniumi generate
   --planet` takes it from the file. `kuniumi_math::units::years_to_s` and
   `m2_per_year_to_m2_per_s` (M3-07).
+- The Erosion stage in the pipeline: `kuniumi_sim::stages::erosion::run`
+  erodes `surface_height` with the world's `Settings::erosion`, its
+  `uplift_rate` and a uniform placeholder rain of 1 m/yr, and adds the
+  rivers of the final surface, routed across its closed depressions
+  (`routed_drainage`, `Rivers`): `drainage_area` (`m^2`), `discharge`
+  (`m^3/s`) and `depression_depth` (`m`). The default 1,000 steps take
+  about 107 s of the 112 s that `kuniumi generate` needs at 650,000 cells,
+  in release (M3-05).
+- `kuniumi_sim::pipeline::Implementation` (`Stage`, `Skipped`, `Missing`)
+  and `pipeline::next_stage`: the runner passes over a skipped stage
+  without a report or an entry in `World::stages`; the Climate stage is
+  skipped until it exists (M3-05).
+- `rivers.png` in world directories with `discharge`
+  (`kuniumi_io::world_dir::river_colours`, `RIVERS_FILE`): the rivers over
+  the elevation map, their colour mixed in by the logarithm of the
+  discharge, from the larger of 10⁻³ of the largest discharge on land and
+  five times the smallest up to the largest (M3-05).
 
 ### Changed
 
@@ -611,6 +628,15 @@ section: every change after which an existing seed produces a different world
   names the erosion settings by their path, `erosion.time_step_s`. The
   documentation of `ParamError::OutOfRange` and `Inconsistent` says so
   (M3-07).
+- `kuniumi_sim::generate` runs Grid, Tectonics, Crust and Erosion, skipping
+  Climate, and stops at Hydrology: without `allow_partial` it fails with
+  `NotImplemented { stage: Hydrology }`, and `next_stage` of its worlds is
+  Hydrology. `pipeline::implementation` returns an `Implementation` instead
+  of `Option<StageFn>`, and `pipeline::run` takes such a table (M3-05).
+- `kuniumi generate` prints each stage's progress once per whole percent
+  (the erosion's 1,000 steps print 101 lines) and names `rivers.png` in
+  its help; `rivers` is a reserved field name in world directories, like
+  `hypsometry` (M3-05).
 
 ### Removed
 
@@ -705,6 +731,14 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M3-05: `kuniumi generate` erodes `surface_height` (the default 10 Myr of
+  erosion under 1 m/yr of rain) and adds `drainage_area`, `discharge` and
+  `depression_depth`, so every world's `surface_height`, its map,
+  `metrics.txt` and `hypsometry.png` change; with the default settings the
+  continental interiors are planed to within 1 m of the sea level and the
+  highest peaks reach 5.2–15.0 km at 650,000 cells (calibration: M7-03,
+  M7-05). The fields of the earlier stages and the sea level are unchanged,
+  and with 0 erosion steps so is `surface_height`.
 - M2-17: the sea level of every water world (`ocean_volume_m3` at least
   the water the basins hold when filled to the highest height) is lower:
   by 0.33 % at 13,000 km with the most water and by a factor of 2.3 at

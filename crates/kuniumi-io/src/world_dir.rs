@@ -27,15 +27,22 @@
 //!   histogram as a bar chart, [`CHART_WIDTH_PX`] × [`CHART_HEIGHT_PX`],
 //!   whose axes `metrics.txt` describes;
 //!
+//! then, for a world with `surface_height` and `discharge` (the Erosion
+//! stage has run, ticket M3-05):
+//!
+//! - `rivers.png` ([`RIVERS_FILE`], [`river_colours`]): the rivers as a
+//!   log-scaled overlay of the discharge on the map of `surface_height`,
+//!   as large as the other maps;
+//!
 //! and last `world.json` ([`METADATA_FILE`]), the metadata: format version,
 //! generator version, seed, settings (with the erosion settings), planet
 //! parameters, sea level, the stages that have run and the field list. An
-//! existing `world.json`, `metrics.txt` and `hypsometry.png` are removed
-//! before the grid is written, and the new `world.json` is written last, so
-//! a directory with a
-//! `world.json` holds every file it lists, from the same world, even after a
-//! write that failed halfway, and no metrics of another world. Other files
-//! in the directory are left alone.
+//! existing `world.json`, `metrics.txt`, `hypsometry.png` and `rivers.png`
+//! are removed before the grid is written, and the new `world.json` is
+//! written last, so a directory with a `world.json` holds every file it
+//! lists, from the same world, even after a write that failed halfway, and
+//! no metrics or river map of another world. Other files in the directory
+//! are left alone.
 //!
 //! [`read()`] rebuilds the [`World`] from `world.json`, `grid.kgrid` and the
 //! `.kfield` files, bit for bit, and checks every file on the way
@@ -50,12 +57,13 @@
 //! `<name>.png`, must not be one of the directory's own files,
 //! [`FIXED_FILES`] (ticket M2-19). Field names hold no dot, so only a fixed
 //! file ending in `.kfield` or `.png` can collide: of `world.json`,
-//! `grid.kgrid`, `metrics.txt` and `hypsometry.png`, only the chart, so the
-//! one reserved name is `hypsometry`, whose map the chart would overwrite.
-//! It is reserved in every world, with or without a `surface_height`;
-//! [`write()`] refuses it before writing anything and [`read()`] refuses a
-//! `world.json` that lists it. Names and files are lowercase ASCII, so file
-//! systems that ignore case add no collision.
+//! `grid.kgrid`, `metrics.txt`, `hypsometry.png` and `rivers.png`, only the
+//! chart and the river map, so the reserved names are `hypsometry` and
+//! `rivers` (ticket M3-05), whose maps these would overwrite. They are
+//! reserved in every world, with or without a `surface_height` or a
+//! `discharge`; [`write()`] refuses them before writing anything and
+//! [`read()`] refuses a `world.json` that lists one. Names and files are
+//! lowercase ASCII, so file systems that ignore case add no collision.
 //!
 //! # Why the grid is stored
 //!
@@ -147,11 +155,13 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use kuniumi_math::det;
 use kuniumi_sim::metrics::{
     ElevationMetrics, HYPSOMETRY_BIN_M, Hypsometry, MAX_HYPSOMETRY_BINS, PERCENTILES, VALLEY_RATIO,
     earth,
 };
 use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
+use kuniumi_sim::stages::erosion::DISCHARGE;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
     ErosionSettings, Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings,
@@ -193,11 +203,23 @@ pub const HYPSOMETRY_FILE: &str = "hypsometry.png";
 /// (module documentation, "Field names"). A new fixed file is listed here,
 /// and the test `fixed_files_are_every_file_but_the_fields` given a world
 /// that writes it, so that the test sees it.
-pub const FIXED_FILES: [&str; 4] = [METADATA_FILE, GRID_FILE, METRICS_FILE, HYPSOMETRY_FILE];
+pub const FIXED_FILES: [&str; 5] = [
+    METADATA_FILE,
+    GRID_FILE,
+    METRICS_FILE,
+    HYPSOMETRY_FILE,
+    RIVERS_FILE,
+];
+
+/// The name of the river map ([`river_colours`]), written for a world with
+/// `surface_height` and `discharge` (the Erosion stage has run; ticket
+/// M3-05).
+pub const RIVERS_FILE: &str = "rivers.png";
 
 /// The file of [`FIXED_FILES`] that a field named `name` would write as
 /// its `<name>.kfield` or `<name>.png`, if any: `hypsometry.png` for
-/// `hypsometry`, none for every other name (ticket M2-19).
+/// `hypsometry` (ticket M2-19), `rivers.png` for `rivers` (ticket M3-05),
+/// none for every other name.
 fn fixed_file_of_field(name: &str) -> Option<&'static str> {
     FIXED_FILES.into_iter().find(|file| {
         [".kfield", ".png"]
@@ -225,6 +247,27 @@ pub const SEA_LEVEL_MARKER: Rgb8 = [0, 0, 0];
 /// The colour of the lines at Earth's two modes in [`HYPSOMETRY_FILE`]: a
 /// red.
 pub const EARTH_MARKER: Rgb8 = [200, 0, 0];
+
+/// The colour of the rivers in [`RIVERS_FILE`]: a dark blue, darker and
+/// more saturated than the shallow sea of the elevation map.
+pub const RIVER_COLOUR: Rgb8 = [10, 40, 190];
+
+/// The ratio of the largest discharge on land to the smallest that
+/// [`RIVERS_FILE`] draws at most: 1,000, three decades.
+pub const RIVER_DISCHARGE_RANGE: f64 = 1_000.0;
+
+/// The smallest discharge that [`RIVERS_FILE`] draws, relative to the
+/// smallest positive discharge on land: 5. That smallest one is about the
+/// rain on one cell (a cell that no other drains into), so a river starts
+/// where about five cells drain through it, at any resolution; on a coarse
+/// grid, whose largest river drains a few hundred cells or fewer, this and
+/// not [`RIVER_DISCHARGE_RANGE`] sets the threshold.
+pub const RIVER_MIN_FACTOR: f64 = 5.0;
+
+/// The weight of [`RIVER_COLOUR`] on the smallest river that
+/// [`RIVERS_FILE`] draws: 0.35; it rises with the logarithm of the
+/// discharge to 1 on the largest.
+pub const RIVER_MIN_WEIGHT: f64 = 0.35;
 
 /// The contents of `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -581,6 +624,86 @@ pub fn map_colours(
     }
 }
 
+/// The colour of each cell of `world` on [`RIVERS_FILE`], given the
+/// world's `metrics` ([`ElevationMetrics::of_world`], as [`write()`]
+/// computes them); `None` unless the world has both a `surface_height` and
+/// a `discharge` (m³/s, the Erosion stage's `DISCHARGE`).
+///
+/// The rivers as a log-scaled overlay of the discharge on the elevation
+/// map. Each cell takes its colour on the map of `surface_height`
+/// ([`map_colours`]). On land (`h > z`, as in the drainage graph), with
+/// `Q_max` and `Q_low` the largest and the smallest positive discharge there
+/// (finite ones only), the rivers are the cells whose discharge `Q` is at
+/// least `Q_min = max(Q_max / `[`RIVER_DISCHARGE_RANGE`]`,
+/// `[`RIVER_MIN_FACTOR`]` · Q_low)`: each takes [`RIVER_COLOUR`] mixed in
+/// with the weight `w = `[`RIVER_MIN_WEIGHT`]` + (1 − `[`RIVER_MIN_WEIGHT`]`)
+/// t`, `t = ln(Q / Q_min) / ln(Q_max / Q_min)` in [0, 1] (1 where
+/// `Q_min = Q_max`), each channel `c (1 − w) + r w` rounded half away from
+/// zero. So the largest river is drawn in the river colour and the
+/// smallest, up to three decades below, faintly; the ocean, the land with
+/// less discharge and every cell of a world without a positive discharge on
+/// land keep their elevation colours. A discharge that is not finite is not
+/// drawn and does not count. The logarithms come from `kuniumi_math::det`,
+/// so the colours are the same on every platform.
+///
+/// # Panics
+///
+/// If `discharge` and `surface_height` differ in length, if the sea level
+/// is not finite ([`Colormap::colour`]), or as [`Range::resolve`] for the
+/// range of [`map_colours`]. [`write()`] checks all of these first.
+pub fn river_colours(world: &World, metrics: Option<&ElevationMetrics>) -> Option<Vec<Rgb8>> {
+    let height = world.field(SURFACE_HEIGHT)?;
+    let discharge = &world.field(DISCHARGE)?.values;
+    assert_eq!(
+        discharge.len(),
+        height.values.len(),
+        "river_colours needs one discharge per height: {} discharges for {} heights",
+        discharge.len(),
+        height.values.len()
+    );
+    let (colormap, range) = map_colours(height, world, metrics);
+    let mut colours = colormap.colours(&height.values, range);
+    let sea_level = world.sea_level_m;
+    let flowing: Vec<usize> = (0..colours.len())
+        .filter(|&i| height.values[i] > sea_level && discharge[i].is_finite() && discharge[i] > 0.0)
+        .collect();
+    let Some(&first) = flowing.first() else {
+        return Some(colours);
+    };
+    let (low, largest) =
+        flowing
+            .iter()
+            .fold((discharge[first], discharge[first]), |(lo, hi), &i| {
+                let q = discharge[i];
+                (if q < lo { q } else { lo }, if q > hi { q } else { hi })
+            });
+    let by_range = largest / RIVER_DISCHARGE_RANGE;
+    let by_low = RIVER_MIN_FACTOR * low;
+    let smallest = if by_range > by_low { by_range } else { by_low };
+    let span = det::ln(largest / smallest);
+    for i in flowing {
+        let q = discharge[i];
+        if q < smallest {
+            continue;
+        }
+        let t = if span > 0.0 {
+            let t = det::ln(q / smallest) / span;
+            if t > 1.0 { 1.0 } else { t }
+        } else {
+            1.0
+        };
+        let w = RIVER_MIN_WEIGHT + (1.0 - RIVER_MIN_WEIGHT) * t;
+        let colour = &mut colours[i];
+        *colour = core::array::from_fn(|k| {
+            let c = f64::from(colour[k]) * (1.0 - w) + f64::from(RIVER_COLOUR[k]) * w;
+            // Both colours lie in [0, 255] and `w` in [0.35, 1]: an exact
+            // conversion of a whole number in range.
+            c.round().clamp(0.0, 255.0) as u8
+        });
+    }
+    Some(colours)
+}
+
 /// The most vertical grid lines of [`HYPSOMETRY_FILE`].
 const MAX_X_LINES: f64 = 25.0;
 
@@ -791,7 +914,8 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 /// Writes `world` into the directory `dir`, creating it if needed (module
 /// documentation), and returns the paths written, in order: `grid.kgrid`,
 /// `<name>.kfield` and `<name>.png` of every field, `metrics.txt` and
-/// `hypsometry.png` if the world has a `surface_height`, then `world.json`.
+/// `hypsometry.png` if the world has a `surface_height`, `rivers.png` if it
+/// also has a `discharge`, then `world.json`.
 /// [`read()`] reads the directory back into the same world.
 ///
 /// The world is checked before anything is written.
@@ -800,8 +924,9 @@ pub fn metrics_txt(world: &World, metrics: &ElevationMetrics) -> String {
 ///
 /// [`io::ErrorKind::InvalidInput`] if a field name is not valid
 /// ([`Field::is_valid_name`]), is reserved because a file of the field
-/// would be one of [`FIXED_FILES`] (`hypsometry`, whose map would be the
-/// chart: module documentation, "Field names") or appears twice, if a
+/// would be one of [`FIXED_FILES`] (`hypsometry` and `rivers`, whose maps
+/// would be the chart and the river map: module documentation, "Field
+/// names") or appears twice, if a
 /// field does not hold one value per cell, if a class field holds a value
 /// that is not a class id ([`Field::is_class_value`]), as [`world_json`],
 /// if `surface_height` holds a value that is not finite, one whose
@@ -827,7 +952,7 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
     // The metadata and the metrics of an earlier world must not outlive a
     // failed rewrite, nor a world without them.
     let metadata = dir.join(METADATA_FILE);
-    for file in [METADATA_FILE, METRICS_FILE, HYPSOMETRY_FILE] {
+    for file in [METADATA_FILE, METRICS_FILE, HYPSOMETRY_FILE, RIVERS_FILE] {
         let path = dir.join(file);
         match std::fs::remove_file(&path) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(with_path(&path, e)),
@@ -835,7 +960,7 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
         }
     }
 
-    let mut written = Vec::with_capacity(2 * world.fields.len() + 4);
+    let mut written = Vec::with_capacity(2 * world.fields.len() + 5);
     let path = dir.join(GRID_FILE);
     write_grid_file(&path, &world.grid).map_err(|e| with_path(&path, e))?;
     written.push(path);
@@ -852,12 +977,19 @@ fn write_maps_of_width(dir: &Path, world: &World, width_px: u32) -> io::Result<V
         std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
         written.push(path);
     }
-    if let Some(metrics) = metrics {
+    if let Some(metrics) = &metrics {
         let path = dir.join(METRICS_FILE);
-        std::fs::write(&path, metrics_txt(world, &metrics)).map_err(|e| with_path(&path, e))?;
+        std::fs::write(&path, metrics_txt(world, metrics)).map_err(|e| with_path(&path, e))?;
         written.push(path);
         let path = dir.join(HYPSOMETRY_FILE);
-        let bytes = png::encode_rgb8(CHART_WIDTH_PX, CHART_HEIGHT_PX, &hypsometry_chart(&metrics));
+        let bytes = png::encode_rgb8(CHART_WIDTH_PX, CHART_HEIGHT_PX, &hypsometry_chart(metrics));
+        std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
+        written.push(path);
+    }
+    if let Some(colours) = river_colours(world, metrics.as_ref()) {
+        let path = dir.join(RIVERS_FILE);
+        let pixels: Vec<Rgb8> = cells.iter().map(|&cell| colours[cell as usize]).collect();
+        let bytes = png::encode_rgb8(width_px, width_px / 2, &pixels);
         std::fs::write(&path, bytes).map_err(|e| with_path(&path, e))?;
         written.push(path);
     }
@@ -1052,8 +1184,8 @@ impl std::error::Error for ReadError {
 /// metadata from `world.json`, the grid from [`GRID_FILE`] and every field
 /// listed in `world.json` from its `<name>.kfield`, with the kind that
 /// `world.json` gives. The world read back equals the one written, bit for
-/// bit. The maps, `metrics.txt` and `hypsometry.png` are not read (they
-/// follow from the rest), nor are other files in `dir`.
+/// bit. The maps, `metrics.txt`, `hypsometry.png` and `rivers.png` are not
+/// read (they follow from the rest), nor are other files in `dir`.
 ///
 /// The planet parameters and the settings are returned as stored, not
 /// validated ([`PlanetParams::validate`], [`Settings::validate`]), as
@@ -1077,9 +1209,10 @@ impl std::error::Error for ReadError {
 ///   range, text after the object: serde_json's message, with line and
 ///   column), lists a field name that is not valid ([`Field::is_valid_name`],
 ///   which also keeps every path inside `dir`), a reserved name whose files
-///   would be one of [`FIXED_FILES`] (`hypsometry`, which [`write()`]
-///   refuses; a directory written before ticket M2-19 may list it, its map
-///   overwritten by the chart) or a name twice; if a `.kfield` or `.kgrid`
+///   would be one of [`FIXED_FILES`] (`hypsometry` or `rivers`, which
+///   [`write()`] refuses; a directory written before ticket M2-19 may list
+///   `hypsometry`, its map overwritten by the chart, one written before
+///   ticket M3-05 `rivers`) or a name twice; if a `.kfield` or `.kgrid`
 ///   file is not in its format, is truncated, or has bytes after its end;
 ///   if the grid is not valid ([`grid_file::read_grid`]); or if a `.kfield`
 ///   file holds another name or unit than `world.json` lists, not one value

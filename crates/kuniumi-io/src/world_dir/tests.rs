@@ -30,10 +30,15 @@
 //! - `rejects_elevations_that_overflow_before_writing_anything` and
 //!   `huge_elevations_have_finite_metrics` (ticket M2-15);
 //! - `rejects_elevations_beyond_the_histogram_before_writing_anything` and
-//!   `accepts_elevations_at_the_bound` (ticket M2-18).
+//!   `accepts_elevations_at_the_bound` (ticket M2-18);
+//! - `river_colours_by_hand`, `river_colours_without_rivers`,
+//!   `river_colours_need_one_discharge_per_height`,
+//!   `writes_the_river_map_after_the_metrics` and
+//!   `rejects_the_name_rivers_before_writing_anything` (ticket M3-05).
 //!
 //! Reading directories back (ticket MV-01) is tested in `read_tests.rs`,
 //! with the worlds of this file.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::PathBuf;
 
@@ -49,6 +54,7 @@ use kuniumi_sim::metrics::{ElevationMetrics, earth};
 use super::*;
 use crate::chart;
 use crate::colormap::{Colormap, Range};
+use crate::render;
 
 /// A world on a 1,000-cell grid with a quantity field and a class field,
 /// and erosion settings that are valid but not the defaults.
@@ -1349,9 +1355,13 @@ fn rejects_reserved_field_names_before_writing_anything() {
 fn reserved_names_by_hand() {
     // Field names hold no dot, so a fixed file is a field's file only if
     // it ends in `.kfield` or `.png`: of world.json, grid.kgrid,
-    // metrics.txt and hypsometry.png, only the last.
+    // metrics.txt, hypsometry.png and rivers.png, only the last two.
     assert_eq!(fixed_file_of_field("hypsometry"), Some("hypsometry.png"));
+    assert_eq!(fixed_file_of_field("rivers"), Some("rivers.png"));
     for name in [
+        "river",
+        "rivers_map",
+        "rivers1",
         "world",
         "grid",
         "metrics",
@@ -1372,7 +1382,8 @@ fn fixed_files_are_every_file_but_the_fields() {
     // fixed file that only some worlds write is seen only if one of these
     // worlds writes it: a ticket that adds one adds such a world here.
     for (name, world, every) in [
-        ("fixed_relief", world_with_relief(), true),
+        ("fixed_rivers", world_with_rivers(), true),
+        ("fixed_relief", world_with_relief(), false),
         ("fixed_plain", world(), false),
     ] {
         let dir = scratch(name);
@@ -1613,4 +1624,277 @@ fn decode_png(path: &Path) -> (u32, u32, Vec<Rgb8>) {
     buf.truncate(info.buffer_size());
     let pixels = buf.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
     (info.width, info.height, pixels)
+}
+
+// ---------------------------------------------------------------------------
+// The river map (ticket M3-05).
+
+/// The error of [`write()`] and [`read()`] for a field named `rivers`,
+/// written out by hand.
+pub(super) const RIVERS_RESERVED: &str = concat!(
+    "the field name `rivers` is reserved: ",
+    "rivers.png is a file of the world directory itself"
+);
+
+/// [`octahedron_world`] after an Erosion stage: the land cells 0, 2, 4 and
+/// 5 (+700, +1,500, +3,000 and +700 m above the sea level) carry 1, 1,000,
+/// 0.1 and 100 m³/s, the ocean cells 1 and 3 carry 5,000 and 7 m³/s.
+fn octahedron_world_with_rivers() -> World {
+    let mut world = octahedron_world();
+    world.stages.push("erosion".into());
+    world
+        .add_field(
+            "discharge",
+            "m^3/s",
+            vec![1.0, 5_000.0, 1_000.0, 7.0, 0.1, 100.0],
+        )
+        .unwrap();
+    world
+}
+
+/// [`world_with_relief`] with a discharge that grows from 1 m³/s at the
+/// north pole to 10¹² m³/s at the south pole, `10^(6 (1 − z))`: on the
+/// land, `z > −0.02`, up to about 10^6.12 m³/s at the coast.
+pub(super) fn world_with_rivers() -> World {
+    let mut world = world_with_relief();
+    let discharge = world
+        .grid
+        .positions()
+        .iter()
+        .map(|p| 10.0_f64.powf(6.0 * (1.0 - p.z)))
+        .collect();
+    world.add_field("discharge", "m^3/s", discharge).unwrap();
+    world
+}
+
+/// The colour `base` with the river colour mixed in with the weight `w`,
+/// rounded half away from zero.
+fn mixed(base: Rgb8, w: f64) -> Rgb8 {
+    core::array::from_fn(|k| {
+        (f64::from(base[k]) * (1.0 - w) + f64::from(RIVER_COLOUR[k]) * w).round() as u8
+    })
+}
+
+/// The colours of the map of `surface_height` in `world`.
+fn elevation_colours(world: &World) -> Vec<Rgb8> {
+    let metrics = ElevationMetrics::of_world(world).unwrap();
+    let height = world.field("surface_height").unwrap();
+    let (colormap, range) = map_colours(height, world, Some(&metrics));
+    colormap.colours(&height.values, range)
+}
+
+#[test]
+fn river_colours_by_hand() {
+    let world = octahedron_world_with_rivers();
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let base = elevation_colours(&world);
+    // The largest discharge on land is 1,000 m³/s (cell 2; the ocean's
+    // 5,000 m³/s does not count), the smallest 0.1 m³/s (cell 4), so rivers
+    // are drawn down to max(1,000 / 1,000, 5 · 0.1) = 1 m³/s, with the
+    // weight 0.35 + 0.65 log₁₀₀₀ Q: cell 0 0.35, cell 2 exactly 1 (the
+    // river colour), cell 5 0.35 + 0.65 · 2/3; cell 4 and the ocean keep
+    // their colours.
+    let expected = vec![
+        mixed(base[0], 0.35),
+        base[1],
+        RIVER_COLOUR,
+        base[3],
+        base[4],
+        mixed(base[5], 0.35 + 0.65 * 2.0 / 3.0),
+    ];
+    assert_eq!(river_colours(&world, Some(&metrics)), Some(expected));
+    // Cell 0 by hand: +700 m on the land scale of 0 to +9,000 m (the
+    // chart's axis), t = 7/90, 4t = 0.3111 of the way from [46, 120, 56] to
+    // [138, 172, 82]: [74.62, 136.18, 64.09] → [75, 136, 64]; then 0.65 of
+    // it and 0.35 of [10, 40, 190]: [52.25, 102.4, 108.1] → [52, 102, 108].
+    assert_eq!(base[0], [75, 136, 64]);
+    assert_eq!(
+        river_colours(&world, Some(&metrics)).unwrap()[0],
+        [52, 102, 108]
+    );
+    // Without the metrics the elevation map spans the heights' own range.
+    let auto = {
+        let height = world.field("surface_height").unwrap();
+        let (colormap, range) = map_colours(height, &world, None);
+        colormap.colours(&height.values, range)
+    };
+    assert_eq!(river_colours(&world, None).unwrap()[1], auto[1]);
+    assert_eq!(river_colours(&world, None).unwrap()[2], RIVER_COLOUR);
+}
+
+#[test]
+fn river_colours_without_rivers() {
+    // No discharge, or no surface height: no river map.
+    assert_eq!(river_colours(&octahedron_world(), None), None);
+    let mut world = octahedron_world_with_rivers();
+    world.fields.retain(|f| f.name != "surface_height");
+    assert_eq!(river_colours(&world, None), None);
+
+    // A cell exactly at the sea level is ocean to the drainage graph: its
+    // 5,000 m³/s are neither drawn nor counted, as in `river_colours_by_hand`.
+    let mut world = octahedron_world_with_rivers();
+    world.fields[0].values[1] = world.sea_level_m;
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let base = elevation_colours(&world);
+    let expected = vec![
+        mixed(base[0], 0.35),
+        base[1],
+        RIVER_COLOUR,
+        base[3],
+        base[4],
+        mixed(base[5], 0.35 + 0.65 * 2.0 / 3.0),
+    ];
+    assert_eq!(river_colours(&world, Some(&metrics)), Some(expected));
+
+    // A coarse world: the largest discharge on land is 10 m³/s and the
+    // smallest 0.5 m³/s, so rivers are drawn down to max(10 / 1,000,
+    // 5 · 0.5) = 2.5 m³/s, not to 0.01 m³/s, with the weight
+    // 0.35 + 0.65 ln(Q / 2.5) / ln 4: cell 0 (3 m³/s) 0.35 + 0.65 · 0.1315,
+    // cell 2 the river colour, cell 5 (2 m³/s) not drawn.
+    let mut world = octahedron_world_with_rivers();
+    world.fields[1].values = vec![3.0, 5_000.0, 10.0, 7.0, 0.5, 2.0];
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let base = elevation_colours(&world);
+    let weight = |q: f64| 0.35 + 0.65 * (q / 2.5).ln() / 4.0_f64.ln();
+    assert!((weight(3.0) - (0.35 + 0.65 * 0.1315)).abs() < 1e-4);
+    let expected = vec![
+        mixed(base[0], weight(3.0)),
+        base[1],
+        RIVER_COLOUR,
+        base[3],
+        base[4],
+        base[5],
+    ];
+    assert_eq!(river_colours(&world, Some(&metrics)), Some(expected));
+
+    // Discharges that are not finite are not drawn and do not count: the
+    // largest is then 100 m³/s (cell 5) and the smallest 1 m³/s (cell 0),
+    // so rivers are drawn down to max(0.1, 5) = 5 m³/s: cell 5 alone, in
+    // the river colour.
+    let mut world = octahedron_world_with_rivers();
+    world.fields[1].values[2] = f64::INFINITY;
+    world.fields[1].values[4] = f64::NAN;
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let base = elevation_colours(&world);
+    let expected = vec![base[0], base[1], base[2], base[3], base[4], RIVER_COLOUR];
+    assert_eq!(river_colours(&world, Some(&metrics)), Some(expected));
+
+    // The threshold at the largest discharge, 5 · 2 = 10 m³/s: cell 2 alone
+    // is drawn, in the river colour (t = 1 where Q_min = Q_max).
+    let mut world = octahedron_world_with_rivers();
+    world.fields[1].values = vec![2.0, 5_000.0, 10.0, 7.0, 4.0, 3.0];
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let base = elevation_colours(&world);
+    let expected = vec![base[0], base[1], RIVER_COLOUR, base[3], base[4], base[5]];
+    assert_eq!(river_colours(&world, Some(&metrics)), Some(expected));
+
+    // No land, no positive discharge on land, or a single cell with a
+    // discharge (Q_min = 5 · 10 m³/s, above it): the elevation map alone.
+    for (heights, discharge) in [
+        (vec![-600.0; 6], vec![1.0; 6]),
+        (vec![200.0; 6], vec![0.0; 6]),
+        (vec![200.0; 6], vec![-1.0, 0.0, -0.0, -5.0, 0.0, -1e300]),
+        (vec![200.0; 6], vec![0.0, 0.0, 10.0, 0.0, -1.0, f64::NAN]),
+    ] {
+        let mut world = octahedron_world_with_rivers();
+        world.fields[0].values = heights;
+        world.fields[1].values = discharge;
+        let metrics = ElevationMetrics::of_world(&world).unwrap();
+        assert_eq!(
+            river_colours(&world, Some(&metrics)),
+            Some(elevation_colours(&world))
+        );
+    }
+}
+
+#[test]
+#[should_panic(
+    expected = "river_colours needs one discharge per height: 5 discharges for 6 heights"
+)]
+fn river_colours_need_one_discharge_per_height() {
+    // `write()` refuses such a world first (`check_fields`).
+    let mut world = octahedron_world_with_rivers();
+    world.fields[1].values.pop();
+    let _ = river_colours(&world, None);
+}
+
+#[test]
+fn writes_the_river_map_after_the_metrics() {
+    let dir = scratch("rivers");
+    let world = world_with_rivers();
+    let written = write_maps_of_width(&dir, &world, 64).unwrap();
+    let names: Vec<_> = written
+        .iter()
+        .map(|p| p.file_name().unwrap().to_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "grid.kgrid",
+            "height.kfield",
+            "height.png",
+            "zone.kfield",
+            "zone.png",
+            "surface_height.kfield",
+            "surface_height.png",
+            "discharge.kfield",
+            "discharge.png",
+            "metrics.txt",
+            "hypsometry.png",
+            "rivers.png",
+            "world.json"
+        ]
+    );
+    let metrics = ElevationMetrics::of_world(&world).unwrap();
+    let colours = river_colours(&world, Some(&metrics)).unwrap();
+    let cells = render::equirect_cells(&world.grid, 64);
+    let (width, height, pixels) = decode_png(&dir.join(RIVERS_FILE));
+    assert_eq!((width, height), (64, 32));
+    let expected: Vec<Rgb8> = cells.iter().map(|&c| colours[c as usize]).collect();
+    assert_eq!(pixels, expected);
+    // The rivers are drawn over the elevation map where the discharge is
+    // at least 10⁻³ of the largest on land (at the coast, z ≈ −0.02), so
+    // on land south of z ≈ 1 − 3.12/6 = 0.48: there the colour differs from
+    // that of surface_height.png; the ocean and the land north of it look
+    // the same.
+    let (_, _, map) = decode_png(&dir.join("surface_height.png"));
+    let positions = world.grid.positions();
+    let heights = &world.field("surface_height").unwrap().values;
+    let mut drawn = 0;
+    for (k, &c) in cells.iter().enumerate() {
+        let (z, land) = (positions[c as usize].z, heights[c as usize] > -700.0);
+        if land && z < 0.45 {
+            assert_ne!(pixels[k], map[k], "pixel {k}");
+            drawn += 1;
+        } else if !land || z > 0.51 {
+            assert_eq!(pixels[k], map[k], "pixel {k}");
+        }
+    }
+    assert!(drawn > 100, "{drawn}");
+
+    // A world without a discharge removes the earlier world's river map,
+    // and so does a rewrite that fails halfway.
+    let written = write_maps_of_width(&dir, &world_with_relief(), 64).unwrap();
+    assert!(!written.iter().any(|p| p.ends_with(RIVERS_FILE)));
+    assert!(!dir.join(RIVERS_FILE).exists());
+    write_maps_of_width(&dir, &world, 64).unwrap();
+    std::fs::remove_file(dir.join("zone.kfield")).unwrap();
+    std::fs::create_dir(dir.join("zone.kfield")).unwrap();
+    assert!(write_maps_of_width(&dir, &world, 64).is_err());
+    assert!(!dir.join(RIVERS_FILE).exists());
+    remove(&dir);
+}
+
+#[test]
+fn rejects_the_name_rivers_before_writing_anything() {
+    // The map of a field `rivers` would be overwritten by the river map,
+    // in any world.
+    for mut world in [world(), world_with_rivers()] {
+        world.fields[1].name = "rivers".into();
+        let dir = scratch("rivers_reserved");
+        let err = write(&dir, &world).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(err.to_string(), RIVERS_RESERVED);
+        assert!(!dir.exists(), "nothing is written");
+    }
 }
