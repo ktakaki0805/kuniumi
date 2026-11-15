@@ -10,10 +10,11 @@
 ## Goal
 
 The erosion settings that M3-03 defines (`kuniumi_world::ErosionSettings`:
-erodibility K, discharge exponent m, time step and step count) become part
-of a world's generation settings: checked with the others, recorded in
-`world.json` and written to and read from settings files, so that the
-Erosion stage of M3-05 can take them from `World::settings`.
+erodibility K, discharge exponent m, time step and step count, and the
+hillslope diffusivity K_d that M3-04 adds) become part of a world's
+generation settings: checked with the others, recorded in `world.json` and
+written to and read from settings files, so that the Erosion stage of M3-05
+can take them from `World::settings`.
 
 ## Scope
 
@@ -26,9 +27,10 @@ In:
   version-2 file is treated (refused, as other versions are now, or read
   with the default erosion settings) is decided when the ticket is
   refined.
-- Settings files (D-15): keys for the four settings, with the human-unit
-  key for the time step (years) beside the SI one, the checks and messages
-  of the existing keys, and `load(&write(p, s)) == (p, s)` bit for bit.
+- Settings files (D-15): keys for the five settings, with the human-unit
+  keys for the time step (years) and the diffusivity (m²/yr) beside the SI
+  ones, the checks and messages of the existing keys, and
+  `load(&write(p, s)) == (p, s)` bit for bit.
 - The CLI's tests that list the lines of `world.json` and of settings files.
 
 Out:

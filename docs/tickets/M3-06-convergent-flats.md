@@ -42,6 +42,15 @@ authors' library, RichDEM, is not a source (docs/conventions.md,
 "Dependencies and tools", allows porting only from permissively licensed
 code).
 
+From M3-04 (its Result): the routing across the flat interiors is
+sensitive to perturbations far below any physical scale. The default
+hillslope diffusion changes a step's heights by at most 1.4 × 10⁻⁵ m at
+10,000 cells, yet after 100 steps on the Earth world of seed 1 at 100,000
+cells 4,310 cells differ by more than 1 m from the run without it, by up to
+938 m where a knickpoint took another way into a plateau (22.6° S,
+178.8° E), while the land statistics agree. A flat-resolution step would
+make that choice from the terrain rather than from rounding.
+
 ## Acceptance criteria
 
 - [ ] The decision and its evidence (M3-05's maps) recorded.

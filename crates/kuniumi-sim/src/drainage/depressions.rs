@@ -197,7 +197,7 @@ pub fn depression_depth_m(height_m: &[f64], filled_height_m: &[f64]) -> Vec<f64>
 /// positive `x` and the next below a negative one; `+∞` for `f64::MAX`
 /// and `−0` for `−2⁻¹⁰⁷⁴`. Exact, on the bit pattern. (`f64::next_up`
 /// needs Rust 1.86; the minimum supported version is 1.85.) The river
-/// incision of `stages::erosion` uses it too.
+/// incision and the hillslope diffusion of `stages::erosion` use it too.
 pub(crate) fn next_up(x: f64) -> f64 {
     const SIGN: u64 = 1 << 63;
     let bits = x.to_bits();

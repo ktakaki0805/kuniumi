@@ -14,6 +14,10 @@
 //!   `receiver_distances_by_hand`;
 //! - the panics of [`incise`] and [`erode`];
 //! - `golden_fingerprint_of_an_eroded_earth_world`.
+//!
+//! Since ticket M3-04 a step of [`erode`] also diffuses the land; these
+//! tests run it without diffusion (`settings`), and `diffusion_tests.rs`
+//! tests the whole step.
 #![allow(clippy::disallowed_methods)]
 
 use core::cmp::Ordering;
@@ -44,14 +48,14 @@ const ONE_MM_PER_YEAR_M_S: f64 = 1.0e-3 / SECONDS_PER_YEAR;
 const STEP_YEARS: [f64; 3] = [1.0e4, 1.0e5, 1.0e6];
 
 /// The 10,000-cell grid of seed 1, built once.
-fn grid() -> &'static SphereGrid {
+pub(super) fn grid() -> &'static SphereGrid {
     static GRID: OnceLock<SphereGrid> = OnceLock::new();
     GRID.get_or_init(|| SphereGrid::fibonacci(CELLS, 1).expect("grid"))
 }
 
 /// Earth's worlds at 10,000 cells for seeds 1–3, through the Crust stage,
 /// generated once.
-fn worlds() -> &'static [World] {
+pub(super) fn worlds() -> &'static [World] {
     static WORLDS: OnceLock<Vec<World>> = OnceLock::new();
     WORLDS.get_or_init(|| {
         let settings = Settings {
@@ -74,7 +78,7 @@ fn worlds() -> &'static [World] {
 /// (`ocean_volume_m3 = 0`), through the Crust stage, generated once: the
 /// sea level is the lowest height, which the trench cells share, so
 /// several cells lie exactly at the sea level.
-fn dry_world() -> &'static World {
+pub(super) fn dry_world() -> &'static World {
     static WORLD: OnceLock<World> = OnceLock::new();
     WORLD.get_or_init(|| {
         let settings = Settings {
@@ -174,9 +178,14 @@ fn surfaces() -> Vec<Surface<'static>> {
     out
 }
 
-/// The default settings with a time step of `years` and `steps` steps.
+/// The default settings with a time step of `years` and `steps` steps,
+/// without hillslope diffusion (`diffusivity_m2_s` 0): these tests check
+/// the incision's own guarantees, such as "no height rises", which the
+/// diffusion of each step (ticket M3-04) does not keep; the tests of the
+/// whole step are in `diffusion_tests.rs`.
 fn settings(years: f64, steps: u32) -> ErosionSettings {
     ErosionSettings {
+        diffusivity_m2_s: 0.0,
         time_step_s: years * SECONDS_PER_YEAR,
         steps,
         ..ErosionSettings::default()
@@ -184,7 +193,7 @@ fn settings(years: f64, steps: u32) -> ErosionSettings {
 }
 
 /// The placeholder precipitation on every cell of `grid`.
-fn rain(grid: &SphereGrid) -> Vec<f64> {
+pub(super) fn rain(grid: &SphereGrid) -> Vec<f64> {
     vec![PLACEHOLDER_PRECIPITATION_M_S; grid.len()]
 }
 
@@ -296,6 +305,7 @@ fn one_step_by_hand() {
     let settings = ErosionSettings {
         erodibility: 0.25,
         discharge_exponent: 0.5,
+        diffusivity_m2_s: 0.0,
         time_step_s: 1.0,
         steps: 1,
     };
@@ -369,6 +379,7 @@ fn extreme_settings_stay_finite() {
         let settings = ErosionSettings {
             erodibility,
             discharge_exponent,
+            diffusivity_m2_s: 0.0,
             time_step_s,
             steps: 1,
         };
@@ -390,6 +401,7 @@ fn extreme_settings_stay_finite() {
     let settings = ErosionSettings {
         erodibility: 1e200,
         discharge_exponent: 1.0,
+        diffusivity_m2_s: 0.0,
         time_step_s: 1e200,
         steps: 1,
     };
@@ -436,6 +448,7 @@ fn rounding_never_raises_an_eroded_cell() {
     let settings = ErosionSettings {
         erodibility: 1e-30,
         discharge_exponent: 1.0,
+        diffusivity_m2_s: 0.0,
         time_step_s: 1.0,
         steps: 1,
     };
@@ -1088,11 +1101,14 @@ fn erode_needs_one_height_per_cell() {
 #[test]
 fn golden_fingerprint_of_an_eroded_earth_world() {
     // The Earth world of seed 1 at 10,000 cells after 10 steps of the
-    // default settings, with its own uplift and the placeholder
+    // default settings without diffusion (`settings`; the incision of
+    // ticket M3-03 alone), with its own uplift and the placeholder
     // precipitation: FNV-1a over the bits of the heights (f64,
     // little-endian). A change means that the same world erodes
     // differently. Recorded after the other tests passed and the images of
-    // out/M3-03 were viewed (ticket M3-03, Result).
+    // out/M3-03 were viewed (ticket M3-03, Result); unchanged by ticket
+    // M3-04, whose default step diffuses as well
+    // (`diffusion_tests::golden_fingerprint_of_an_eroded_and_diffused_earth_world`).
     let world = &worlds()[0];
     let uplift = &world.field(UPLIFT_RATE).expect("uplift").values;
     let precipitation = rain(&world.grid);

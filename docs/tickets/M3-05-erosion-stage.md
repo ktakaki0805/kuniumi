@@ -43,6 +43,18 @@ deposition (M7-02) and harder old crust (M7-04), which would slow this,
 come later; the drainage networks drawn on the planed interiors may show
 the parallel flow lines of M3-06.
 
+From M3-04 (its Result): each step now diffuses the land after the
+incision, with the Earth diffusivity `K_d` = 5 × 10⁻³ m²/yr. At the
+default resolution (28 km between centres) this is sub-grid: the diffusion
+length over 10 Myr is 220 m, and a default step changes the heights of
+the Earth world of seed 1 at 10,000 cells by at most 1.4 × 10⁻⁵ m (though
+such changes can redirect rivers on flats, M3-06). An effective `K_d` for
+coarse grids (5,300 m²/yr, a tenth of the explicit limit per step at
+100,000 cells, visibly widens and smooths the valleys) is a calibration
+choice for the owner. One `erode` step at 650,000 cells takes about 13 ms
+more with the diffusion (one iteration of its solver) plus 30 ms once per
+call to build the Laplacian.
+
 ## Acceptance criteria
 
 - [ ] Hack exponent between 0.5 and 0.7 for Earth defaults on seeds 1–5 (each

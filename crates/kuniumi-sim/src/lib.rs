@@ -21,6 +21,7 @@ use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, World};
 
 pub mod drainage;
 pub mod metrics;
+pub mod operators;
 pub mod pipeline;
 pub mod stages;
 

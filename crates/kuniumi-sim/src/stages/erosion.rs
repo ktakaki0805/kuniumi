@@ -7,30 +7,32 @@
 //! Bovy & Braun 2019 if routing comes to dominate); stack order and
 //! discharge on the drainage graph of [`crate::drainage`]; implicit
 //! stream-power solve (Braun & Willett 2013, n = 1; [`incise`]); hillslope
-//! diffusion; deposition (Yuan et al. 2019); marine sediment; isostatic
-//! rebound. Later: lithology-dependent K and glacial erosion.
+//! diffusion ([`diffuse`]); deposition (Yuan et al. 2019); marine sediment;
+//! isostatic rebound. Later: lithology-dependent K and glacial erosion.
 //!
-//! So far (ticket M3-03): river incision against uplift,
-//! `∂h/∂t = U − K Qᵐ S` with n = 1. [`erode`] runs
-//! [`ErosionSettings::steps`] steps of [`ErosionSettings::time_step_s`] on a
-//! surface, each one the first four steps of the design (侵食と地形発達 /
-//! 1ステップの処理): it fills the closed depressions
-//! ([`fill_depressions`]), builds the drainage graph on the filled surface
-//! ([`Drainage::build`]), accumulates the discharge from the precipitation
-//! down that graph ([`Drainage::accumulate`]), and erodes the original
-//! surface along it ([`incise`]). Until the Climate stage exists the
+//! So far (tickets M3-03 and M3-04): river incision against uplift and
+//! hillslope diffusion, `∂h/∂t = U − K Qᵐ S + K_d ∇²h` with n = 1.
+//! [`erode`] runs [`ErosionSettings::steps`] steps of
+//! [`ErosionSettings::time_step_s`] on a surface, each one the first five
+//! steps of the design (侵食と地形発達 / 1ステップの処理): it fills the closed
+//! depressions ([`fill_depressions`]), builds the drainage graph on the
+//! filled surface ([`Drainage::build`]), accumulates the discharge from the
+//! precipitation down that graph ([`Drainage::accumulate`]), erodes the
+//! original surface along it ([`incise`]), and diffuses the land
+//! ([`diffuse`]). Until the Climate stage exists the
 //! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere. Ticket
 //! M3-05 wires the stage into the pipeline, M3-07 makes
 //! [`ErosionSettings`] part of the world's settings.
 //!
 //! Everything here depends only on its inputs, through integer
-//! bookkeeping, IEEE `+ − × ÷`, comparisons, [`det::pow`] and exact
-//! operations on bit patterns, in the fixed order of the drainage stack
-//! (docs/conventions.md, "Determinism", rule 2), so it gives the same
-//! result on every platform; it draws no random numbers.
+//! bookkeeping, IEEE `+ − × ÷`, `sqrt`, comparisons, [`det::pow`] and exact
+//! operations on bit patterns, in the fixed order of the drainage stack and
+//! of the cells (docs/conventions.md, "Determinism", rule 2), so it gives
+//! the same result on every platform; it draws no random numbers.
 //!
-//! The implicit solve is sequential along the drainage stack; the future GPU
-//! path will need a different algorithm and is only statistically equivalent.
+//! The implicit solves are sequential, along the drainage stack and over
+//! the cells; the future GPU path will need different algorithms and is
+//! only statistically equivalent.
 
 use kuniumi_math::det;
 use kuniumi_math::units::SECONDS_PER_YEAR;
@@ -38,6 +40,7 @@ use kuniumi_sphere::SphereGrid;
 use kuniumi_world::ErosionSettings;
 
 use crate::drainage::{Drainage, fill_depressions, next_up};
+use crate::operators::{Laplacian, Solve};
 
 /// The precipitation (m/s) that drives erosion until the Climate stage
 /// exists: 1 m/yr everywhere (3.17 × 10⁻⁸ m/s), about Earth's global mean
@@ -332,32 +335,43 @@ pub struct ErosionInputs<'a> {
     pub precipitation_m_s: &'a [f64],
 }
 
-/// Runs `settings.steps` steps of river erosion on `height_m` (m, one
-/// height per cell of `inputs.grid`, in place), and reports
-/// `(k + 1) / steps` to `progress` after step `k`; with 0 steps the heights
-/// are unchanged and nothing is reported.
+/// Runs `settings.steps` steps of erosion on `height_m` (m, one height per
+/// cell of `inputs.grid`, in place), and reports `(k + 1) / steps` to
+/// `progress` after step `k`; with 0 steps the heights are unchanged and
+/// nothing is reported.
 ///
 /// Each step (module documentation): the closed depressions of the
 /// current surface are filled ([`fill_depressions`]); the drainage graph is
 /// built on the filled surface ([`Drainage::build`]); the discharge
 /// `Q_i` (m³/s) is accumulated down it from `P_i a_i R²`, the
 /// precipitation `P_i` (m/s) times the area of the cell (m²)
-/// ([`Drainage::accumulate`]); and the original surface is eroded along the
-/// graph by [`incise`], with the distances of [`receiver_distances_m`].
-/// The routing follows the filled surface, the erosion acts on the
-/// original one (design, 侵食と地形発達 / 1ステップの処理).
+/// ([`Drainage::accumulate`]); the original surface is eroded along the
+/// graph by [`incise`], with the distances of [`receiver_distances_m`];
+/// and the land is diffused by [`diffuse`], with the [`Laplacian`] of the
+/// grid, built once per call (neither where
+/// [`ErosionSettings::diffusivity_m2_s`] is 0, when `diffuse` would change
+/// nothing). The routing follows the filled surface, the
+/// erosion acts on the original one (design, 侵食と地形発達 /
+/// 1ステップの処理).
 ///
-/// The sea level is fixed, and so are the ocean cells; see [`incise`] for
-/// what the step guarantees. A step costs a fill (O(n log n)), the graph,
-/// one accumulation and the solve (O(n)).
+/// The sea level is fixed, and so are the ocean cells. See [`incise`] for
+/// what the incision guarantees (all of it holds for the whole step when
+/// [`ErosionSettings::diffusivity_m2_s`] is 0) and [`diffuse`] for the
+/// diffusion, which keeps the land above the sea level but may raise a
+/// valley floor or, rarely, leave a cell without a lower neighbour (the
+/// next step's fill routes across it). A step costs a fill
+/// (O(n log n)), the graph, one accumulation, the incision (O(n)) and the
+/// diffusion (O(n) per iteration of its solver; one or two with the
+/// default settings).
 ///
 /// # Panics
 ///
 /// If `height_m`, the uplift or the precipitation does not hold one value
 /// per cell; if the radius is not finite and positive; if a precipitation
 /// rate is negative or not finite; if a height, an uplift rate or the sea
-/// level is not finite; if `settings` is not valid. All are checked before
-/// the first step, so with 0 steps as well.
+/// level is not finite; if `settings` is not valid; if `Δt K_d / R²` is
+/// not finite. All are checked before the first step, so
+/// with 0 steps as well.
 pub fn erode(
     inputs: &ErosionInputs<'_>,
     settings: &ErosionSettings,
@@ -412,7 +426,15 @@ pub fn erode(
     if let Err(e) = settings.validate() {
         panic!("erode needs valid settings: {e}");
     }
+    let diffusion = step_diffusion(radius_m, settings);
+    assert!(
+        diffusion.is_finite(),
+        "erode needs a finite step Δt K_d / R², got {diffusion}"
+    );
 
+    // Without diffusivity `diffuse` changes nothing: skip it, and the
+    // Laplacian (about 30 ms at 650,000 cells).
+    let laplacian = (settings.diffusivity_m2_s > 0.0).then(|| Laplacian::new(grid));
     let inflow_m3_s: Vec<f64> = (0..n as u32)
         .map(|i| precipitation_m_s[i as usize] * grid.area_sr(i) * radius_m * radius_m)
         .collect();
@@ -428,6 +450,9 @@ pub fn erode(
             discharge_m3_s: &discharge_m3_s,
         };
         incise(&network, uplift_rate_m_s, sea_level_m, settings, height_m);
+        if let Some(laplacian) = &laplacian {
+            diffuse(laplacian, radius_m, sea_level_m, settings, height_m);
+        }
         progress(f64::from(k + 1) / f64::from(settings.steps));
     }
     debug_assert!(
@@ -436,5 +461,110 @@ pub fn erode(
     );
 }
 
+/// `c = Δt K_d / R²` (dimensionless): the diffusion of one step on the
+/// unit sphere, as [`Laplacian::implicit_step`] computes it.
+fn step_diffusion(radius_m: f64, settings: &ErosionSettings) -> f64 {
+    settings.time_step_s * settings.diffusivity_m2_s / (radius_m * radius_m)
+}
+
+/// One step of hillslope diffusion, `∂h/∂t = K_d ∇²h`, on `height_m` (m,
+/// one height per cell of the grid of `laplacian`, on the datum of
+/// `sea_level_m`, in place), with `K_d` and `Δt` from `settings`
+/// ([`ErosionSettings::diffusivity_m2_s`], [`ErosionSettings::time_step_s`])
+/// on a planet of radius `radius_m` (design document, 侵食と地形発達 /
+/// 1ステップの処理, step 5: 「斜面拡散。拡散項を陰的に解きます。」).
+///
+/// The land cells (`h_i > sea_level_m`) diffuse by one backward-Euler step
+/// of the finite-volume Laplacian ([`Laplacian::implicit_step`]), solved by
+/// the conjugate gradient method; the ocean cells are a fixed boundary and
+/// keep their heights. A land cell sees an ocean neighbour at the sea level,
+/// not at its floor: hillslope creep carries soil to the shore, as rivers
+/// grade to the water surface in [`incise`], and a floor kilometres below
+/// would drag the coast under the sea, which is the transport of marine
+/// sediment (design, step 7; milestone 7). With the sea level as the
+/// boundary value the exact step keeps every land cell above the sea level
+/// and not above the highest land cell (a discrete maximum principle), for
+/// every time step; where the solver's tolerance would put a land cell at
+/// or below the sea level, it is set to the least double above it, so land
+/// stays land. On a surface without ocean the step conserves
+/// `Σ h_i a_i` up to rounding.
+///
+/// With [`ErosionSettings::diffusivity_m2_s`] 0 the heights are unchanged
+/// bit for bit. Returns what the solver did.
+///
+/// # Panics
+///
+/// If `height_m` does not hold one height per cell; if `radius_m` is not
+/// finite and positive; if a height or the sea level is not finite; if
+/// `settings` is not valid ([`ErosionSettings::validate`]); if
+/// `Δt K_d / R²` is not finite.
+pub fn diffuse(
+    laplacian: &Laplacian,
+    radius_m: f64,
+    sea_level_m: f64,
+    settings: &ErosionSettings,
+    height_m: &mut [f64],
+) -> Solve {
+    let n = laplacian.len();
+    assert_eq!(
+        height_m.len(),
+        n,
+        "diffuse needs one height per cell: {} values for {n} cells",
+        height_m.len()
+    );
+    // Written so that NaN fails.
+    assert!(
+        radius_m > 0.0 && radius_m.is_finite(),
+        "diffuse needs a finite positive radius, got {radius_m}"
+    );
+    assert!(
+        sea_level_m.is_finite(),
+        "diffuse needs a finite sea level, got {sea_level_m}"
+    );
+    if let Some(i) = height_m.iter().position(|h| !h.is_finite()) {
+        panic!("diffuse needs finite heights: cell {i} has {}", height_m[i]);
+    }
+    if let Err(e) = settings.validate() {
+        panic!("diffuse needs valid settings: {e}");
+    }
+    let c = step_diffusion(radius_m, settings);
+    assert!(
+        c.is_finite(),
+        "diffuse needs a finite step Δt K_d / R², got {c}"
+    );
+
+    let land: Vec<bool> = height_m.iter().map(|&h| h > sea_level_m).collect();
+    let mut values: Vec<f64> = height_m
+        .iter()
+        .zip(&land)
+        .map(|(&h, &is_land)| if is_land { h } else { sea_level_m })
+        .collect();
+    let solve = laplacian.implicit_step(
+        radius_m,
+        settings.diffusivity_m2_s,
+        settings.time_step_s,
+        &land,
+        &mut values,
+    );
+    for i in 0..n {
+        if land[i] {
+            let v = values[i];
+            height_m[i] = if v > sea_level_m {
+                v
+            } else {
+                next_up(sea_level_m)
+            };
+        }
+    }
+    debug_assert!(
+        height_m.iter().all(|h| h.is_finite()),
+        "diffuse produced a height that is not finite"
+    );
+    solve
+}
+
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod diffusion_tests;

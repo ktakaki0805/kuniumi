@@ -363,6 +363,27 @@ section: every change after which an existing seed produces a different world
   precipitation of 1 m/yr. About 90 ms per step for an Earth world of
   650,000 cells, in release. The Erosion stage is wired into the pipeline
   by M3-05 (M3-03).
+- `kuniumi_sim::operators`: `Laplacian`, the finite-volume Laplacian of the
+  spherical grid (flux `κ (u_j − u_i)/(d_ij R) · ℓ_ij R` across each
+  Voronoi edge, the weights `ℓ/d` symmetric bit for bit; `apply` gives
+  `∇²u` cell by cell, consistent only where the Hessian is isotropic: for
+  `u = z` the largest error is 1.2 %, 0.40 % and 0.13 % of `2/R²` at 10⁴,
+  10⁵ and 10⁶ cells, for degree-2 harmonics about 3 % RMS at every size,
+  while the implicit step's solutions converge at second order in the
+  spacing), and `implicit_step`, one backward-Euler step of `∂u/∂t = κ ∇²u`
+  on the free cells with the others fixed (Dirichlet), solved by the
+  conjugate gradient method preconditioned by the diagonal, dot products in
+  index order, relative residual 1e-12 (`SOLVER_TOLERANCE`), at most
+  10,000 iterations (`SOLVER_MAX_ITERATIONS`), reported in `Solve`; stable
+  for any step (tested to 10⁸ times the explicit limit); on a closed domain
+  `Σ a u` kept within rounding (M3-04).
+- Hillslope diffusion `K_d ∇²h` in the erosion step:
+  `kuniumi_sim::stages::erosion::diffuse` diffuses the land cells, the
+  ocean a fixed boundary seen at the sea level, so land stays land;
+  `kuniumi_world::ErosionSettings::diffusivity_m2_s` (`K_d`, default
+  5 × 10⁻³ m²/yr, the mean of 34 sites of McKean et al. 1993, finite and
+  not negative). About
+  13 ms per step for an Earth world of 650,000 cells, in release (M3-04).
 
 ### Changed
 
@@ -567,6 +588,10 @@ section: every change after which an existing seed produces a different world
   whenever the kept lines fit, and shows the marker from one row more:
   104 px for an Earth-like world's elevation layer at 1280 px wide. Where
   every line fits it is unchanged (MV-07).
+- `kuniumi_sim::stages::erosion::erode` diffuses the land after the
+  incision in every step (step 5 of the design's erosion step); with
+  `diffusivity_m2_s` 0 it is the incision of M3-03 bit for bit. The
+  Erosion stage is not yet in the pipeline, so no world changes (M3-04).
 
 ### Removed
 
