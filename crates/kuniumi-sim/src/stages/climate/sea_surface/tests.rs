@@ -15,10 +15,12 @@
 //!   `extreme_planets_stay_finite`;
 //! - criterion 4: `golden_fingerprint_of_earth_sea_surface`.
 //!
+//! Ticket M4-09 (the multigrid): `a_substep_matches_the_jacobi_solver`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1
 //! with its M4-02 temperatures, M4-03 winds and M4-04 currents: 40,000
-//! cells in release builds, the world of the calibration (about two
-//! minutes with the energy balance's own run), and 10,000 cells in debug
+//! cells in release builds, the world of the calibration (about half a
+//! minute with the energy balance's own run), and 10,000 cells in debug
 //! builds, where the world differs and criterion 1 and the calibration
 //! have the thresholds stated in the tests.
 #![allow(clippy::disallowed_methods)]
@@ -1025,6 +1027,72 @@ fn a_month_is_below_twelve() {
 // Golden fingerprint.
 
 #[test]
+fn a_substep_matches_the_jacobi_solver() {
+    // Ticket M4-09: a sub-step of July (10,000 cells, Earth, from the
+    // periodic state) by BiCGSTAB with the multigrid of the annual-mean
+    // matrix against the same step with the Jacobi preconditioner of
+    // `sparse::bicgstab` that the model used before, its return vector
+    // solved the same way: within 10⁻⁵ K (the bound of the energy balance's
+    // `a_substep_matches_the_jacobi_solver`); and the multigrid needs fewer
+    // iterations.
+    let run = earth_10k();
+    let model = &earth_sea_10k().model;
+    let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
+    let start = earth_sea_10k().temperature.sea_level_k[6].clone();
+    let mut multigrid = start.clone();
+    let budget = model.substep(6, &mut multigrid, &insolation[6]);
+    // The Jacobi step, as `step` and `solve_with_return` did it.
+    let n = model.len();
+    let p = model.balance().params();
+    let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
+    let dt = model.balance().substep_s();
+    let areas = model.balance().areas_sr();
+    let capacities = model.balance().heat_capacity_j_m2_k();
+    let u = &model.upwelling_coupling[6];
+    let t_fz = model.params().freezing_temperature_k;
+    let albedos = model.balance().albedos(&start);
+    let matrix = model.matrix(&model.step_mass, u);
+    let mut z = vec![0.0; n];
+    crate::sparse::bicgstab(&matrix, &model.share, 1e-12, SOLVER_MAX_ITERATIONS, &mut z);
+    let mut total = 0.0;
+    for &x in u {
+        total += x;
+    }
+    let mut rhs = Vec::with_capacity(n);
+    for i in 0..n {
+        let q = insolation[6][i] * (1.0 - albedos[i]);
+        rhs.push(
+            areas[i] * (capacities[i] * start[i] / dt + q - a + b * ZERO_CELSIUS_K) + u[i] * t_fz
+                - model.share[i] * total * t_fz,
+        );
+    }
+    let mut jacobi = start.clone();
+    let solve = crate::sparse::bicgstab(
+        &matrix,
+        &rhs,
+        SOLVER_TOLERANCE,
+        SOLVER_MAX_ITERATIONS,
+        &mut jacobi,
+    );
+    let (mut uy, mut denominator) = (0.0, 0.0);
+    for i in 0..n {
+        uy += u[i] * jacobi[i];
+        denominator += model.step_mass[i] * z[i];
+    }
+    for i in 0..n {
+        jacobi[i] += z[i] * (uy / denominator);
+    }
+    let worst = largest_difference_k(&multigrid, &jacobi);
+    println!(
+        "multigrid {} iterations, Jacobi {}; largest difference {worst:e} K",
+        budget.solve.iterations, solve.iterations
+    );
+    assert!(budget.solve.converged() && solve.converged());
+    assert!(worst <= 1e-5, "{worst:e}");
+    assert!(budget.solve.iterations < solve.iterations);
+}
+
+#[test]
 fn golden_fingerprint_of_earth_sea_surface() {
     // Earth's world of seed 1 on 10,000 cells through the Crust stage, the
     // periodic state of its energy balance (ticket M4-02), its winds and
@@ -1034,7 +1102,9 @@ fn golden_fingerprint_of_earth_sea_surface() {
     // little-endian, cells in index order). `monthly_sea_surface_temperature`
     // gives the same bits. A change means that the same world has a
     // different sea surface. Recorded after the other tests passed and the
-    // images of out/M4-05 were viewed (ticket M4-05, Result).
+    // images of out/M4-05 were viewed (ticket M4-05, Result); recorded again
+    // when the solver became the multigrid, after the other tests passed
+    // and the images of out/M4-09 were viewed (ticket M4-09).
     let run = earth_10k();
     let sea = earth_sea_10k();
     let t = &sea.temperature;
@@ -1076,4 +1146,4 @@ fn golden_fingerprint_of_earth_sea_surface() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
-const GOLDEN_FINGERPRINT: u64 = 0xD958_B31C_77E8_4D41;
+const GOLDEN_FINGERPRINT: u64 = 0x8DAD_2930_A815_9B7D;

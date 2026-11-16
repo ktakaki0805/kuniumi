@@ -131,8 +131,10 @@ parallel with later milestones.
 | [M4-04](M4-04-ocean-gyres.md) | Ocean basins and wind-driven gyres | M4-03 |
 | [M4-05](M4-05-sst-upwelling.md) | Sea-surface temperature transport and upwelling | M4-04 |
 | [M4-06](M4-06-moisture-precipitation.md) | Moisture, precipitation and rain shadows | M4-05 |
-| [M4-09](M4-09-climate-cost.md) | The climate model at 650,000 cells | M4-02 |
-| [M4-07](M4-07-climate-stage.md) | Climate stage and monthly outputs | M4-06, M4-09 |
+| [M4-09](M4-09-climate-cost.md) | Multigrid for the climate model at 650,000 cells | M4-02 |
+| [M4-14](M4-14-moisture-advection-cost.md) | The moisture's advection at 650,000 cells | M4-09 |
+| [M4-07](M4-07-climate-stage.md) | Climate stage and monthly outputs | M4-06, M4-09, M4-14 |
+| [M4-15](M4-15-periodic-state-solver.md) | The periodic state of slowly converging planets | M4-09 |
 | [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
 | [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-12](M4-12-mixed-layer.md) | Sea-surface fronts: a mixed layer under the atmosphere | M4-05 |

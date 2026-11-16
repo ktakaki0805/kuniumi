@@ -100,8 +100,14 @@
 //!
 //! with `q_e = ρ_w c_w Q_e / R²`. Without the return the matrix is a
 //! non-symmetric M-matrix (the upwind fluxes), the same in every sub-step
-//! of a month: it is solved by [`crate::sparse::bicgstab`] to a relative
-//! residual of [`SOLVER_TOLERANCE`], started from the state. The return is
+//! of a month: it is solved by BiCGSTAB preconditioned by the multigrid of
+//! [`crate::multigrid`] ([`crate::multigrid::bicgstab`], ticket M4-09) to
+//! a relative residual of [`SOLVER_TOLERANCE`], started from the state.
+//! One hierarchy serves the twelve months, which differ only in the
+//! upwelling on the diagonal: that of the matrix with the annual-mean
+//! upwelling, with the aggregates and prolongators of the energy balance's
+//! symmetric sub-step matrix (the V-cycle smooths each month's own matrix
+//! on the finest level). The return is
 //! a rank-one term, `A − s uᵀ`, solved exactly by the Sherman–Morrison
 //! formula with the vector `z = A⁻¹ s` of each month, computed once in
 //! [`SeaSurfaceModel::new`]: `T' = y + z (u·y) / (1 − u·z)` with
@@ -113,8 +119,7 @@
 //! time, a cell's heat capacity over the heat its outflow carries, is
 //! 2.6 days on 10,000 cells and 1.2 days on 40,000, and it shortens as the
 //! cells shrink (ticket M4-05). The
-//! energy balance without currents keeps its conjugate-gradient path, bit
-//! for bit.
+//! energy balance without currents keeps its conjugate-gradient path.
 //!
 //! # The periodic state
 //!
@@ -186,11 +191,12 @@ use super::energy_balance::{
 };
 use super::insolation::{MONTHS, monthly_insolation};
 use super::ocean::{OceanCurrents, OceanParams, WindStress, monthly_wind_stress};
+use crate::multigrid::{self, Multigrid};
 use crate::operators::Solve;
-use crate::sparse::{SparseMatrix, bicgstab};
+use crate::sparse::SparseMatrix;
 
 /// The relative residual at which the solve of a sub-step stops
-/// ([`crate::sparse::bicgstab`]): 10⁻¹⁰, as the energy balance's.
+/// ([`crate::multigrid::bicgstab`]): 10⁻¹⁰, as the energy balance's.
 pub const SOLVER_TOLERANCE: f64 = 1e-10;
 
 /// The iterations after which a solve stops whether or not it has reached
@@ -456,6 +462,10 @@ pub struct SeaSurfaceModel {
     share: Vec<f64>,
     /// `a_i (C_i/Δt + B)`.
     step_mass: Vec<f64>,
+    /// The multigrid of the sub-step's matrix with the annual-mean
+    /// upwelling, with the prolongators of the energy balance's sub-step
+    /// matrix: the preconditioner of every month's sub-steps and returns.
+    step_multigrid: Multigrid,
     /// `z = A⁻¹ s` of each month's sub-step matrix, empty where the month
     /// has no upwelling or the planet no ocean.
     returns: [Vec<f64>; MONTHS],
@@ -616,6 +626,15 @@ impl SeaSurfaceModel {
         let step_mass: Vec<f64> = (0..n)
             .map(|i| areas[i] * (capacities[i] / dt + b))
             .collect();
+        let mean_matrix = {
+            let base = operator.diagonal();
+            operator.with_diagonal(
+                (0..n)
+                    .map(|i| base[i] + step_mass[i] + mean_upwelling_coupling[i])
+                    .collect(),
+            )
+        };
+        let step_multigrid = Multigrid::with_prolongators_of(mean_matrix, balance.step_multigrid());
         let mut model = Self {
             balance,
             params: *params,
@@ -628,12 +647,13 @@ impl SeaSurfaceModel {
             upwelling_m3_s,
             share,
             step_mass,
+            step_multigrid,
             returns: core::array::from_fn(|_| Vec::new()),
         };
         let returns: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
             let u = &model.upwelling_coupling[k];
             let matrix = model.matrix(&model.step_mass, u);
-            model.return_vector(&matrix, u)
+            model.return_vector(&matrix, &model.step_multigrid, u)
         });
         model.returns = returns;
         model
@@ -701,15 +721,25 @@ impl SeaSurfaceModel {
             .with_diagonal((0..self.len()).map(|i| base[i] + mass[i] + u[i]).collect())
     }
 
-    /// `z = A⁻¹ s` for the matrix `matrix` with the upwelling couplings `u`,
-    /// or nothing where there is no upwelling or no ocean.
-    fn return_vector(&self, matrix: &SparseMatrix, u: &[f64]) -> Vec<f64> {
+    /// The multigrid of the matrix with the masses `mass` and the
+    /// upwelling couplings `u`, with the prolongators of the energy
+    /// balance's `mass + D L`: the warm start's and the correction's.
+    fn multigrid(&self, mass: &[f64], u: &[f64]) -> Multigrid {
+        let symmetric = self.balance.diffusion_multigrid(mass);
+        Multigrid::with_prolongators_of(self.matrix(mass, u), &symmetric)
+    }
+
+    /// `z = A⁻¹ s` for the matrix `matrix` with the upwelling couplings `u`
+    /// (preconditioned by `multigrid`), or nothing where there is no
+    /// upwelling or no ocean.
+    fn return_vector(&self, matrix: &SparseMatrix, multigrid: &Multigrid, u: &[f64]) -> Vec<f64> {
         if u.iter().all(|&x| x == 0.0) || self.share.iter().all(|&s| s == 0.0) {
             return Vec::new();
         }
         let mut z = vec![0.0; self.len()];
-        bicgstab(
+        multigrid::bicgstab(
             matrix,
+            multigrid,
             &self.share,
             RETURN_TOLERANCE,
             SOLVER_MAX_ITERATIONS,
@@ -719,12 +749,13 @@ impl SeaSurfaceModel {
     }
 
     /// Solves the system of `matrix` (masses `mass`, upwelling couplings
-    /// `u`) with the return of the upwelled heat for the right-hand side
-    /// `rhs` (which holds `u_i T_fz`), starting from and into `values`
-    /// (module documentation, "Time stepping").
+    /// `u`), preconditioned by `multigrid`, with the return of the upwelled
+    /// heat for the right-hand side `rhs` (which holds `u_i T_fz`),
+    /// starting from and into `values` (module documentation, "Time
+    /// stepping").
     fn solve_with_return(
         &self,
-        matrix: &SparseMatrix,
+        (matrix, multigrid): (&SparseMatrix, &Multigrid),
         mass: &[f64],
         u: &[f64],
         z: &[f64],
@@ -742,7 +773,14 @@ impl SeaSurfaceModel {
                 *r -= s * returned;
             }
         }
-        let solve = bicgstab(matrix, rhs, SOLVER_TOLERANCE, SOLVER_MAX_ITERATIONS, values);
+        let solve = multigrid::bicgstab(
+            matrix,
+            multigrid,
+            rhs,
+            SOLVER_TOLERANCE,
+            SOLVER_MAX_ITERATIONS,
+            values,
+        );
         if !z.is_empty() {
             let (mut uy, mut denominator) = (0.0, 0.0);
             for i in 0..n {
@@ -809,7 +847,7 @@ impl SeaSurfaceModel {
         }
         let before = temperature_k.to_vec();
         let solve = self.solve_with_return(
-            matrix,
+            (matrix, &self.step_multigrid),
             &self.step_mass,
             u,
             &self.returns[month],
@@ -888,8 +926,9 @@ impl SeaSurfaceModel {
         let u = &self.mean_upwelling_coupling;
         let t_fz = self.params.freezing_temperature_k;
         let mass: Vec<f64> = areas.iter().map(|s| s * b).collect();
-        let matrix = self.matrix(&mass, u);
-        let z = self.return_vector(&matrix, u);
+        let warm = self.multigrid(&mass, u);
+        let matrix = warm.matrix();
+        let z = self.return_vector(matrix, &warm, u);
         let mut mean_w_m2 = Vec::with_capacity(n);
         let mut temperature_k = Vec::with_capacity(n);
         let mut rhs = Vec::with_capacity(n);
@@ -904,7 +943,7 @@ impl SeaSurfaceModel {
             rhs.push(areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz);
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
-        self.solve_with_return(&matrix, &mass, u, &z, &mut rhs, &mut temperature_k);
+        self.solve_with_return((matrix, &warm), &mass, u, &z, &mut rhs, &mut temperature_k);
         for _ in 0..WARM_START_ITERATIONS {
             let albedos = self.balance.albedos(&temperature_k);
             for i in 0..n {
@@ -912,7 +951,7 @@ impl SeaSurfaceModel {
                 rhs[i] = areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz;
             }
             let before = temperature_k.clone();
-            self.solve_with_return(&matrix, &mass, u, &z, &mut rhs, &mut temperature_k);
+            self.solve_with_return((matrix, &warm), &mass, u, &z, &mut rhs, &mut temperature_k);
             if largest_difference_k(&before, &temperature_k) <= PERIODIC_TOLERANCE_K {
                 break;
             }
@@ -924,8 +963,8 @@ impl SeaSurfaceModel {
     /// The annual correction of the energy balance
     /// ([`EnergyBalance::periodic_state`]) with the advection and the
     /// annual-mean upwelling in its operator, `B' a + D L + q + ū`, solved
-    /// by [`crate::sparse::bicgstab`] (module documentation, "The periodic
-    /// state").
+    /// by [`crate::multigrid::bicgstab`] (module documentation, "The
+    /// periodic state").
     fn correct(
         &self,
         start: &[f64],
@@ -938,10 +977,11 @@ impl SeaSurfaceModel {
         if rhs.iter().all(|&r| r == 0.0) {
             return;
         }
-        let matrix = self.matrix(&mass, &self.mean_upwelling_coupling);
+        let correction = self.multigrid(&mass, &self.mean_upwelling_coupling);
         let mut delta = vec![0.0; self.len()];
-        bicgstab(
-            &matrix,
+        multigrid::bicgstab(
+            correction.matrix(),
+            &correction,
             &rhs,
             CORRECTION_TOLERANCE,
             SOLVER_MAX_ITERATIONS,

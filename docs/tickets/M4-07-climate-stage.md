@@ -2,7 +2,7 @@
 
 - Status: draft
 - Milestone: M4
-- Depends on: M4-06, M4-09
+- Depends on: M4-06, M4-09, M4-14
 - Crates: kuniumi-sim, kuniumi-io, kuniumi-cli
 - Design: 気候モデル / 計算の流れ
 - Decisions: D-22

@@ -4,9 +4,11 @@
 //!
 //! The ocean's Stommel model ([`crate::stages::climate::ocean`]) solves
 //! with it the advection–diffusion system of its streamfunction, whose
-//! matrix is a non-symmetric M-matrix; the symmetric systems of the
-//! diffusion stay with the conjugate gradient method of
-//! [`crate::operators::Laplacian`].
+//! matrix is a non-symmetric M-matrix, and the moisture
+//! ([`crate::stages::climate::moisture`]) its upwind advection; the
+//! symmetric systems of the diffusion and the sea surface's system are
+//! solved with the multigrid of [`crate::multigrid`] (ticket M4-09), whose
+//! BiCGSTAB is this one with the V-cycle for the preconditioner.
 //!
 //! Everything runs sequentially in row order with IEEE `+ − × ÷` and
 //! `sqrt`: every product and dot product sums in a fixed order
@@ -231,19 +233,48 @@ pub fn bicgstab(
         matrix.diagonal.iter().all(|&d| d != 0.0),
         "bicgstab needs a non-zero diagonal (the Jacobi preconditioner)"
     );
+    check_system("bicgstab", rhs, values, tolerance);
+    let d = &matrix.diagonal;
+    let mut jacobi = |r: &[f64], z: &mut [f64]| {
+        for k in 0..n {
+            z[k] = r[k] / d[k];
+        }
+    };
+    bicgstab_with(matrix, rhs, tolerance, max_iterations, values, &mut jacobi)
+}
+
+/// Checks the right-hand side, the start and the tolerance of a solve by
+/// the solver `what`.
+pub(crate) fn check_system(what: &str, rhs: &[f64], values: &[f64], tolerance: f64) {
     assert!(
         rhs.iter().all(|b| b.is_finite()),
-        "bicgstab needs a finite right-hand side"
+        "{what} needs a finite right-hand side"
     );
     assert!(
         values.iter().all(|v| v.is_finite()),
-        "bicgstab needs finite starting values"
+        "{what} needs finite starting values"
     );
     // Written so that NaN fails.
     assert!(
         tolerance > 0.0 && tolerance < 1.0,
-        "bicgstab needs a tolerance in (0, 1), got {tolerance}"
+        "{what} needs a tolerance in (0, 1), got {tolerance}"
     );
+}
+
+/// The BiCGSTAB method of [`bicgstab`] with the right preconditioner
+/// `precondition`, which sets its second argument to `M⁻¹` times its first
+/// (`p̂ = M⁻¹ p`, `ŝ = M⁻¹ s` in Barrett et al.); with the diagonal of `A`
+/// for `M` it is [`bicgstab`], bit for bit. The inputs are checked by the
+/// caller (one entry per row, finite, `tolerance` in `(0, 1)`).
+pub(crate) fn bicgstab_with(
+    matrix: &SparseMatrix,
+    rhs: &[f64],
+    tolerance: f64,
+    max_iterations: u32,
+    values: &mut [f64],
+    precondition: &mut dyn FnMut(&[f64], &mut [f64]),
+) -> Solve {
+    let n = matrix.len();
     let bb = dot(rhs, rhs);
     if bb == 0.0 {
         values.fill(0.0);
@@ -267,7 +298,6 @@ pub fn bicgstab(
     let mut s = vec![0.0; n];
     let mut s_hat = vec![0.0; n];
     let mut t = vec![0.0; n];
-    let d = &matrix.diagonal;
     // Whether no step has been taken since the start or the last restart.
     let mut fresh = true;
     while !converged && iterations < max_iterations {
@@ -286,9 +316,7 @@ pub fn bicgstab(
                 }
             }
             rho = rho_next;
-            for k in 0..n {
-                p_hat[k] = p[k] / d[k];
-            }
+            precondition(&p, &mut p_hat);
             matrix.apply(&p_hat, &mut v);
             let sv = dot(&shadow, &v);
             if !(sv != 0.0 && sv.is_finite()) {
@@ -309,9 +337,7 @@ pub fn bicgstab(
                     converged = true;
                     break;
                 }
-                for k in 0..n {
-                    s_hat[k] = s[k] / d[k];
-                }
+                precondition(&s, &mut s_hat);
                 matrix.apply(&s_hat, &mut t);
                 let tt = dot(&t, &t);
                 if !(tt > 0.0 && tt.is_finite()) {

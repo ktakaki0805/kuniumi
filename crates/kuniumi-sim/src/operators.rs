@@ -52,8 +52,12 @@
 //! ([`crate::stages::erosion::diffuse`]), and later the diffusion of
 //! marine sediment. [`Laplacian::solve`] solves the more general
 //! `(M + c L) u = b` with a mass per cell by the same method, over every
-//! cell: the diffusion of heat in the energy balance of the Climate stage
-//! ([`crate::stages::climate::energy_balance`], ticket M4-02).
+//! cell, with the Jacobi preconditioner; [`Laplacian::matrix`] gives that
+//! matrix to the multigrid of [`crate::multigrid`] (ticket M4-09), with
+//! which the climate model solves its diffusion
+//! ([`crate::stages::climate::energy_balance`], ticket M4-02), whose
+//! iterations do not grow with the grid as the Jacobi preconditioner's
+//! do.
 //!
 //! [`Gradient`] is the least-squares gradient of a cell field in each
 //! cell's east/north frame (ticket M4-03): the pressure gradient that
@@ -63,7 +67,7 @@
 //! curl of the wind stress of the ocean, [`crate::stages::climate::ocean`],
 //! is the circulation around each cell instead, ticket M4-04.) The
 //! non-symmetric systems of the ocean are solved by
-//! [`crate::sparse::bicgstab`].
+//! [`crate::sparse::bicgstab`] and [`crate::multigrid::bicgstab`].
 //!
 //! Everything here depends only on its inputs, through IEEE `+ − × ÷` and
 //! `sqrt` in a fixed order: every sum and dot product runs sequentially over
@@ -71,6 +75,8 @@
 //! and 6), so the results are the same on every platform.
 
 use kuniumi_sphere::{SphereGrid, coords};
+
+use crate::sparse::SparseMatrix;
 
 /// The relative residual at which [`Laplacian::implicit_step`] stops:
 /// `‖b − A u'‖₂ ≤ 10⁻¹² ‖b‖₂`. [`Laplacian::solve`] takes its tolerance
@@ -103,12 +109,12 @@ pub struct Laplacian {
     weight_sums: Vec<f64>,
 }
 
-/// What one [`Laplacian::implicit_step`], [`Laplacian::solve`] or
-/// [`crate::sparse::bicgstab`] did.
+/// What one [`Laplacian::implicit_step`], [`Laplacian::solve`],
+/// [`crate::sparse::bicgstab`] or a solver of [`crate::multigrid`] did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Solve {
     /// The iterations of the conjugate gradient method (of BiCGSTAB for
-    /// [`crate::sparse::bicgstab`]).
+    /// [`crate::sparse::bicgstab`] and [`crate::multigrid::bicgstab`]).
     pub iterations: u32,
     /// The relative residual `‖b − A u'‖₂ / ‖b‖₂` at the end, as the
     /// method updates it (0 where nothing was solved, `+∞` where `b` is 0
@@ -121,7 +127,8 @@ pub struct Solve {
 
 impl Solve {
     /// The report of a solve, for the other solvers of the crate
-    /// ([`crate::sparse::bicgstab`], ticket M4-04).
+    /// ([`crate::sparse::bicgstab`], ticket M4-04; [`crate::multigrid`],
+    /// ticket M4-09).
     pub(crate) fn new(iterations: u32, relative_residual: f64, converged: bool) -> Self {
         Self {
             iterations,
@@ -133,10 +140,10 @@ impl Solve {
     /// Whether the solve stopped because the residual reached its
     /// tolerance ([`SOLVER_TOLERANCE`] for
     /// [`implicit_step`](Laplacian::implicit_step), the caller's for
-    /// [`solve`](Laplacian::solve) and [`crate::sparse::bicgstab`]), or had
-    /// nothing to solve; `false` where it stopped on its iteration limit
-    /// ([`SOLVER_MAX_ITERATIONS`], or the caller's for
-    /// [`crate::sparse::bicgstab`]) or for lack of a direction.
+    /// [`solve`](Laplacian::solve), [`crate::sparse::bicgstab`] and the
+    /// solvers of [`crate::multigrid`]), or had nothing to solve; `false`
+    /// where it stopped on its iteration limit ([`SOLVER_MAX_ITERATIONS`],
+    /// or the caller's for the others) or for lack of a direction.
     pub fn converged(&self) -> bool {
         self.converged
     }
@@ -530,6 +537,44 @@ impl Laplacian {
             relative_residual,
             converged,
         }
+    }
+
+    /// The matrix `M + c L` of [`solve`](Self::solve): the diagonal
+    /// `mass[i] + coupling Σ_j w_ij` (the sum in neighbour order, as
+    /// `solve` forms it) and the entries `−coupling w_ij` off it, sorted by
+    /// column, for the solvers of [`crate::multigrid`] (ticket M4-09).
+    /// Symmetric bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// If `mass` does not hold one finite value per cell, or `coupling` is
+    /// not finite.
+    pub fn matrix(&self, mass: &[f64], coupling: f64) -> SparseMatrix {
+        let n = self.len();
+        assert_eq!(
+            mass.len(),
+            n,
+            "matrix needs one mass per cell: {} masses for {n} cells",
+            mass.len()
+        );
+        assert!(
+            coupling.is_finite(),
+            "matrix needs a finite coupling, got {coupling}"
+        );
+        let diagonal: Vec<f64> = (0..n)
+            .map(|i| mass[i] + coupling * self.weight_sums[i])
+            .collect();
+        let rows: Vec<Vec<(u32, f64)>> = (0..n)
+            .map(|i| {
+                let mut row: Vec<(u32, f64)> = self
+                    .range(i)
+                    .map(|k| (self.neighbors[k], -(coupling * self.weights[k])))
+                    .collect();
+                row.sort_unstable_by_key(|e| e.0);
+                row
+            })
+            .collect();
+        SparseMatrix::from_rows(diagonal, &rows)
     }
 
     /// The preconditioned conjugate gradient method of

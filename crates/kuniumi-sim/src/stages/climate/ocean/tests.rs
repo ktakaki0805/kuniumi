@@ -1204,7 +1204,8 @@ fn golden_fingerprint_of_earth_currents() {
     // currents (f64, little-endian, cells and CSR entries in index order).
     // A change means that the same world has different currents. Recorded
     // after the other tests passed and the images of out/M4-04 were viewed
-    // (ticket M4-04, Result).
+    // (ticket M4-04, Result); recorded again when the temperatures' solver
+    // became the multigrid (ticket M4-09).
     let run = earth_10k();
     let heights = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
     let circulation =
@@ -1231,4 +1232,4 @@ fn golden_fingerprint_of_earth_currents() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_currents`.
-const GOLDEN_FINGERPRINT: u64 = 0x043D_1F09_12AD_6477;
+const GOLDEN_FINGERPRINT: u64 = 0x9195_CFEF_7FA2_AF8C;

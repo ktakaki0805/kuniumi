@@ -22,9 +22,11 @@
 //! - criterion 5: `the_parameters_scale_with_the_planet`,
 //!   `golden_fingerprint_of_earth_temperature`.
 //!
+//! Ticket M4-09 (the multigrid): `a_substep_matches_the_jacobi_solver`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! on 40,000 cells, the world of the calibration, in release builds (about
-//! a minute), and on 10,000 cells in debug builds, where the world differs
+//! 12 s), and on 10,000 cells in debug builds, where the world differs
 //! and the tolerances of criterion 1 are wider.
 #![allow(clippy::disallowed_methods)]
 
@@ -1034,6 +1036,93 @@ fn insolation_needs_one_value_per_cell() {
     model.warm_start(&months);
 }
 
+#[test]
+fn a_substep_matches_the_jacobi_solver() {
+    // Ticket M4-09: a sub-step of Earth (10,000 cells, January, from the
+    // periodic state) by the multigrid against the same system solved here
+    // by the Jacobi-preconditioned conjugate gradient method of
+    // `Laplacian::solve` that the model used before, both to
+    // SOLVER_TOLERANCE: within 10⁻⁵ K. Both stop at a residual of 10⁻¹⁰ of
+    // a right-hand side dominated by `a C T / Δt` (`‖b‖₂` about 10⁴ here),
+    // which bounds the error by about `10⁻⁶ / λ_min`, `λ_min` ≈ 0.02 the
+    // smallest row of land. The same for the warm start's first solve, the
+    // ice-free annual balance with the matrix `B a + D L` of
+    // `diffusion_multigrid`.
+    let run = earth_10k();
+    let model = &run.model;
+    let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
+    let start = run.temperature.sea_level_k[0].clone();
+    let mut multigrid = start.clone();
+    let budget = model.substep(&mut multigrid, &insolation[0]);
+    let p = model.params();
+    let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
+    let dt = model.substep_s();
+    let albedos = model.albedos(&start);
+    let n = model.len();
+    let mut mass = Vec::with_capacity(n);
+    let mut rhs = Vec::with_capacity(n);
+    for i in 0..n {
+        let c = model.heat_capacity_j_m2_k()[i];
+        let area = model.areas_sr()[i];
+        let q = insolation[0][i] * (1.0 - albedos[i]);
+        mass.push(area * (c / dt + b));
+        rhs.push(area * (c * start[i] / dt + q - a + b * ZERO_CELSIUS_K));
+    }
+    let mut jacobi = start.clone();
+    let solve = model.laplacian().solve(
+        &mass,
+        p.diffusion_w_m2_k,
+        &rhs,
+        SOLVER_TOLERANCE,
+        &mut jacobi,
+    );
+    let worst = largest_difference_k(&multigrid, &jacobi);
+    println!(
+        "multigrid {} iterations, Jacobi {}; largest difference {worst:e} K",
+        budget.solve.iterations, solve.iterations
+    );
+    assert!(budget.solve.converged() && solve.converged());
+    assert!(worst <= 1e-5, "{worst:e}");
+    assert!(budget.solve.iterations < solve.iterations);
+    // The warm start's first solve, the ice-free annual balance.
+    let mut warm_mass = Vec::with_capacity(n);
+    let mut warm_rhs = Vec::with_capacity(n);
+    let mut start = Vec::with_capacity(n);
+    for i in 0..n {
+        let area = model.areas_sr()[i];
+        let mean = insolation.iter().map(|m| m[i]).sum::<f64>() / MONTHS as f64;
+        let absorbed = mean * (1.0 - p.free_albedo(model.ocean()[i], model.sin_lat()[i]));
+        warm_mass.push(area * b);
+        warm_rhs.push(area * (absorbed - a + b * ZERO_CELSIUS_K));
+        start.push(ZERO_CELSIUS_K + (absorbed - a) / b);
+    }
+    let warm = model.diffusion_multigrid(&warm_mass);
+    let mut multigrid = start.clone();
+    let solve = multigrid::conjugate_gradient(
+        warm.matrix(),
+        &warm,
+        &warm_rhs,
+        SOLVER_TOLERANCE,
+        SOLVER_MAX_ITERATIONS,
+        &mut multigrid,
+    );
+    let mut jacobi = start;
+    let jacobi_solve = model.laplacian().solve(
+        &warm_mass,
+        p.diffusion_w_m2_k,
+        &warm_rhs,
+        SOLVER_TOLERANCE,
+        &mut jacobi,
+    );
+    let worst = largest_difference_k(&multigrid, &jacobi);
+    println!(
+        "warm start: multigrid {} iterations, Jacobi {}; largest difference {worst:e} K",
+        solve.iterations, jacobi_solve.iterations
+    );
+    assert!(solve.converged() && jacobi_solve.converged());
+    assert!(worst <= 1e-5, "{worst:e}");
+}
+
 // ---------------------------------------------------------------------------
 // Golden value.
 
@@ -1045,7 +1134,10 @@ fn golden_fingerprint_of_earth_temperature() {
     // temperatures (f64, little-endian, cells in index order). A change
     // means that the same world has a different climate. Recorded after the
     // other tests passed and the images of out/M4-02 were viewed (ticket
-    // M4-02, Result).
+    // M4-02, Result); recorded again when the solver became the multigrid,
+    // after the other tests passed and the images of out/M4-09 were viewed
+    // (ticket M4-09: the same years, every value within the solver's
+    // tolerance of the old one).
     let t = &earth_10k().temperature;
     let bytes: Vec<u8> = t
         .sea_level_k
@@ -1059,4 +1151,4 @@ fn golden_fingerprint_of_earth_temperature() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_temperature`.
-const GOLDEN_FINGERPRINT: u64 = 0x9FAC_D213_E991_ED31;
+const GOLDEN_FINGERPRINT: u64 = 0xB43F_20A2_5237_116E;

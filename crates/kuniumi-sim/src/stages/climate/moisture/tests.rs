@@ -17,6 +17,8 @@
 //!   `earth_converges_to_a_periodic_state`, `extreme_planets_stay_finite`,
 //!   `the_saturation_stops_at_the_boiling_point`.
 //!
+//! Ticket M4-09 (the multigrid): `the_potential_matches_the_jacobi_solver`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! the sea surface of ticket M4-05 (its temperatures) and the circulation of
 //! ticket M4-03 over the temperatures of ticket M4-02 (its winds), as the
@@ -1189,6 +1191,68 @@ fn boiling_needs_a_pressure_above_the_triple_point() {
 // Golden fingerprint.
 
 #[test]
+fn the_potential_matches_the_jacobi_solver() {
+    // Ticket M4-09: the flows of January (10,000 cells, Earth) with the
+    // potential solved by the multigrid against the same flows with the
+    // potential solved here by the Jacobi-preconditioned conjugate
+    // gradient method of `Laplacian::solve`, both to POTENTIAL_TOLERANCE:
+    // every flow within 10⁻⁹ of the largest; the multigrid needs fewer
+    // iterations.
+    let m = earth_moisture_10k();
+    let model = &m.model;
+    let month = &m.months[0];
+    let n = model.len();
+    let mass: Vec<f64> = model.areas_sr.iter().map(|a| POTENTIAL_MASS * a).collect();
+    // The surface flows are the model's flows less the scaled divergent
+    // part; rebuild them from the winds as `month` does.
+    let wind: Vec<Vec3> = (0..n)
+        .map(|i| {
+            model.east[i] * m.circulation.wind_east_m_s[0][i]
+                + model.north[i] * m.circulation.wind_north_m_s[0][i]
+        })
+        .collect();
+    let mut surface = vec![0.0; model.neighbors.len()];
+    for i in 0..n {
+        for k in model.range(i) {
+            let j = model.neighbors[k] as usize;
+            if i < j {
+                let u = 0.5 * (wind[i] + wind[j]).dot(model.chords[k]);
+                let c = u * model.lengths_rad[k] / model.params.radius_m;
+                surface[k] = c;
+                surface[model.reverse[k] as usize] = -c;
+            }
+        }
+    }
+    let rhs: Vec<f64> = (0..n)
+        .map(|i| -model.range(i).map(|k| surface[k]).sum::<f64>())
+        .collect();
+    let mut chi = vec![0.0; n];
+    let solve = model
+        .laplacian
+        .solve(&mass, 1.0, &rhs, POTENTIAL_TOLERANCE, &mut chi);
+    assert!(solve.converged());
+    let scale = 1.0 - model.params.divergent_fraction;
+    let (mut worst, mut largest) = (0.0_f64, 0.0_f64);
+    for i in 0..n {
+        let weights = model.laplacian.weights(i as u32);
+        for (s, k) in model.range(i).enumerate() {
+            let j = model.neighbors[k] as usize;
+            let flow = surface[k] - scale * ((chi[j] - chi[i]) * weights[s]);
+            worst = worst.max((flow - month.flow[k]).abs());
+            largest = largest.max(flow.abs());
+        }
+    }
+    println!(
+        "multigrid {} iterations, Jacobi {}; largest difference {:e} of the largest flow",
+        month.potential_solve().iterations,
+        solve.iterations,
+        worst / largest
+    );
+    assert!(worst <= 1e-9 * largest, "{worst:e} of {largest:e}");
+    assert!(month.potential_solve().iterations < solve.iterations);
+}
+
+#[test]
 fn golden_fingerprint_of_earth_moisture() {
     // Earth's world of seed 1 on 10,000 cells through the Crust stage, the
     // periodic state of its energy balance (ticket M4-02), its winds
@@ -1198,7 +1262,8 @@ fn golden_fingerprint_of_earth_moisture() {
     // `monthly_moisture` gives the same bits. A change means that the same
     // world has a different hydrological cycle. Recorded after the other
     // tests passed and the images of out/M4-06 were viewed (ticket M4-06,
-    // Result).
+    // Result); recorded again when the solvers of the temperatures and of
+    // the potential became the multigrid (ticket M4-09).
     let run = earth_10k();
     let earth = earth_moisture_10k();
     let m = &earth.moisture;
@@ -1226,4 +1291,4 @@ fn golden_fingerprint_of_earth_moisture() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
-const GOLDEN_FINGERPRINT: u64 = 0xBB8E_6949_41D8_448D;
+const GOLDEN_FINGERPRINT: u64 = 0xFE04_B92F_C2B5_4AAA;

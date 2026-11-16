@@ -80,9 +80,10 @@
 //!   ([`MoistureParams::DIVERGENT_FRACTION`], chosen with the owner in
 //!   ticket M4-06). Discretely the potential `χ` of
 //!   `Σ_j w_ij (χ_j − χ_i) = a_i D_i` (the weights of
-//!   [`crate::operators::Laplacian`], `χ` in s⁻¹; solved by
-//!   [`Laplacian::solve`] with the small mass [`POTENTIAL_MASS`] `a_i` for
-//!   the constant null space, to [`POTENTIAL_TOLERANCE`], once per month)
+//!   [`crate::operators::Laplacian`], `χ` in s⁻¹; solved by the conjugate
+//!   gradient method with the multigrid of [`crate::multigrid`] (ticket
+//!   M4-09) with the small mass [`POTENTIAL_MASS`] `a_i` for the constant
+//!   null space, to [`POTENTIAL_TOLERANCE`], once per month)
 //!   gives the divergent flows `(χ_j − χ_i) w_ij`, whose divergence is `D`,
 //!   and the model's flows are `c_e = c⁰_e − (1 − δ)(χ_j − χ_i) w_ij`: the
 //!   rotational part is kept, the divergent part scaled by `δ`, and the
@@ -263,7 +264,8 @@ use kuniumi_world::PlanetParams;
 use super::circulation::Circulation;
 use super::energy_balance::{EnergyBalanceParams, SUBSTEPS_PER_MONTH, Temperature};
 use super::insolation::MONTHS;
-use crate::operators::{Gradient, Laplacian, Solve};
+use crate::multigrid::{self, Multigrid};
+use crate::operators::{self as ops, Gradient, Laplacian, Solve};
 use crate::sparse::{SparseMatrix, bicgstab};
 
 /// The relative residual at which the solve of a sub-step stops
@@ -276,7 +278,8 @@ pub const SOLVER_TOLERANCE: f64 = 1e-12;
 pub const SOLVER_MAX_ITERATIONS: u32 = 20_000;
 
 /// The relative residual at which the solve of the potential of the
-/// divergent wind stops ([`Laplacian::solve`]): 10⁻¹².
+/// divergent wind stops ([`crate::multigrid::conjugate_gradient`]):
+/// 10⁻¹².
 pub const POTENTIAL_TOLERANCE: f64 = 1e-12;
 
 /// The mass of the solve of the potential, per unit of a cell's area
@@ -671,6 +674,10 @@ pub struct MoistureModel {
     slope_north: Vec<f64>,
     /// The Laplacian of the grid.
     laplacian: Laplacian,
+    /// The multigrid of the potential's matrix `10⁻⁹ a + L`, the same
+    /// every month, which holds the matrix; none where `δ` = 1, which needs
+    /// no potential.
+    potential: Option<Multigrid>,
     /// The boiling point at the surface pressure (K).
     boiling_k: f64,
     /// The length of a sub-step (s).
@@ -757,6 +764,11 @@ impl MoistureModel {
         let radius = params.radius_m;
         let areas_sr: Vec<f64> = (0..n as u32).map(|i| grid.area_sr(i)).collect();
         let total_area_sr = areas_sr.iter().sum();
+        let laplacian = Laplacian::new(grid);
+        let potential = (params.divergent_fraction < 1.0).then(|| {
+            let mass: Vec<f64> = areas_sr.iter().map(|a| POTENTIAL_MASS * a).collect();
+            Multigrid::new(laplacian.matrix(&mass, 1.0))
+        });
         Self {
             params: *params,
             offsets,
@@ -771,7 +783,8 @@ impl MoistureModel {
             ocean,
             slope_east: slope_east.iter().map(|g| g / radius).collect(),
             slope_north: slope_north.iter().map(|g| g / radius).collect(),
-            laplacian: Laplacian::new(grid),
+            laplacian,
+            potential,
             boiling_k: boiling_temperature_k(params.surface_pressure_pa),
             substep_s: orbital_period_s / (MONTHS * SUBSTEPS_PER_MONTH) as f64,
         }
@@ -861,13 +874,17 @@ impl MoistureModel {
             .map(|i| outflow(&surface_flow, i) / self.areas_sr[i])
             .collect();
         // The divergent part, scaled by δ.
-        let (flow, potential) = if p.divergent_fraction < 1.0 {
-            let mass: Vec<f64> = self.areas_sr.iter().map(|a| POTENTIAL_MASS * a).collect();
+        let (flow, potential) = if let Some(hierarchy) = &self.potential {
             let rhs: Vec<f64> = (0..n).map(|i| -outflow(&surface_flow, i)).collect();
             let mut chi = vec![0.0; n];
-            let solve = self
-                .laplacian
-                .solve(&mass, 1.0, &rhs, POTENTIAL_TOLERANCE, &mut chi);
+            let solve = multigrid::conjugate_gradient(
+                hierarchy.matrix(),
+                hierarchy,
+                &rhs,
+                POTENTIAL_TOLERANCE,
+                ops::SOLVER_MAX_ITERATIONS,
+                &mut chi,
+            );
             let scale = 1.0 - p.divergent_fraction;
             let mut flow = vec![0.0; entries];
             for i in 0..n {

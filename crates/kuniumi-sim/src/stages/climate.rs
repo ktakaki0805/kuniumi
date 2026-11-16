@@ -33,8 +33,11 @@
 //! vapour, the vapour carried by the surface winds, evaporated from the sea
 //! and recycled over land, raining where the column exceeds its share of
 //! saturation, where the wind converges and where it rises on slopes,
-//! [`moisture::monthly_moisture`] (ticket M4-06). The stage itself is wired
-//! by ticket M4-07; until then the runner skips it.
+//! [`moisture::monthly_moisture`] (ticket M4-06). The diffusion of the
+//! energy balance, the sea surface and the moisture's potential are solved
+//! with the multigrid of [`crate::multigrid`], whose iterations do not grow
+//! with the grid (ticket M4-09). The stage itself is wired by ticket M4-07;
+//! until then the runner skips it.
 
 pub mod circulation;
 pub mod energy_balance;

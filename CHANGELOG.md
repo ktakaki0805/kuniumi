@@ -547,6 +547,18 @@ section: every change after which an existing seed produces a different world
   times; the west coasts of 40–60° 5.6–9.2 times the interior; windward
   slopes 7.1 times the lee; the year's budget closed within 10⁻¹³;
   periodic in 3 years. Not yet used by the pipeline (M4-06).
+- `kuniumi_sim::multigrid`: smoothed-aggregation algebraic multigrid
+  (Vaněk, Mandel & Brezina 1996) for the M-matrices of the climate model,
+  deterministic (aggregation in index order, Gershgorin-damped prolongator
+  smoothing, Galerkin coarse operators, Gauss–Seidel V-cycle, dense LU on
+  the coarsest level): `Multigrid` (`new`, `with_prolongators_of` for a
+  non-symmetric matrix with a symmetric one's prolongators, `apply`,
+  `levels`, `level_sizes`, `operator_complexity`), `conjugate_gradient` and
+  `bicgstab` preconditioned by one V-cycle; `Laplacian::matrix`, the matrix
+  of `Laplacian::solve` as a `SparseMatrix`. Its iterations hardly grow with
+  the grid (12, 14 and 15 for the energy balance's sub-step on 2,500,
+  10,000 and 40,000 cells; 13–14 on 650,000, where the Jacobi
+  preconditioner needed 662) (M4-09).
 
 ### Changed
 
@@ -798,6 +810,16 @@ section: every change after which an existing seed produces a different world
   files written by `kuniumi params` gain the key, and the stellar flux is
   documented as the flux at the semi-major axis (the annual mean is
   `S / √(1 − e²)`) (M4-01).
+- The energy balance (sub-steps, warm start, annual correction), the sea
+  surface with currents (sub-steps, return vectors, warm start,
+  correction) and the moisture's potential of the divergent wind solve
+  with the multigrid instead of the Jacobi preconditioner, to the same
+  tolerances. Earth (seed 1) on 650,000 cells: the energy balance's
+  periodic state in 4.3 minutes (11 years; about an hour before), the sea
+  surface's in 5.3 minutes (12 years; about two hours before), the
+  moisture's twelve months in 12 s (the potential in at most 29
+  iterations); on 160,000 cells 39 s, 48 s and 2.5 s against 313 s, 433 s
+  and 40 s (M4-09).
 
 ### Removed
 
@@ -892,6 +914,16 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M4-09: the monthly temperatures of `energy_balance::monthly_temperature`,
+  and with them the circulation, the currents, the sea surface of
+  `sea_surface::monthly_sea_surface_temperature` and the moisture of
+  `moisture::monthly_moisture`, change within the solvers' tolerances (the
+  multigrid stops at the same relative residual as the Jacobi
+  preconditioner did, at a different point; Earth on 160,000 cells: every
+  monthly mean within 3.7 × 10⁻⁷ K, the sea surface within 3.9 × 10⁻⁶ K,
+  in the same number of years): the golden values of tickets M4-02 to
+  M4-06 are recorded again. No world of the pipeline changes, as the
+  Climate stage is not wired yet.
 - M3-06: every world generated with erosion steps changes:
   `surface_height` (its land roughened by up to 1 m before the first step),
   `drainage_area`, `discharge`, `depression_depth`, their maps,

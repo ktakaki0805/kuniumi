@@ -93,9 +93,13 @@
 //! a_i (C_i/Δt + B) T'_i + D Σ_j w_ij (T'_i − T'_j) = a_i (C_i T_i/Δt + Q_i (1 − α_i) − A + B T₀)
 //! ```
 //!
-//! by [`Laplacian::solve`] to a relative residual of [`SOLVER_TOLERANCE`]
-//! ([`EnergyBalance::substep`]); the global energy budget of a sub-step
-//! then closes to about 10⁻⁶ W/m². Backward Euler damps the seasonal
+//! by the conjugate gradient method preconditioned by the multigrid of
+//! [`crate::multigrid`] (ticket M4-09) to a relative residual of
+//! [`SOLVER_TOLERANCE`] ([`EnergyBalance::substep`]); the global energy
+//! budget of a sub-step then closes to about 10⁻⁶ W/m². The matrix is the
+//! same in every sub-step (the albedo enters only the right-hand side), so
+//! its hierarchy is built once ([`EnergyBalance::new`]). Backward Euler
+//! damps the seasonal
 //! harmonic of land, whose time constant is about a month, by about 3 %
 //! with these sub-steps (by 10 % with steps of a month). The monthly mean
 //! temperature is the trapezoidal mean of the values at the ends of the
@@ -146,7 +150,7 @@
 //! a climate in transition (Earth at 1,296 W/m²: 11.5 K from the year
 //! before, mid-way into the snowball). Chosen with the owner in ticket
 //! M4-02: the Climate stage reports it as a warning (ticket M4-07), and
-//! ticket M4-09 looks for a solver of the periodic state itself.
+//! ticket M4-15 looks for a solver of the periodic state itself.
 //!
 //! # Earth calibration
 //!
@@ -192,13 +196,15 @@
 //!   the Hadley cells make them (NCC81 p. 97); the ocean's heat transport
 //!   is part of `D` (the model with currents of ticket M4-05 carries it
 //!   explicitly).
-//! - The cost grows faster than the cells: the diffusion is stiff at the
-//!   grid's scale, and the solver's iterations grow with the resolution
-//!   (per model year, release: 0.37 s at 10,000 cells, 3.2 s at 40,000,
-//!   33 s at 160,000, 277 s at 650,000, with 78, 153, 333 and 662
-//!   iterations per solve; Earth's periodic state takes 4.5 s at 10,000
-//!   cells and 45 s at 40,000; ticket M4-02). Ticket M4-09 decides how
-//!   the Climate stage runs at 650,000 cells.
+//! - The diffusion is stiff at the grid's scale (`D L` reaches
+//!   10⁵ W m⁻² K⁻¹ per cell on 650,000 cells against `C/Δt + B` ≈ 18 for
+//!   land), so the conjugate gradient method with the Jacobi
+//!   preconditioner needed more iterations the finer the grid (78, 153,
+//!   333 and 662 per solve on 10,000 to 650,000 cells; 277 s per model
+//!   year on 650,000; ticket M4-02). The multigrid's iterations hardly
+//!   depend on the grid: per model year 0.24 s on 10,000 cells, 0.96 s on
+//!   40,000, 4.8 s on 160,000 and 23 s on 650,000, Earth's periodic state
+//!   4.3 minutes on 650,000 cells (release; ticket M4-09).
 //!
 //! Everything runs sequentially over the cells in index order;
 //! transcendental functions are not needed; there is no randomness.
@@ -208,7 +214,8 @@ use kuniumi_sphere::SphereGrid;
 use kuniumi_world::PlanetParams;
 
 use super::insolation::{MONTHS, monthly_insolation};
-use crate::operators::{Laplacian, Solve};
+use crate::multigrid::{self, Multigrid};
+use crate::operators::{Laplacian, SOLVER_MAX_ITERATIONS, Solve};
 
 /// Sub-steps of each month (module documentation, "Time stepping").
 pub const SUBSTEPS_PER_MONTH: usize = 4;
@@ -225,9 +232,9 @@ pub const MAX_YEARS: u32 = 100;
 pub const WARM_START_ITERATIONS: u32 = 200;
 
 /// The relative residual at which the solve of a sub-step stops
-/// ([`Laplacian::solve`]): 10⁻¹⁰. The global energy budget of a sub-step
-/// then closes to about 10⁻⁶ W/m² (at 10⁻⁸ to about 10⁻⁴ W/m², with a
-/// quarter fewer iterations; ticket M4-02).
+/// ([`multigrid::conjugate_gradient`]): 10⁻¹⁰. The global energy budget of
+/// a sub-step then closes to about 10⁻⁶ W/m² (at 10⁻⁸ to about
+/// 10⁻⁴ W/m²; ticket M4-02).
 pub const SOLVER_TOLERANCE: f64 = 1e-10;
 
 /// The relative residual of the annual correction's solve (module
@@ -471,6 +478,9 @@ pub struct EnergyBalance {
     sin_lat: Vec<f64>,
     /// The height of land above sea level (m), 0 for the ocean.
     elevation_m: Vec<f64>,
+    /// The multigrid of the sub-step's matrix `a (C/Δt + B) + D L`, which
+    /// holds the matrix.
+    step: Multigrid,
     /// `Δt` (s).
     substep_s: f64,
     /// The year `P` (s).
@@ -512,7 +522,7 @@ impl EnergyBalance {
             "EnergyBalance needs a finite positive year, got {orbital_period_s}"
         );
         let ocean: Vec<bool> = heights_m.iter().map(|&h| h <= sea_level_m).collect();
-        let heat_capacity_j_m2_k = ocean
+        let heat_capacity_j_m2_k: Vec<f64> = ocean
             .iter()
             .map(|&o| {
                 if o {
@@ -532,15 +542,24 @@ impl EnergyBalance {
                 }
             })
             .collect();
+        let laplacian = Laplacian::new(grid);
+        let areas_sr: Vec<f64> = (0..n as u32).map(|i| grid.area_sr(i)).collect();
+        let substep_s = orbital_period_s / (MONTHS * SUBSTEPS_PER_MONTH) as f64;
+        let b = params.olr_slope_w_m2_k;
+        let mass: Vec<f64> = (0..n)
+            .map(|i| areas_sr[i] * (heat_capacity_j_m2_k[i] / substep_s + b))
+            .collect();
+        let step = Multigrid::new(laplacian.matrix(&mass, params.diffusion_w_m2_k));
         Self {
             params: *params,
-            laplacian: Laplacian::new(grid),
-            areas_sr: (0..n as u32).map(|i| grid.area_sr(i)).collect(),
+            laplacian,
+            areas_sr,
             heat_capacity_j_m2_k,
             ocean,
             sin_lat: grid.positions().iter().map(|p| p.z).collect(),
             elevation_m,
-            substep_s: orbital_period_s / (MONTHS * SUBSTEPS_PER_MONTH) as f64,
+            step,
+            substep_s,
             year_s: orbital_period_s,
         }
     }
@@ -588,6 +607,18 @@ impl EnergyBalance {
     /// The Laplacian of the grid.
     pub(crate) fn laplacian(&self) -> &Laplacian {
         &self.laplacian
+    }
+
+    /// The multigrid of the sub-step's matrix `a (C/Δt + B) + D L`.
+    pub(crate) fn step_multigrid(&self) -> &Multigrid {
+        &self.step
+    }
+
+    /// The multigrid of `mass + D L` (one mass per cell): the warm start's
+    /// and the annual correction's matrices, and the sea surface's
+    /// (ticket M4-05) for their prolongators.
+    pub(crate) fn diffusion_multigrid(&self, mass: &[f64]) -> Multigrid {
+        Multigrid::new(self.laplacian.matrix(mass, self.params.diffusion_w_m2_k))
     }
 
     /// The surface temperature (K) of each cell for the sea-level
@@ -651,9 +682,18 @@ impl EnergyBalance {
             rhs.push(self.areas_sr[i] * (absorbed - a + b * ZERO_CELSIUS_K));
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
-        let d = p.diffusion_w_m2_k;
-        self.laplacian
-            .solve(&mass, d, &rhs, SOLVER_TOLERANCE, &mut temperature_k);
+        let warm = self.diffusion_multigrid(&mass);
+        let solve = |rhs: &[f64], values: &mut [f64]| {
+            multigrid::conjugate_gradient(
+                warm.matrix(),
+                &warm,
+                rhs,
+                SOLVER_TOLERANCE,
+                SOLVER_MAX_ITERATIONS,
+                values,
+            )
+        };
+        solve(&rhs, &mut temperature_k);
         for _ in 0..WARM_START_ITERATIONS {
             let albedos = self.albedos(&temperature_k);
             for i in 0..n {
@@ -661,8 +701,7 @@ impl EnergyBalance {
                 rhs[i] = self.areas_sr[i] * (absorbed - a + b * ZERO_CELSIUS_K);
             }
             let before = temperature_k.clone();
-            self.laplacian
-                .solve(&mass, d, &rhs, SOLVER_TOLERANCE, &mut temperature_k);
+            solve(&rhs, &mut temperature_k);
             let change = largest_difference_k(&before, &temperature_k);
             if change <= PERIODIC_TOLERANCE_K {
                 break;
@@ -685,22 +724,21 @@ impl EnergyBalance {
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
         let dt = self.substep_s;
         let albedos = self.albedos(temperature_k);
-        let mut mass = Vec::with_capacity(n);
         let mut rhs = Vec::with_capacity(n);
         let mut absorbed = Vec::with_capacity(n);
         for i in 0..n {
             let c = self.heat_capacity_j_m2_k[i];
             let q = insolation_w_m2[i] * (1.0 - albedos[i]);
-            mass.push(self.areas_sr[i] * (c / dt + b));
             rhs.push(self.areas_sr[i] * (c * temperature_k[i] / dt + q - a + b * ZERO_CELSIUS_K));
             absorbed.push(q);
         }
         let before = temperature_k.to_vec();
-        let solve = self.laplacian.solve(
-            &mass,
-            p.diffusion_w_m2_k,
+        let solve = multigrid::conjugate_gradient(
+            self.step.matrix(),
+            &self.step,
             &rhs,
             SOLVER_TOLERANCE,
+            SOLVER_MAX_ITERATIONS,
             temperature_k,
         );
         let (mut area, mut gained, mut emitted, mut stored) = (0.0, 0.0, 0.0, 0.0);
@@ -780,18 +818,19 @@ impl EnergyBalance {
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) {
         let n = self.len();
-        let p = &self.params;
         let mass = self.correction_mass(means, insolation_w_m2);
         let rhs = self.correction_rhs(start, temperature_k);
         if rhs.iter().all(|&r| r == 0.0) {
             return;
         }
+        let correction = self.diffusion_multigrid(&mass);
         let mut delta = vec![0.0; n];
-        self.laplacian.solve(
-            &mass,
-            p.diffusion_w_m2_k,
+        multigrid::conjugate_gradient(
+            correction.matrix(),
+            &correction,
             &rhs,
             CORRECTION_TOLERANCE,
+            SOLVER_MAX_ITERATIONS,
             &mut delta,
         );
         for (t, d) in temperature_k.iter_mut().zip(delta) {
@@ -978,8 +1017,8 @@ pub(crate) fn largest_difference_k(a: &[f64], b: &[f64]) -> f64 {
 /// The periodic monthly temperature of the surface `heights_m` (m, one per
 /// cell of `grid`, on the datum of `sea_level_m`) of the planet `params`
 /// (valid): the insolation of [`monthly_insolation`] and the parameters of
-/// [`EnergyBalanceParams::for_planet`]. About 45 s for Earth on 40,000
-/// cells (release; module documentation, "Limitations"). A planet with
+/// [`EnergyBalanceParams::for_planet`]. About 12 s for Earth on 40,000
+/// cells (release; ticket M4-09). A planet with
 /// little heat transport or close to an ice–albedo bifurcation may come
 /// back unconverged after [`MAX_YEARS`] ([`Temperature::converged`];
 /// module documentation, "The periodic state").
