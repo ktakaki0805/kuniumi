@@ -131,7 +131,10 @@ parallel with later milestones.
 | [M4-04](M4-04-ocean-gyres.md) | Ocean basins and wind-driven gyres | M4-03 |
 | [M4-05](M4-05-sst-upwelling.md) | Sea-surface temperature transport and upwelling | M4-04 |
 | [M4-06](M4-06-moisture-precipitation.md) | Moisture, precipitation and rain shadows | M4-05 |
-| [M4-07](M4-07-climate-stage.md) | Climate stage and monthly outputs | M4-06 |
+| [M4-09](M4-09-climate-cost.md) | The climate model at 650,000 cells | M4-02 |
+| [M4-07](M4-07-climate-stage.md) | Climate stage and monthly outputs | M4-06, M4-09 |
+| [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
+| [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-08](M4-08-earth-calibration.md) | Earth calibration harness | M4-07 |
 
 ### M5 — Hydrology and biomes (first complete planet)

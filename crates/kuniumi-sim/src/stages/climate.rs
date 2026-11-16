@@ -14,10 +14,13 @@
 //! Outputs (planned): `temperature_m01`..`temperature_m12` (K),
 //! `precipitation_m01`..`precipitation_m12` (m/s), wind and SST fields.
 //!
-//! So far (ticket M4-01): the monthly-mean insolation at the top of the
-//! atmosphere of every cell, [`insolation::monthly_insolation`], with the
-//! calendar of the model (twelve equal months, the northern spring equinox
-//! at 79.5/365 of the year). The stage itself is wired by ticket M4-07;
-//! until then the runner skips it.
+//! So far: the monthly-mean insolation at the top of the atmosphere of
+//! every cell, [`insolation::monthly_insolation`], with the calendar of the
+//! model (twelve equal months, the northern spring equinox at 79.5/365 of
+//! the year; ticket M4-01); and the monthly sea-level and surface
+//! temperature from the seasonal energy balance run to a periodic state,
+//! [`energy_balance::monthly_temperature`] (ticket M4-02). The stage itself
+//! is wired by ticket M4-07; until then the runner skips it.
 
+pub mod energy_balance;
 pub mod insolation;

@@ -446,6 +446,25 @@ section: every change after which an existing seed produces a different world
   about 2 s. Not yet used by the pipeline (M4-01).
 - `tools/insolation_reference.py`: reference values of the insolation by
   integration in time (mpmath) (M4-01).
+- `kuniumi_sim::operators::Laplacian::solve`: `(M + c L) u = b` with a
+  positive mass per cell, by the preconditioned conjugate gradient method of
+  `implicit_step`, whose loop both now share (its results are unchanged bit
+  for bit) (M4-02).
+- `kuniumi_sim::stages::climate::energy_balance`: the seasonal 2D energy
+  balance of North, Cahalan & Coakley (1981) on the grid
+  (`EnergyBalanceParams`, `EnergyBalance`, `monthly_temperature`): outgoing
+  radiation `A + B (T − 273.15 K)`, heat diffusion `D` on the unit sphere
+  scaled with pressure and rotation as Williams & Kasting (1997), the heat
+  capacity of a column of air over land and of a 75 m mixed layer at sea,
+  the albedo of ocean, land and snow or ice (a ramp from 0 to −10 °C at the
+  surface), the lapse rate of 6.5 K/km on land, four backward-Euler
+  sub-steps a month, run from the warmest annual-mean state with an annual
+  correction to a periodic state (10⁻³ K a year; at most 100 years, after
+  which a slow planet is returned unconverged). `A` = 202.7 W/m² and
+  `D` = 0.583 W m⁻² K⁻¹ calibrated on the Earth-parameter world of seed 1
+  (40,000 cells) against North & Coakley's observed sea-level temperature:
+  every 10° band within 3.8 K, global mean surface temperature 287.96 K;
+  about 45 s on 40,000 cells. Not yet used by the pipeline (M4-02).
 
 ### Changed
 

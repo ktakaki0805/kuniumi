@@ -2,7 +2,7 @@
 
 - Status: draft
 - Milestone: M4
-- Depends on: M4-06
+- Depends on: M4-06, M4-09
 - Crates: kuniumi-sim, kuniumi-io, kuniumi-cli
 - Design: 気候モデル / 計算の流れ
 - Decisions: D-22
@@ -23,6 +23,14 @@ In:
   annual means for quick viewing.
 - Erosion discharge from annual-mean precipitation.
 - Rendering of the annual means and of two contrasting months.
+- A planet whose energy balance has not converged within its 100 years
+  (`energy_balance::Temperature::converged`, M4-02) keeps the last year's
+  temperatures and is reported as a warning, with the last change; the
+  warning says that the climate may be in transition (near an ice–albedo
+  bifurcation the last year can lie mid-way into a snowball: Earth at
+  1,296 W/m² changed by 11.5 K in its 100th year). Decided with the owner
+  in M4-02. The temperatures have no fixed bound at the corners of the v1
+  range (monthly means from about 95 K to about 11,600 K, M4-02).
 
 ## Implementation notes
 

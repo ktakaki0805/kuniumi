@@ -13,6 +13,10 @@
 //! - `mass_is_conserved_on_a_closed_domain` (criterion 2);
 //! - `large_steps_are_stable` (criterion 3);
 //! - `zero_diffusion_changes_nothing`, `fixed_cells_stay`, the panics;
+//! - `solve_matches_a_dense_solution`, `solve_keeps_a_constant`,
+//!   `solve_without_coupling_divides_by_the_mass`: the general solve of
+//!   `(M + c L) u = b` (ticket M4-02) against Gaussian elimination and
+//!   exact cases, and its panics;
 //! - `golden_fingerprint_of_an_implicit_step`.
 //!
 //! The diffusion number of a step is `N = c · max_i(Σ_j w_ij / a_i)` with
@@ -660,7 +664,255 @@ fn fixed_cells_stay() {
 }
 
 // ---------------------------------------------------------------------------
+// The general solve (ticket M4-02).
+
+/// `(M + c L) u` of cell `i`, with `L` built here from the grid's edge
+/// lengths and centre distances.
+fn screened(grid: &SphereGrid, mass: &[f64], c: f64, u: &[f64], i: u32) -> f64 {
+    let iu = i as usize;
+    let mut coupled = 0.0;
+    for (k, &j) in grid.neighbors(i).iter().enumerate() {
+        coupled += weight(grid, i, k) * (u[iu] - u[j as usize]);
+    }
+    mass[iu] * u[iu] + c * coupled
+}
+
+/// The solution of `A x = b` for a dense `A` (rows of `n`), by Gaussian
+/// elimination with partial pivoting.
+fn dense_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    let n = b.len();
+    for col in 0..n {
+        let pivot = (col..n)
+            .max_by(|&p, &q| a[p][col].abs().total_cmp(&a[q][col].abs()))
+            .expect("a row");
+        a.swap(col, pivot);
+        b.swap(col, pivot);
+        for row in col + 1..n {
+            let factor = a[row][col] / a[col][col];
+            if factor == 0.0 {
+                continue;
+            }
+            let (upper, lower) = a.split_at_mut(row);
+            for (x, y) in lower[0][col..].iter_mut().zip(&upper[col][col..]) {
+                *x -= factor * y;
+            }
+            b[row] -= factor * b[col];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for row in (0..n).rev() {
+        let mut s = b[row];
+        for k in row + 1..n {
+            s -= a[row][k] * x[k];
+        }
+        x[row] = s / a[row][row];
+    }
+    x
+}
+
+#[test]
+fn solve_matches_a_dense_solution() {
+    // A 300-cell grid; masses a_i (1 + u_i), u_i uniform in [0, 1); right-
+    // hand sides uniform in [−1, 1); couplings from 10⁻³ to 10³ times the
+    // largest a_i / Σ_j w_ij. The matrix M + c L is built here from the
+    // grid and solved by Gaussian elimination; the solver's result within
+    // 1e-10 of the largest |x| (its tolerance is 1e-12 of ‖b‖₂; measured:
+    // 4e-13 at most).
+    let g = SphereGrid::fibonacci(300, 3).expect("grid");
+    let n = g.len();
+    let lap = Laplacian::new(&g);
+    let noise = uniform_m(&g, 0.0, 1.0, "test/operators/solve/mass");
+    let mass: Vec<f64> = (0..n)
+        .map(|i| g.area_sr(i as u32) * (1.0 + noise[i]))
+        .collect();
+    let rhs = uniform_m(&g, -1.0, 1.0, "test/operators/solve/rhs");
+    let (_, rate) = fastest_cell(&g);
+    for factor in [1e-3, 1.0, 1e3] {
+        let c = factor / rate;
+        let mut matrix = vec![vec![0.0; n]; n];
+        for i in 0..n as u32 {
+            let iu = i as usize;
+            matrix[iu][iu] += mass[iu];
+            for (k, &j) in g.neighbors(i).iter().enumerate() {
+                let w = weight(&g, i, k);
+                matrix[iu][iu] += c * w;
+                matrix[iu][j as usize] -= c * w;
+            }
+        }
+        let expected = dense_solve(matrix, rhs.clone());
+        let scale = expected.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
+        let mut x = vec![0.0; n];
+        let solve = lap.solve(&mass, c, &rhs, 1e-12, &mut x);
+        assert!(solve.converged(), "factor {factor}: {solve:?}");
+        assert!(solve.relative_residual <= 1e-12, "{solve:?}");
+        let worst = (0..n).fold(0.0_f64, |m, i| m.max((x[i] - expected[i]).abs()));
+        println!(
+            "factor {factor:e}: {} iterations, largest error {:.2e} of {scale:.3e}",
+            solve.iterations,
+            worst / scale
+        );
+        assert!(
+            worst <= 1e-10 * scale,
+            "factor {factor}: {worst} of {scale}"
+        );
+        // The residual recomputed from the grid.
+        let (mut rr, mut bb) = (0.0, 0.0);
+        for i in 0..n as u32 {
+            let r = rhs[i as usize] - screened(&g, &mass, c, &x, i);
+            rr += r * r;
+            bb += rhs[i as usize] * rhs[i as usize];
+        }
+        assert!(
+            (rr / bb).sqrt() <= 2e-12,
+            "factor {factor}: {}",
+            (rr / bb).sqrt()
+        );
+    }
+}
+
+#[test]
+fn solve_keeps_a_constant() {
+    // c L of a constant is 0, so M u = b with b = 5 M gives u = 5: from
+    // u = 5 exactly, the residual is 0 and nothing changes (0 iterations,
+    // bit for bit); from u = 0, the solver reaches 5 within its tolerance.
+    let g = grid();
+    let n = g.len();
+    let mass: Vec<f64> = (0..n).map(|i| 3.0 * g.area_sr(i as u32)).collect();
+    let rhs: Vec<f64> = mass.iter().map(|m| 5.0 * m).collect();
+    let (_, rate) = fastest_cell(g);
+    let c = 1e4 / rate;
+    let mut x = vec![5.0; n];
+    let solve = laplacian().solve(&mass, c, &rhs, 1e-12, &mut x);
+    assert_eq!(solve.iterations, 0, "{solve:?}");
+    assert!(solve.converged());
+    assert!(x.iter().all(|v| v.to_bits() == 5.0_f64.to_bits()));
+    let mut x = vec![0.0; n];
+    let solve = laplacian().solve(&mass, c, &rhs, 1e-12, &mut x);
+    assert!(solve.converged(), "{solve:?}");
+    let worst = x.iter().fold(0.0_f64, |m, v| m.max((v - 5.0).abs()));
+    println!(
+        "from 0: {} iterations, largest error {worst:.2e}",
+        solve.iterations
+    );
+    assert!(worst <= 1e-10, "{worst}");
+}
+
+#[test]
+fn solve_without_coupling_divides_by_the_mass() {
+    // c = 0: u_i = b_i / m_i, to within an ulp or two of the division.
+    let g = grid();
+    let n = g.len();
+    let mass: Vec<f64> = (0..n).map(|i| g.area_sr(i as u32)).collect();
+    let rhs = uniform_m(g, -1.0, 1.0, "test/operators/solve/diagonal");
+    let mut x = vec![0.0; n];
+    let solve = laplacian().solve(&mass, 0.0, &rhs, 1e-12, &mut x);
+    assert!(solve.converged(), "{solve:?}");
+    for i in 0..n {
+        let expected = rhs[i] / mass[i];
+        assert!(
+            (x[i] - expected).abs() <= 4.0 * f64::EPSILON * expected.abs(),
+            "cell {i}: {} against {expected}",
+            x[i]
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Panics.
+
+/// Runs `solve` on the octahedron after `change` has altered its valid
+/// inputs (masses, coupling, right-hand side, tolerance, values).
+fn solve_octahedron(
+    change: impl FnOnce(&mut Vec<f64>, &mut f64, &mut Vec<f64>, &mut f64, &mut Vec<f64>),
+) {
+    let lap = Laplacian::new(&SphereGrid::octahedron());
+    let mut mass = vec![1.0; 6];
+    let mut coupling = 1.0;
+    let mut rhs = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let mut tolerance = 1e-12;
+    let mut values = vec![0.0; 6];
+    change(
+        &mut mass,
+        &mut coupling,
+        &mut rhs,
+        &mut tolerance,
+        &mut values,
+    );
+    lap.solve(&mass, coupling, &rhs, tolerance, &mut values);
+}
+
+#[test]
+fn the_unbroken_solve_runs() {
+    solve_octahedron(|_, _, _, _, _| {});
+}
+
+#[test]
+#[should_panic(expected = "solve needs one mass per cell")]
+fn solve_needs_one_mass_per_cell() {
+    solve_octahedron(|m, _, _, _, _| m.push(1.0));
+}
+
+#[test]
+#[should_panic(expected = "solve needs one right-hand side per cell")]
+fn solve_needs_one_rhs_per_cell() {
+    solve_octahedron(|_, _, b, _, _| {
+        b.pop();
+    });
+}
+
+#[test]
+#[should_panic(expected = "solve needs one value per cell")]
+fn solve_needs_one_value_per_cell() {
+    solve_octahedron(|_, _, _, _, v| v.push(0.0));
+}
+
+#[test]
+#[should_panic(expected = "solve needs finite positive masses")]
+fn solve_needs_positive_masses() {
+    solve_octahedron(|m, _, _, _, _| m[2] = 0.0);
+}
+
+#[test]
+#[should_panic(expected = "solve needs finite positive masses")]
+fn solve_needs_finite_masses() {
+    solve_octahedron(|m, _, _, _, _| m[2] = f64::NAN);
+}
+
+#[test]
+#[should_panic(expected = "solve needs a finite, non-negative coupling")]
+fn solve_needs_a_non_negative_coupling() {
+    solve_octahedron(|_, c, _, _, _| *c = -1.0);
+}
+
+#[test]
+#[should_panic(expected = "solve needs a finite, non-negative coupling")]
+fn solve_needs_a_finite_coupling() {
+    solve_octahedron(|_, c, _, _, _| *c = f64::INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "solve needs a finite right-hand side")]
+fn solve_needs_a_finite_rhs() {
+    solve_octahedron(|_, _, b, _, _| b[0] = f64::NEG_INFINITY);
+}
+
+#[test]
+#[should_panic(expected = "solve needs finite values")]
+fn solve_needs_finite_values() {
+    solve_octahedron(|_, _, _, _, v| v[1] = f64::NAN);
+}
+
+#[test]
+#[should_panic(expected = "solve needs a tolerance in (0, 1)")]
+fn solve_needs_a_positive_tolerance() {
+    solve_octahedron(|_, _, _, t, _| *t = 0.0);
+}
+
+#[test]
+#[should_panic(expected = "solve needs a tolerance in (0, 1)")]
+fn solve_needs_a_tolerance_below_one() {
+    solve_octahedron(|_, _, _, t, _| *t = 1.0);
+}
 
 /// Runs `implicit_step` on the octahedron after `change` has altered its
 /// valid inputs (radius, κ, Δt, flags, values).

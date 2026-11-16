@@ -49,8 +49,11 @@
 //! backward-Euler step, solved by the conjugate gradient method, on some
 //! cells while the others hold fixed values (a Dirichlet boundary): the
 //! hillslope diffusion of the Erosion stage
-//! ([`crate::stages::erosion::diffuse`]), and later the diffusion of heat
-//! and of marine sediment.
+//! ([`crate::stages::erosion::diffuse`]), and later the diffusion of
+//! marine sediment. [`Laplacian::solve`] solves the more general
+//! `(M + c L) u = b` with a mass per cell by the same method, over every
+//! cell: the diffusion of heat in the energy balance of the Climate stage
+//! ([`crate::stages::climate::energy_balance`], ticket M4-02).
 //!
 //! Everything here depends only on its inputs, through IEEE `+ − × ÷` and
 //! `sqrt` in a fixed order: every sum and dot product runs sequentially over
@@ -60,15 +63,16 @@
 use kuniumi_sphere::SphereGrid;
 
 /// The relative residual at which [`Laplacian::implicit_step`] stops:
-/// `‖b − A u'‖₂ ≤ 10⁻¹² ‖b‖₂`.
+/// `‖b − A u'‖₂ ≤ 10⁻¹² ‖b‖₂`. [`Laplacian::solve`] takes its tolerance
+/// from the caller.
 pub const SOLVER_TOLERANCE: f64 = 1.0e-12;
 
-/// The number of iterations after which [`Laplacian::implicit_step`] stops
-/// whether or not it has reached [`SOLVER_TOLERANCE`]: 10,000. The step
-/// needs one or two iterations for the hillslope diffusion of the Erosion
-/// stage, about 15 at the explicit limit and a few hundred to a few
-/// thousand at 10⁴ to 10¹² times it (10⁴ and 10⁵ cells), 3,600 at
-/// 7 × 10⁵ times it on 10⁶ cells (ticket M3-04).
+/// The number of iterations after which [`Laplacian::implicit_step`] and
+/// [`Laplacian::solve`] stop whether or not they have reached their
+/// tolerance: 10,000. The step needs one or two iterations for the
+/// hillslope diffusion of the Erosion stage, about 15 at the explicit limit
+/// and a few hundred to a few thousand at 10⁴ to 10¹² times it (10⁴ and
+/// 10⁵ cells), 3,600 at 7 × 10⁵ times it on 10⁶ cells (ticket M3-04).
 pub const SOLVER_MAX_ITERATIONS: u32 = 10_000;
 
 /// The finite-volume Laplacian of a grid (module documentation): per
@@ -89,7 +93,7 @@ pub struct Laplacian {
     weight_sums: Vec<f64>,
 }
 
-/// What one [`Laplacian::implicit_step`] did.
+/// What one [`Laplacian::implicit_step`] or [`Laplacian::solve`] did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Solve {
     /// The iterations of the conjugate gradient method.
@@ -104,9 +108,11 @@ pub struct Solve {
 }
 
 impl Solve {
-    /// Whether the solve stopped because the residual reached
-    /// [`SOLVER_TOLERANCE`], or had nothing to solve; `false` where it
-    /// stopped on [`SOLVER_MAX_ITERATIONS`] or for lack of a direction.
+    /// Whether the solve stopped because the residual reached its
+    /// tolerance ([`SOLVER_TOLERANCE`] for
+    /// [`implicit_step`](Laplacian::implicit_step), the caller's for
+    /// [`solve`](Laplacian::solve)), or had nothing to solve; `false` where
+    /// it stopped on [`SOLVER_MAX_ITERATIONS`] or for lack of a direction.
     pub fn converged(&self) -> bool {
         self.converged
     }
@@ -360,57 +366,12 @@ impl Laplacian {
         }
         let limit = SOLVER_TOLERANCE * SOLVER_TOLERANCE * bb;
 
-        let mut change = vec![0.0; n];
-        let mut z = vec![0.0; n];
-        for &i in &cells {
-            z[i] = residual[i] / diagonal[i];
-        }
-        let mut direction = z.clone();
-        let mut image = vec![0.0; n];
-        let mut rz = dot(&cells, &residual, &z);
-        let mut rr = dot(&cells, &residual, &residual);
-        let mut iterations = 0;
-        let mut converged = rr <= limit;
-        while !converged && iterations < SOLVER_MAX_ITERATIONS {
-            // image = A' direction; the fixed cells' entries of `direction`
-            // are 0.
-            for &i in &cells {
-                let p = direction[i];
-                let mut sum = 0.0;
-                for k in self.range(i) {
-                    sum += self.weights[k] * (p - direction[self.neighbors[k] as usize]);
-                }
-                image[i] = mass[i] * p + coupling * sum;
-            }
-            let pq = dot(&cells, &direction, &image);
-            // Written so that NaN stops too.
-            if !(pq > 0.0 && pq.is_finite()) {
-                break;
-            }
-            let alpha = rz / pq;
-            for &i in &cells {
-                change[i] += alpha * direction[i];
-                residual[i] -= alpha * image[i];
-            }
-            iterations += 1;
-            rr = dot(&cells, &residual, &residual);
-            converged = rr <= limit;
-            if converged {
-                break;
-            }
-            for &i in &cells {
-                z[i] = residual[i] / diagonal[i];
-            }
-            let rz_next = dot(&cells, &residual, &z);
-            if !(rz_next > 0.0 && rz_next.is_finite()) {
-                break;
-            }
-            let beta = rz_next / rz;
-            rz = rz_next;
-            for &i in &cells {
-                direction[i] = z[i] + beta * direction[i];
-            }
-        }
+        let Descent {
+            change,
+            iterations,
+            rr,
+            converged,
+        } = self.conjugate_gradient(&cells, &mass, coupling, &diagonal, residual, limit);
         let relative_residual = if rr == 0.0 { 0.0 } else { (rr / bb).sqrt() };
 
         if closed {
@@ -435,6 +396,204 @@ impl Laplacian {
             converged,
         }
     }
+
+    /// Solves `(M + c L) u = b` over every cell, in place: `M` the
+    /// diagonal of `mass` (one positive value per cell, in a unit `[m]`),
+    /// `c = coupling` (in `[m]`, as each weight `w_ij` is dimensionless),
+    /// `L` the weighted graph Laplacian, `(L u)_i = Σ_j w_ij (u_i − u_j)`
+    /// in neighbour order, and `b = rhs` (in `[m][u]`); `values` hold the
+    /// starting guess and become the solution. With `mass` the areas `a_i`
+    /// and `c = Δt κ / R²` this is the step of
+    /// [`implicit_step`](Self::implicit_step) with every cell free; with
+    /// other masses it is the backward-Euler step of a diffusion with a
+    /// heat capacity and a linear loss per cell, as in the energy balance
+    /// of the Climate stage
+    /// ([`crate::stages::climate::energy_balance`], ticket M4-02).
+    ///
+    /// `A = M + c L` is symmetric and positive definite (the weights are
+    /// symmetric bit for bit and every mass is positive). The solver is the
+    /// conjugate gradient method preconditioned by the diagonal of `A`,
+    /// the same code as in [`implicit_step`](Self::implicit_step), over the
+    /// cells in index order, started from `values`. It stops when the
+    /// residual it updates falls to `‖b − A u‖₂ ≤ tolerance · ‖b‖₂`, after
+    /// [`SOLVER_MAX_ITERATIONS`] iterations, or if rounding leaves no
+    /// direction to go; the returned [`Solve`] says which. The initial
+    /// residual is `b_i − m_i u_i + c Σ_j w_ij (u_j − u_i)`, so that a
+    /// starting guess that solves the system exactly (a constant `u` with
+    /// `b = M u`, for one) is returned unchanged, bit for bit.
+    ///
+    /// # Panics
+    ///
+    /// If `mass`, `rhs` or `values` does not hold one entry per cell; if a
+    /// mass is not finite and positive; if `coupling` is negative or not
+    /// finite; if a right-hand side or a value is not finite; if
+    /// `tolerance` is not in `(0, 1)`.
+    pub fn solve(
+        &self,
+        mass: &[f64],
+        coupling: f64,
+        rhs: &[f64],
+        tolerance: f64,
+        values: &mut [f64],
+    ) -> Solve {
+        let n = self.len();
+        assert_eq!(
+            mass.len(),
+            n,
+            "solve needs one mass per cell: {} masses for {n} cells",
+            mass.len()
+        );
+        assert_eq!(
+            rhs.len(),
+            n,
+            "solve needs one right-hand side per cell: {} for {n} cells",
+            rhs.len()
+        );
+        assert_eq!(
+            values.len(),
+            n,
+            "solve needs one value per cell: {} values for {n} cells",
+            values.len()
+        );
+        // Written so that NaN fails.
+        if let Some(i) = mass.iter().position(|m| !(*m > 0.0 && m.is_finite())) {
+            panic!(
+                "solve needs finite positive masses: cell {i} has {}",
+                mass[i]
+            );
+        }
+        assert!(
+            coupling >= 0.0 && coupling.is_finite(),
+            "solve needs a finite, non-negative coupling, got {coupling}"
+        );
+        if let Some(i) = rhs.iter().position(|b| !b.is_finite()) {
+            panic!(
+                "solve needs a finite right-hand side: cell {i} has {}",
+                rhs[i]
+            );
+        }
+        if let Some(i) = values.iter().position(|v| !v.is_finite()) {
+            panic!("solve needs finite values: cell {i} has {}", values[i]);
+        }
+        assert!(
+            tolerance > 0.0 && tolerance < 1.0,
+            "solve needs a tolerance in (0, 1), got {tolerance}"
+        );
+        let cells: Vec<usize> = (0..n).collect();
+        let diagonal: Vec<f64> = (0..n)
+            .map(|i| mass[i] + coupling * self.weight_sums[i])
+            .collect();
+        let u: &[f64] = values;
+        let mut residual = vec![0.0; n];
+        let mut bb = 0.0;
+        for i in 0..n {
+            residual[i] = rhs[i] - mass[i] * u[i] + coupling * self.flux_sum(i, u);
+            bb += rhs[i] * rhs[i];
+        }
+        let limit = tolerance * tolerance * bb;
+        let Descent {
+            change,
+            iterations,
+            rr,
+            converged,
+        } = self.conjugate_gradient(&cells, mass, coupling, &diagonal, residual, limit);
+        let relative_residual = if rr == 0.0 { 0.0 } else { (rr / bb).sqrt() };
+        for i in 0..n {
+            values[i] += change[i];
+        }
+        Solve {
+            iterations,
+            relative_residual,
+            converged,
+        }
+    }
+
+    /// The preconditioned conjugate gradient method of
+    /// [`implicit_step`](Self::implicit_step) and [`solve`](Self::solve)
+    /// on `cells` (in their order) for `A = diag(mass) + coupling L`,
+    /// whose entries outside `cells` are held fixed: from the residual
+    /// `residual` of the starting guess, with `diagonal` the diagonal of
+    /// `A` (the Jacobi preconditioner), until `‖r‖₂² ≤ limit`, after
+    /// [`SOLVER_MAX_ITERATIONS`] iterations, or when rounding leaves no
+    /// direction to go (`p·Ap` or `r·z` not positive and finite).
+    fn conjugate_gradient(
+        &self,
+        cells: &[usize],
+        mass: &[f64],
+        coupling: f64,
+        diagonal: &[f64],
+        mut residual: Vec<f64>,
+        limit: f64,
+    ) -> Descent {
+        let n = self.len();
+        let mut change = vec![0.0; n];
+        let mut z = vec![0.0; n];
+        for &i in cells {
+            z[i] = residual[i] / diagonal[i];
+        }
+        let mut direction = z.clone();
+        let mut image = vec![0.0; n];
+        let mut rz = dot(cells, &residual, &z);
+        let mut rr = dot(cells, &residual, &residual);
+        let mut iterations = 0;
+        let mut converged = rr <= limit;
+        while !converged && iterations < SOLVER_MAX_ITERATIONS {
+            // image = A direction; the entries of `direction` outside
+            // `cells` (fixed cells) are 0.
+            for &i in cells {
+                let p = direction[i];
+                let mut sum = 0.0;
+                for k in self.range(i) {
+                    sum += self.weights[k] * (p - direction[self.neighbors[k] as usize]);
+                }
+                image[i] = mass[i] * p + coupling * sum;
+            }
+            let pq = dot(cells, &direction, &image);
+            // Written so that NaN stops too.
+            if !(pq > 0.0 && pq.is_finite()) {
+                break;
+            }
+            let alpha = rz / pq;
+            for &i in cells {
+                change[i] += alpha * direction[i];
+                residual[i] -= alpha * image[i];
+            }
+            iterations += 1;
+            rr = dot(cells, &residual, &residual);
+            converged = rr <= limit;
+            if converged {
+                break;
+            }
+            for &i in cells {
+                z[i] = residual[i] / diagonal[i];
+            }
+            let rz_next = dot(cells, &residual, &z);
+            if !(rz_next > 0.0 && rz_next.is_finite()) {
+                break;
+            }
+            let beta = rz_next / rz;
+            rz = rz_next;
+            for &i in cells {
+                direction[i] = z[i] + beta * direction[i];
+            }
+        }
+        Descent {
+            change,
+            iterations,
+            rr,
+            converged,
+        }
+    }
+}
+
+/// What [`Laplacian::conjugate_gradient`] returns: the change to add to the
+/// starting guess, the iterations, the last `‖r‖₂²` and whether it stopped
+/// on the limit.
+struct Descent {
+    change: Vec<f64>,
+    iterations: u32,
+    rr: f64,
+    converged: bool,
 }
 
 /// `Σ_k x_k y_k` over `cells`, sequentially in their order.
