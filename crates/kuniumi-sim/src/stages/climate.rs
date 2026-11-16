@@ -25,13 +25,18 @@
 //! land–sea contrast, [`circulation::monthly_circulation`] (ticket M4-03);
 //! and the wind-driven ocean currents of the annual-mean wind stress, a
 //! Stommel model per ocean basin with the island constants of its land
-//! masses, [`ocean::ocean_currents`] (ticket M4-04). The stage itself is
-//! wired by ticket M4-07; until then the runner skips it.
+//! masses, [`ocean::ocean_currents`] (ticket M4-04); and the monthly
+//! sea-surface temperature, the energy balance with the heat carried by
+//! those currents and taken by coastal upwelling under the monthly wind
+//! stress, [`sea_surface::monthly_sea_surface_temperature`] (ticket
+//! M4-05). The stage itself is wired by ticket M4-07; until then the runner
+//! skips it.
 
 pub mod circulation;
 pub mod energy_balance;
 pub mod insolation;
 pub mod ocean;
+pub mod sea_surface;
 
 #[cfg(test)]
 mod test_worlds;

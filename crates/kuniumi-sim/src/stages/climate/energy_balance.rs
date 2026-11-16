@@ -67,8 +67,10 @@
 //!   step, a cell at the threshold could jump between ice-free and
 //!   ice-covered from one year to the next).
 //! - **Diffusion.** `D` stands for the heat carried by the atmosphere's
-//!   eddies and, until the currents of ticket M4-05, by the ocean. For a
-//!   planet other than Earth it scales as
+//!   eddies and by the ocean; the model with the ocean's currents
+//!   ([`super::sea_surface`], ticket M4-05) carries the ocean's share itself
+//!   and has its own, smaller `D⊕`. For a planet other than Earth it scales
+//!   as
 //!   `D = D⊕ (p / p⊕) (Ω⊕ / Ω)²` ([`EnergyBalanceParams::for_planet`]),
 //!   the scaling of Williams & Kasting (1997, "Habitable planets with high
 //!   obliquities", Icarus 129, 254–267, eq. 9): the eddy heat flux
@@ -188,7 +190,8 @@
 //!   too small a seasonal range.
 //! - `D` does not depend on latitude, so the tropics are not as flat as
 //!   the Hadley cells make them (NCC81 p. 97); the ocean's heat transport
-//!   is part of `D` until ticket M4-05.
+//!   is part of `D` (the model with currents of ticket M4-05 carries it
+//!   explicitly).
 //! - The cost grows faster than the cells: the diffusion is stiff at the
 //!   grid's scale, and the solver's iterations grow with the resolution
 //!   (per model year, release: 0.37 s at 10,000 cells, 3.2 s at 40,000,
@@ -231,7 +234,7 @@ pub const SOLVER_TOLERANCE: f64 = 1e-10;
 /// documentation, "The periodic state"): 10⁻⁶. The correction only speeds
 /// up the approach to the periodic state, whose fixed point does not
 /// depend on it.
-const CORRECTION_TOLERANCE: f64 = 1e-6;
+pub(crate) const CORRECTION_TOLERANCE: f64 = 1e-6;
 
 /// The smallest restoring slope of the annual correction, as a fraction of
 /// `B`.
@@ -340,6 +343,22 @@ impl EnergyBalanceParams {
     /// period (`Ω⊕ / Ω = P / P⊕`; module documentation, "Diffusion"). For
     /// Earth the ratios are exactly 1.
     pub fn for_planet(params: &PlanetParams) -> Self {
+        Self::for_planet_with(
+            params,
+            Self::EARTH_OLR_AT_FREEZING_W_M2,
+            Self::EARTH_DIFFUSION_W_M2_K,
+        )
+    }
+
+    /// [`for_planet`](Self::for_planet) with Earth's `A` and `D⊕` given:
+    /// those of the energy balance with ocean currents
+    /// ([`super::sea_surface::SeaSurfaceParams::energy_balance`], ticket
+    /// M4-05), the same expressions otherwise.
+    pub(crate) fn for_planet_with(
+        params: &PlanetParams,
+        earth_olr_at_freezing_w_m2: f64,
+        earth_diffusion_w_m2_k: f64,
+    ) -> Self {
         let earth = PlanetParams::earth();
         let air_j_m2_k = params.surface_pressure_pa * Self::AIR_SPECIFIC_HEAT_J_KG_K
             / params.surface_gravity_m_s2;
@@ -349,9 +368,9 @@ impl EnergyBalanceParams {
         let pressure = params.surface_pressure_pa / earth.surface_pressure_pa;
         let spin = params.rotation_period_s / earth.rotation_period_s;
         Self {
-            olr_at_freezing_w_m2: Self::EARTH_OLR_AT_FREEZING_W_M2,
+            olr_at_freezing_w_m2: earth_olr_at_freezing_w_m2,
             olr_slope_w_m2_k: Self::OLR_SLOPE_W_M2_K,
-            diffusion_w_m2_k: Self::EARTH_DIFFUSION_W_M2_K * pressure * (spin * spin),
+            diffusion_w_m2_k: earth_diffusion_w_m2_k * pressure * (spin * spin),
             land_heat_capacity_j_m2_k: air_j_m2_k,
             ocean_heat_capacity_j_m2_k: air_j_m2_k + mixed_layer_j_m2_k,
             ocean_albedo: Self::OCEAN_ALBEDO,
@@ -556,6 +575,21 @@ impl EnergyBalance {
         self.substep_s
     }
 
+    /// The area of each cell (sr).
+    pub(crate) fn areas_sr(&self) -> &[f64] {
+        &self.areas_sr
+    }
+
+    /// The sine of each cell's latitude.
+    pub(crate) fn sin_lat(&self) -> &[f64] {
+        &self.sin_lat
+    }
+
+    /// The Laplacian of the grid.
+    pub(crate) fn laplacian(&self) -> &Laplacian {
+        &self.laplacian
+    }
+
     /// The surface temperature (K) of each cell for the sea-level
     /// temperatures `sea_level_k`: `T − Γ z`, the ocean's equal to its
     /// sea-level temperature bit for bit.
@@ -727,34 +761,7 @@ impl EnergyBalance {
         tolerance_k: f64,
         max_years: u32,
     ) -> Temperature {
-        let mut temperature_k = self.warm_start(insolation_w_m2);
-        let mut previous: Option<[Vec<f64>; MONTHS]> = None;
-        let mut years = 0;
-        loop {
-            years += 1;
-            let start = temperature_k.clone();
-            let means: [Vec<f64>; MONTHS] =
-                core::array::from_fn(|k| self.month(&mut temperature_k, &insolation_w_m2[k]));
-            let change_k = match &previous {
-                None => f64::INFINITY,
-                Some(last) => largest_change_k(last, &means),
-            };
-            let converged = change_k <= tolerance_k;
-            if converged || years >= max_years {
-                let surface_k = core::array::from_fn(|k| self.surface_temperature_k(&means[k]));
-                return Temperature {
-                    sea_level_k: means,
-                    surface_k,
-                    years,
-                    change_k,
-                    converged,
-                };
-            }
-            if correct {
-                self.correct(&start, &mut temperature_k, &means, insolation_w_m2);
-            }
-            previous = Some(means);
-        }
+        periodic_state(self, insolation_w_m2, correct, tolerance_k, max_years)
     }
 
     /// The annual correction: adds to `temperature_k` (the state at the
@@ -774,31 +781,8 @@ impl EnergyBalance {
     ) {
         let n = self.len();
         let p = &self.params;
-        let b = p.olr_slope_w_m2_k;
-        let ramp_k = p.melting_temperature_k - p.frozen_temperature_k;
-        let mut feedback = vec![0.0; n];
-        for (month, insolation) in means.iter().zip(insolation_w_m2) {
-            let surface = self.surface_temperature_k(month);
-            for i in 0..n {
-                if surface[i] > p.frozen_temperature_k && surface[i] < p.melting_temperature_k {
-                    let free = p.free_albedo(self.ocean[i], self.sin_lat[i]);
-                    feedback[i] += insolation[i] * (p.ice_albedo - free) / ramp_k;
-                }
-            }
-        }
-        let mass: Vec<f64> = (0..n)
-            .map(|i| {
-                let slope = b - feedback[i] / MONTHS as f64;
-                let floor = CORRECTION_SLOPE_FLOOR * b;
-                self.areas_sr[i] * if slope > floor { slope } else { floor }
-            })
-            .collect();
-        let rhs: Vec<f64> = (0..n)
-            .map(|i| {
-                self.areas_sr[i] * self.heat_capacity_j_m2_k[i] * (temperature_k[i] - start[i])
-                    / self.year_s
-            })
-            .collect();
+        let mass = self.correction_mass(means, insolation_w_m2);
+        let rhs = self.correction_rhs(start, temperature_k);
         if rhs.iter().all(|&r| r == 0.0) {
             return;
         }
@@ -815,8 +799,49 @@ impl EnergyBalance {
         }
     }
 
+    /// `a_i B'_i` of the annual correction ([`correct`](Self::correct)) for
+    /// the year whose monthly means were `means` under `insolation_w_m2`.
+    pub(crate) fn correction_mass(
+        &self,
+        means: &[Vec<f64>; MONTHS],
+        insolation_w_m2: &[Vec<f64>; MONTHS],
+    ) -> Vec<f64> {
+        let n = self.len();
+        let p = &self.params;
+        let b = p.olr_slope_w_m2_k;
+        let ramp_k = p.melting_temperature_k - p.frozen_temperature_k;
+        let mut feedback = vec![0.0; n];
+        for (month, insolation) in means.iter().zip(insolation_w_m2) {
+            let surface = self.surface_temperature_k(month);
+            for i in 0..n {
+                if surface[i] > p.frozen_temperature_k && surface[i] < p.melting_temperature_k {
+                    let free = p.free_albedo(self.ocean[i], self.sin_lat[i]);
+                    feedback[i] += insolation[i] * (p.ice_albedo - free) / ramp_k;
+                }
+            }
+        }
+        (0..n)
+            .map(|i| {
+                let slope = b - feedback[i] / MONTHS as f64;
+                let floor = CORRECTION_SLOPE_FLOOR * b;
+                self.areas_sr[i] * if slope > floor { slope } else { floor }
+            })
+            .collect()
+    }
+
+    /// `a_i C_i (T_end − T_start) / P` of the annual correction, the drift
+    /// of the year from `start` to `temperature_k`.
+    pub(crate) fn correction_rhs(&self, start: &[f64], temperature_k: &[f64]) -> Vec<f64> {
+        (0..self.len())
+            .map(|i| {
+                self.areas_sr[i] * self.heat_capacity_j_m2_k[i] * (temperature_k[i] - start[i])
+                    / self.year_s
+            })
+            .collect()
+    }
+
     /// Checks that each month of `insolation_w_m2` has one value per cell.
-    fn check_months(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) {
+    pub(crate) fn check_months(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) {
         for (k, month) in insolation_w_m2.iter().enumerate() {
             assert_eq!(
                 month.len(),
@@ -825,6 +850,104 @@ impl EnergyBalance {
                 k + 1
             );
         }
+    }
+}
+
+/// A model of the seasons that [`periodic_state`] runs to a periodic
+/// state: the energy balance, and the energy balance with the ocean's
+/// currents and upwelling ([`super::sea_surface::SeaSurfaceModel`], ticket
+/// M4-05).
+pub(crate) trait Seasons {
+    /// The warm start of the first year.
+    fn start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64>;
+    /// Month `month` (0 to 11) from `temperature_k`, in place; its mean.
+    fn step_month(
+        &self,
+        month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+    ) -> Vec<f64>;
+    /// The annual correction of the state `temperature_k` at the end of a
+    /// year that started at `start` with the monthly means `means`.
+    fn correct_year(
+        &self,
+        start: &[f64],
+        temperature_k: &mut [f64],
+        means: &[Vec<f64>; MONTHS],
+        insolation_w_m2: &[Vec<f64>; MONTHS],
+    );
+    /// The surface temperature of the sea-level temperatures `sea_level_k`.
+    fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64>;
+}
+
+impl Seasons for EnergyBalance {
+    fn start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
+        self.warm_start(insolation_w_m2)
+    }
+
+    fn step_month(
+        &self,
+        _month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+    ) -> Vec<f64> {
+        self.month(temperature_k, insolation_w_m2)
+    }
+
+    fn correct_year(
+        &self,
+        start: &[f64],
+        temperature_k: &mut [f64],
+        means: &[Vec<f64>; MONTHS],
+        insolation_w_m2: &[Vec<f64>; MONTHS],
+    ) {
+        self.correct(start, temperature_k, means, insolation_w_m2);
+    }
+
+    fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64> {
+        self.surface_temperature_k(sea_level_k)
+    }
+}
+
+/// The periodic state of `model` under the monthly-mean insolation
+/// `insolation_w_m2` (module documentation, "The periodic state"): from its
+/// warm start, whole years until no monthly mean changes by more than
+/// `tolerance_k` from the year before or `max_years` have run, with the
+/// annual correction after each year if `correct`.
+pub(crate) fn periodic_state<S: Seasons>(
+    model: &S,
+    insolation_w_m2: &[Vec<f64>; MONTHS],
+    correct: bool,
+    tolerance_k: f64,
+    max_years: u32,
+) -> Temperature {
+    let mut temperature_k = model.start(insolation_w_m2);
+    let mut previous: Option<[Vec<f64>; MONTHS]> = None;
+    let mut years = 0;
+    loop {
+        years += 1;
+        let start = temperature_k.clone();
+        let means: [Vec<f64>; MONTHS] =
+            core::array::from_fn(|k| model.step_month(k, &mut temperature_k, &insolation_w_m2[k]));
+        let change_k = match &previous {
+            None => f64::INFINITY,
+            Some(last) => largest_change_k(last, &means),
+        };
+        let converged = change_k <= tolerance_k;
+        if converged || years >= max_years {
+            let surface_k = core::array::from_fn(|k| model.surface_k(&means[k]));
+            return Temperature {
+                sea_level_k: means,
+                surface_k,
+                years,
+                change_k,
+                converged,
+            };
+        }
+        if correct {
+            model.correct_year(&start, &mut temperature_k, &means, insolation_w_m2);
+        }
+        previous = Some(means);
     }
 }
 
@@ -841,7 +964,7 @@ fn largest_change_k(a: &[Vec<f64>; MONTHS], b: &[Vec<f64>; MONTHS]) -> f64 {
 }
 
 /// The largest `|b_i − a_i|`, in order.
-fn largest_difference_k(a: &[f64], b: &[f64]) -> f64 {
+pub(crate) fn largest_difference_k(a: &[f64], b: &[f64]) -> f64 {
     let mut largest = 0.0_f64;
     for (u, v) in a.iter().zip(b) {
         let d = (v - u).abs();

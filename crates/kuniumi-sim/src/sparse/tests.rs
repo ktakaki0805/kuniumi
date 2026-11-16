@@ -37,6 +37,31 @@ fn apply_by_hand() {
     assert!(empty.is_empty());
 }
 
+#[test]
+fn with_diagonal_keeps_the_rest() {
+    // Ticket M4-05: the diagonal 1, 2, 3 instead of 4, 5, 6 changes only
+    // the diagonal terms of the product: 1 − 2 = −1; −2 + 4 − 3 = −1;
+    // −6 + 9 = 3.
+    let m = small().with_diagonal(vec![1.0, 2.0, 3.0]);
+    assert_eq!(m.diagonal(), &[1.0, 2.0, 3.0]);
+    assert_eq!(m.row(1), small().row(1));
+    let mut y = vec![0.0; 3];
+    m.apply(&[1.0, 2.0, 3.0], &mut y);
+    assert_eq!(y, vec![-1.0, -1.0, 3.0]);
+}
+
+#[test]
+#[should_panic(expected = "one diagonal entry per row")]
+fn with_diagonal_needs_one_entry_per_row() {
+    small().with_diagonal(vec![1.0, 2.0]);
+}
+
+#[test]
+#[should_panic(expected = "finite entries on its diagonal")]
+fn with_diagonal_needs_finite_entries() {
+    small().with_diagonal(vec![1.0, f64::INFINITY, 3.0]);
+}
+
 /// Gaussian elimination with partial pivoting of the dense `a x = b`.
 fn dense_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
     let n = b.len();

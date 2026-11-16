@@ -182,8 +182,9 @@
 //! - **Depth** `H` = 1,000 m: the wind-driven layer, about the depth of the
 //!   main thermocline above which the gyres are concentrated. It only
 //!   scales the currents (`u ∝ 1/H`); `Hψ` and the transports do not depend
-//!   on it. Provisional until ticket M4-05 couples the currents to the
-//!   sea-surface temperature and ticket M4-08 calibrates.
+//!   on it, and neither does the heat the currents carry in the
+//!   sea-surface temperature of ticket M4-05 ([`super::sea_surface`]).
+//!   Provisional until ticket M4-08 calibrates.
 //! - `ρ₀` = 1,025 kg/m³ (the energy balance's sea water), `R_d` that of
 //!   the circulation, `Ω` and the radius those of the planet.
 //!
@@ -310,7 +311,7 @@ impl OceanParams {
     }
 
     /// Whether every parameter is finite and positive (`Ω` may be 0).
-    fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         let positive = |x: f64| x > 0.0 && x.is_finite();
         positive(self.friction_rate_per_s)
             && positive(self.layer_depth_m)
@@ -423,26 +424,24 @@ pub struct WindStress {
     pub north_pa: Vec<f64>,
 }
 
-/// The annual-mean wind stress of the monthly circulation `circulation`
-/// (ticket M4-03) over the monthly sea-level temperatures `sea_level_k`
-/// (K, ticket M4-02): each month `τ = ρ_a C_D |U| U` with
-/// `ρ_a = p / (R_d T)`, then the mean of the twelve months, summed in
-/// month order (module documentation, "Forcing and parameters").
+/// The wind stress of each month of the circulation `circulation` (ticket
+/// M4-03) over the monthly sea-level temperatures `sea_level_k` (K, ticket
+/// M4-02): `τ = ρ_a C_D |U| U` with `ρ_a = p / (R_d T)` (module
+/// documentation, "Forcing and parameters"). The coastal upwelling of the
+/// sea-surface temperature follows it month by month
+/// ([`super::sea_surface`], ticket M4-05).
 ///
 /// # Panics
 ///
-/// If a month does not hold one pressure, wind and temperature per cell
-/// (as many as the first month's pressures), if a pressure or a
-/// temperature is not finite and positive, or a wind not finite.
-pub fn annual_wind_stress(
+/// As [`annual_wind_stress`].
+pub fn monthly_wind_stress(
     params: &OceanParams,
     circulation: &Circulation,
     sea_level_k: &[Vec<f64>; MONTHS],
-) -> WindStress {
+) -> [WindStress; MONTHS] {
     let n = circulation.pressure_pa[0].len();
-    let mut east_pa = vec![0.0; n];
-    let mut north_pa = vec![0.0; n];
-    for (k, t) in sea_level_k.iter().enumerate() {
+    core::array::from_fn(|k| {
+        let t = &sea_level_k[k];
         let (p, u, v) = (
             &circulation.pressure_pa[k],
             &circulation.wind_east_m_s[k],
@@ -452,6 +451,8 @@ pub fn annual_wind_stress(
             p.len() == n && u.len() == n && v.len() == n && t.len() == n,
             "the wind stress needs one pressure, wind and temperature per cell in every month"
         );
+        let mut east_pa = Vec::with_capacity(n);
+        let mut north_pa = Vec::with_capacity(n);
         for i in 0..n {
             // Written so that NaN fails.
             assert!(
@@ -468,8 +469,36 @@ pub fn annual_wind_stress(
             let density = p[i] / (params.gas_constant_j_kg_k * t[i]);
             let speed = (u[i] * u[i] + v[i] * v[i]).sqrt();
             let factor = density * params.drag_coefficient * speed;
-            east_pa[i] += factor * u[i];
-            north_pa[i] += factor * v[i];
+            east_pa.push(factor * u[i]);
+            north_pa.push(factor * v[i]);
+        }
+        WindStress { east_pa, north_pa }
+    })
+}
+
+/// The annual-mean wind stress of the monthly circulation `circulation`
+/// (ticket M4-03) over the monthly sea-level temperatures `sea_level_k`
+/// (K, ticket M4-02): the mean of the twelve stresses of
+/// [`monthly_wind_stress`], summed in month order (module documentation,
+/// "Forcing and parameters").
+///
+/// # Panics
+///
+/// If a month does not hold one pressure, wind and temperature per cell
+/// (as many as the first month's pressures), if a pressure or a
+/// temperature is not finite and positive, or a wind not finite.
+pub fn annual_wind_stress(
+    params: &OceanParams,
+    circulation: &Circulation,
+    sea_level_k: &[Vec<f64>; MONTHS],
+) -> WindStress {
+    let n = circulation.pressure_pa[0].len();
+    let mut east_pa = vec![0.0; n];
+    let mut north_pa = vec![0.0; n];
+    for month in monthly_wind_stress(params, circulation, sea_level_k) {
+        for i in 0..n {
+            east_pa[i] += month.east_pa[i];
+            north_pa[i] += month.north_pa[i];
         }
     }
     for i in 0..n {

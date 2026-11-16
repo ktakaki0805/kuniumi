@@ -32,6 +32,11 @@ In:
   - a multigrid (for example smoothed-aggregation) preconditioner for
     `Laplacian::solve`, deterministic, keeping the full resolution; also
     useful for the Stommel solve of M4-04.
+- The energy balance with ocean currents and upwelling (M4-05) solves a
+  non-symmetric system every sub-step by BiCGSTAB with the Jacobi
+  preconditioner (about 100 iterations at 40,000 cells, 5.07 s per model
+  year against 3.73 s without currents, measured in the same run); the
+  choice above covers it too.
 - Timing at 650,000 cells recorded; results compared with the full-resolution
   model on 160,000 cells.
 - The spin-up of planets with little heat transport (decided with the owner

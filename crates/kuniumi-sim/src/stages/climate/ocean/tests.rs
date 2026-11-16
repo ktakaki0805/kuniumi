@@ -299,6 +299,55 @@ fn the_wind_stress_is_the_bulk_formula() {
 }
 
 #[test]
+fn the_monthly_stress_averages_to_the_annual_bit_for_bit() {
+    // Ticket M4-05: `monthly_wind_stress` gives each month's bulk formula,
+    // and `annual_wind_stress`, now its mean, is bit for bit what ticket
+    // M4-04 computed (each month's ρ_a C_D |U| U added into one sum in
+    // month order, then divided by 12), written out here on the Earth run's
+    // circulation and temperatures. Month 1 of cell 1 of the three-cell
+    // case above: 1.225 650 × 1.2e-3 × 5 × (3, 4) Pa.
+    let params = OceanParams::earth();
+    let run = earth_10k();
+    let grid = &run.world.grid;
+    let circulation = monthly_circulation(&PlanetParams::earth(), grid, &run.temperature);
+    let t = &run.temperature.sea_level_k;
+    let n = grid.len();
+    let months = monthly_wind_stress(&params, &circulation, t);
+    let annual = annual_wind_stress(&params, &circulation, t);
+    let (mut east, mut north) = (vec![0.0; n], vec![0.0; n]);
+    for k in 0..MONTHS {
+        for i in 0..n {
+            let density = circulation.pressure_pa[k][i] / (params.gas_constant_j_kg_k * t[k][i]);
+            let (u, v) = (
+                circulation.wind_east_m_s[k][i],
+                circulation.wind_north_m_s[k][i],
+            );
+            let factor = density * params.drag_coefficient * (u * u + v * v).sqrt();
+            assert_eq!(months[k].east_pa[i].to_bits(), (factor * u).to_bits());
+            assert_eq!(months[k].north_pa[i].to_bits(), (factor * v).to_bits());
+            east[i] += factor * u;
+            north[i] += factor * v;
+        }
+    }
+    for i in 0..n {
+        assert_eq!(annual.east_pa[i].to_bits(), (east[i] / 12.0).to_bits());
+        assert_eq!(annual.north_pa[i].to_bits(), (north[i] / 12.0).to_bits());
+    }
+    let circulation = Circulation {
+        pressure_pa: core::array::from_fn(|_| vec![101_325.0; 2]),
+        wind_east_m_s: core::array::from_fn(|k| vec![(k + 1) as f64, 3.0]),
+        wind_north_m_s: core::array::from_fn(|_| vec![0.0, 4.0]),
+        thermal_equator_rad: [0.0; MONTHS],
+        cells: Cells::new(&CirculationParams::earth()),
+    };
+    let temperature: [Vec<f64>; MONTHS] = core::array::from_fn(|_| vec![288.0; 2]);
+    let months = monthly_wind_stress(&params, &circulation, &temperature);
+    assert!((months[0].east_pa[1] - 0.022_062).abs() < 1e-6);
+    assert!((months[0].north_pa[1] - 0.029_416).abs() < 1e-6);
+    assert!((months[11].east_pa[0] - 1.225_650 * 1.2e-3 * 144.0).abs() < 1e-6);
+}
+
+#[test]
 fn the_curl_satisfies_stokes() {
     // A solid-body stress τ = U cos φ towards the east (U = 0.1 Pa) has the
     // curl (1/(a cos φ)) · (−∂(U cos² φ)/∂φ) = 2U sin φ / a. The cells' curls

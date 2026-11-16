@@ -502,6 +502,30 @@ section: every change after which an existing seed produces a different world
   the north and counter-clockwise ones in the south, with western boundary
   currents; about 0.7 s on 40,000 cells and 37 s on 650,000. Not yet used
   by the pipeline (M4-04).
+- `kuniumi_sim::stages::climate::ocean::monthly_wind_stress`: the bulk
+  formula's stress of each month; `annual_wind_stress` is now its mean, bit
+  for bit as before. `kuniumi_sim::sparse::SparseMatrix::with_diagonal`
+  (M4-05).
+- `kuniumi_sim::stages::climate::sea_surface`: the monthly sea-surface
+  temperature (`SeaSurfaceParams`, `ekman_transport_m2_s`,
+  `coastal_upwelling_m3_s`, `SeaSurfaceModel`, `SeaSurfaceBudget`,
+  `SeaSurface`, `monthly_sea_surface_temperature`): the energy balance of
+  M4-02 with two source terms in its implicit sub-steps (no operator
+  splitting, solved by BiCGSTAB): upwind advection of the temperature by
+  the transports of the M4-04 currents in flux form (heat conserved edge
+  by edge), and coastal upwelling, the Ekman transport
+  `(r_E T − f k × T) / (r_E² + f²)` (`r_E` = (2 days)⁻¹, Zebiak & Cane
+  1987) that leaves a coastal cell through its open edges, month by month,
+  bringing water colder by `κ (T − T_fz)` (`κ` = 0.3, provisional;
+  `T_fz` = −1.8 °C) whose heat is returned to the ocean by area (exactly,
+  by the Sherman–Morrison formula). `A` = 202.6 W/m² and
+  `D` = 0.508 W m⁻² K⁻¹ refitted for the model with currents on the
+  Earth-parameter world of seed 1 (40,000 cells: `P₂` −27.97 K, mean
+  surface temperature 287.99 K). Earth: the subtropical west coasts of the
+  continents 0.8–1.3 K colder than the east coasts, the eastern sides of
+  the oceans at 45–65° 2.0–3.7 K warmer than the western sides; periodic in
+  12 years, about 61 s on 40,000 cells. Not yet used by the pipeline
+  (M4-05).
 
 ### Changed
 

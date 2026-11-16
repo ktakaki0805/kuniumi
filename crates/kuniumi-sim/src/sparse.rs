@@ -110,6 +110,33 @@ impl SparseMatrix {
         &self.diagonal
     }
 
+    /// The same entries off the diagonal with the diagonal `diagonal`: the
+    /// systems of the sea-surface temperature, which differ month by month
+    /// only on the diagonal (ticket M4-05).
+    ///
+    /// # Panics
+    ///
+    /// If `diagonal` does not hold one finite entry per row.
+    pub fn with_diagonal(&self, diagonal: Vec<f64>) -> Self {
+        assert_eq!(
+            diagonal.len(),
+            self.len(),
+            "with_diagonal needs one diagonal entry per row: {} for {} rows",
+            diagonal.len(),
+            self.len()
+        );
+        assert!(
+            diagonal.iter().all(|d| d.is_finite()),
+            "a sparse matrix needs finite entries on its diagonal"
+        );
+        Self {
+            diagonal,
+            offsets: self.offsets.clone(),
+            columns: self.columns.clone(),
+            values: self.values.clone(),
+        }
+    }
+
     /// The entries of row `i` off the diagonal: their columns and values.
     pub fn row(&self, i: usize) -> (&[u32], &[f64]) {
         let range = self.offsets[i]..self.offsets[i + 1];
