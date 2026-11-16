@@ -25,6 +25,7 @@ pub mod drainage;
 pub mod metrics;
 pub mod operators;
 pub mod pipeline;
+pub mod sparse;
 pub mod stages;
 
 /// The stages of the pipeline.

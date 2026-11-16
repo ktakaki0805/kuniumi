@@ -484,6 +484,24 @@ section: every change after which an existing seed produces a different world
   equator). Earth's annual zonal mean: trades to 25°, westerlies at 35–60°.
   About 0.9 s for twelve months at 650,000 cells. Not yet used by the
   pipeline (M4-03).
+- `kuniumi_sim::sparse`: a sparse matrix by rows (`SparseMatrix`) and
+  BiCGSTAB with the Jacobi preconditioner (`bicgstab`, van der Vorst 1992),
+  restarted on a breakdown, for non-symmetric systems (M4-04).
+- `kuniumi_sim::stages::climate::ocean`: ocean basins and land masses
+  (`OceanBasins`), the annual-mean wind stress of the bulk formula
+  (`annual_wind_stress`, `C_D` = 1.2 × 10⁻³) and the wind-driven currents of
+  a Stommel (1948) model per basin (`OceanParams`, `OceanModel`,
+  `OceanCurrents`, `ocean_currents`): `r ∇²ψ + β ∂ψ/∂x = curl τ / (ρ₀ H)`
+  by finite volumes with exact β fluxes through the Voronoi edges and
+  Scharfetter–Gummel exponential fitting, `ψ` constant along each coast
+  (one land mass of a basin at 0, the others by the island rule, so that
+  circumpolar channels carry their current), `r` = 2 × 10⁻⁶ s⁻¹ (a 100 km
+  Stommel layer), `H` = 1,000 m (provisional). Outputs the streamfunction,
+  the transports through every Voronoi edge (exactly zero through coasts)
+  and the currents east and north. Earth: clockwise subtropical gyres in
+  the north and counter-clockwise ones in the south, with western boundary
+  currents; about 0.7 s on 40,000 cells and 37 s on 650,000. Not yet used
+  by the pipeline (M4-04).
 
 ### Changed
 

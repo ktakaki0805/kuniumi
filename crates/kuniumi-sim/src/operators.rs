@@ -58,8 +58,11 @@
 //! [`Gradient`] is the least-squares gradient of a cell field in each
 //! cell's east/north frame (ticket M4-03): the pressure gradient that
 //! drives the surface winds of the Climate stage
-//! ([`crate::stages::climate::circulation`]), and later the curl of the
-//! wind stress and the slope that lifts moist air.
+//! ([`crate::stages::climate::circulation`]), and later the slope that
+//! lifts moist air. (The curl of the wind stress of the ocean,
+//! [`crate::stages::climate::ocean`], is the circulation around each
+//! cell instead, ticket M4-04.) The non-symmetric systems of the ocean are
+//! solved by [`crate::sparse::bicgstab`].
 //!
 //! Everything here depends only on its inputs, through IEEE `+ − × ÷` and
 //! `sqrt` in a fixed order: every sum and dot product runs sequentially over
@@ -99,10 +102,12 @@ pub struct Laplacian {
     weight_sums: Vec<f64>,
 }
 
-/// What one [`Laplacian::implicit_step`] or [`Laplacian::solve`] did.
+/// What one [`Laplacian::implicit_step`], [`Laplacian::solve`] or
+/// [`crate::sparse::bicgstab`] did.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Solve {
-    /// The iterations of the conjugate gradient method.
+    /// The iterations of the conjugate gradient method (of BiCGSTAB for
+    /// [`crate::sparse::bicgstab`]).
     pub iterations: u32,
     /// The relative residual `‖b − A u'‖₂ / ‖b‖₂` at the end, as the
     /// method updates it (0 where nothing was solved, `+∞` where `b` is 0
@@ -114,11 +119,23 @@ pub struct Solve {
 }
 
 impl Solve {
+    /// The report of a solve, for the other solvers of the crate
+    /// ([`crate::sparse::bicgstab`], ticket M4-04).
+    pub(crate) fn new(iterations: u32, relative_residual: f64, converged: bool) -> Self {
+        Self {
+            iterations,
+            relative_residual,
+            converged,
+        }
+    }
+
     /// Whether the solve stopped because the residual reached its
     /// tolerance ([`SOLVER_TOLERANCE`] for
     /// [`implicit_step`](Laplacian::implicit_step), the caller's for
-    /// [`solve`](Laplacian::solve)), or had nothing to solve; `false` where
-    /// it stopped on [`SOLVER_MAX_ITERATIONS`] or for lack of a direction.
+    /// [`solve`](Laplacian::solve) and [`crate::sparse::bicgstab`]), or had
+    /// nothing to solve; `false` where it stopped on its iteration limit
+    /// ([`SOLVER_MAX_ITERATIONS`], or the caller's for
+    /// [`crate::sparse::bicgstab`]) or for lack of a direction.
     pub fn converged(&self) -> bool {
         self.converged
     }
