@@ -55,12 +55,18 @@
 //! cell: the diffusion of heat in the energy balance of the Climate stage
 //! ([`crate::stages::climate::energy_balance`], ticket M4-02).
 //!
+//! [`Gradient`] is the least-squares gradient of a cell field in each
+//! cell's east/north frame (ticket M4-03): the pressure gradient that
+//! drives the surface winds of the Climate stage
+//! ([`crate::stages::climate::circulation`]), and later the curl of the
+//! wind stress and the slope that lifts moist air.
+//!
 //! Everything here depends only on its inputs, through IEEE `+ − × ÷` and
 //! `sqrt` in a fixed order: every sum and dot product runs sequentially over
 //! the cells in index order (docs/conventions.md, "Determinism", rules 2
 //! and 6), so the results are the same on every platform.
 
-use kuniumi_sphere::SphereGrid;
+use kuniumi_sphere::{SphereGrid, coords};
 
 /// The relative residual at which [`Laplacian::implicit_step`] stops:
 /// `‖b − A u'‖₂ ≤ 10⁻¹² ‖b‖₂`. [`Laplacian::solve`] takes its tolerance
@@ -622,6 +628,150 @@ fn compensated_sum(terms: impl Iterator<Item = f64>) -> f64 {
         sum = t;
     }
     sum + compensation
+}
+
+/// The gradient of a cell field on the unit sphere, by least squares over
+/// each cell's neighbours (module documentation; ticket M4-03).
+///
+/// For cell `i` at `p_i`, with the east and north unit vectors `e_i` and
+/// `n_i` of [`coords::east`] and [`coords::north`], each neighbour `j`
+/// gives the displacement `d_ij` in the tangent plane: the components
+/// `((p_j − p_i)·e_i, (p_j − p_i)·n_i)`, the direction of `p_j` from `p_i`,
+/// scaled to the great-circle distance `θ_ij`
+/// ([`SphereGrid::centre_distances_rad`]), so that `|d_ij| = θ_ij`. The
+/// gradient `g_i` minimises `Σ_j (u_j − u_i − g_i·d_ij)² / θ_ij²`, the
+/// weighted least-squares fit of a plane through the cell's value: the
+/// normal equations `(Σ_j w_ij d_ij d_ijᵀ) g_i = Σ_j w_ij d_ij (u_j − u_i)`
+/// with `w_ij = 1/θ_ij²`, solved once per cell into one coefficient pair
+/// per neighbour, so that
+///
+/// ```text
+/// g_i = Σ_j c_ij (u_j − u_i)        (east and north, per radian of arc)
+/// ```
+///
+/// in neighbour order. Divide by the radius for the gradient per metre.
+///
+/// A constant gives exactly 0. The fit is exact for a field linear in
+/// `d`, so the gradient is first-order accurate on the jittered grid of
+/// [`SphereGrid::fibonacci`]: for the harmonics `z`, `3z² − 1` and `xy`
+/// its error is about 0.5–0.9 % (RMS) and 2–5 % (largest) of the largest
+/// `|∇u|` at 10⁴ cells and halves with each fourfold refinement (ticket
+/// M4-03, `operators::tests`). On the octahedron, whose neighbours lie a
+/// quarter turn away, the gradient of `z` at the equator is `2/π` instead
+/// of 1: the chords of a coarse grid.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Gradient {
+    /// CSR offsets: the neighbours of cell `i` are
+    /// `offsets[i]..offsets[i + 1]`.
+    offsets: Vec<u32>,
+    /// The neighbours, as in the grid.
+    neighbors: Vec<u32>,
+    /// `c_ij` east, per CSR entry (per radian).
+    east: Vec<f64>,
+    /// `c_ij` north, per CSR entry (per radian).
+    north: Vec<f64>,
+}
+
+impl Gradient {
+    /// The gradient of `grid`: the coefficients of every neighbour pair.
+    /// O(n).
+    ///
+    /// # Panics
+    ///
+    /// If the neighbours of a cell do not span its tangent plane (not on a
+    /// valid grid, where every cell is surrounded by at least three
+    /// neighbours).
+    pub fn new(grid: &SphereGrid) -> Self {
+        let n = grid.len();
+        let mut offsets = Vec::with_capacity(n + 1);
+        let mut neighbors = Vec::new();
+        let mut east = Vec::new();
+        let mut north = Vec::new();
+        offsets.push(0);
+        let mut displacements = Vec::new();
+        for i in 0..n as u32 {
+            let p = grid.position(i);
+            let (e, nv) = (coords::east(p), coords::north(p));
+            let distances = grid.centre_distances_rad(i);
+            displacements.clear();
+            let (mut xx, mut xy, mut yy) = (0.0, 0.0, 0.0);
+            for (k, &j) in grid.neighbors(i).iter().enumerate() {
+                let q = grid.position(j);
+                let d = kuniumi_math::Vec3::new(q.x - p.x, q.y - p.y, q.z - p.z);
+                let (x, y) = (d.dot(e), d.dot(nv));
+                let theta = distances[k];
+                // Scaled to the great-circle distance; `x² + y² > 0` for
+                // distinct neighbours off the antipode, as on a valid grid.
+                let scale = theta / (x * x + y * y).sqrt();
+                let (x, y, w) = (x * scale, y * scale, 1.0 / (theta * theta));
+                xx += w * x * x;
+                xy += w * x * y;
+                yy += w * y * y;
+                displacements.push((j, x, y, w));
+            }
+            let determinant = xx * yy - xy * xy;
+            // Written so that NaN fails.
+            assert!(
+                determinant > 0.0 && determinant.is_finite(),
+                "Gradient needs neighbours that surround each cell: cell {i} has a \
+                 singular normal matrix"
+            );
+            for &(j, x, y, w) in &displacements {
+                neighbors.push(j);
+                east.push(w * (yy * x - xy * y) / determinant);
+                north.push(w * (xx * y - xy * x) / determinant);
+            }
+            // At most 6n − 12 entries (`kuniumi_sphere::MAX_CELLS`), as in
+            // the grid's own u32 offsets.
+            offsets.push(neighbors.len() as u32);
+        }
+        Self {
+            offsets,
+            neighbors,
+            east,
+            north,
+        }
+    }
+
+    /// The number of cells.
+    pub fn len(&self) -> usize {
+        self.offsets.len() - 1
+    }
+
+    /// Whether there are no cells.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The gradient of `values` (one per cell, in a unit `[u]`): its east
+    /// and north components at every cell, in `[u]` per radian of arc.
+    ///
+    /// # Panics
+    ///
+    /// If `values` does not hold one value per cell.
+    pub fn apply(&self, values: &[f64]) -> (Vec<f64>, Vec<f64>) {
+        let n = self.len();
+        assert_eq!(
+            values.len(),
+            n,
+            "apply needs one value per cell: {} values for {n} cells",
+            values.len()
+        );
+        let mut east = Vec::with_capacity(n);
+        let mut north = Vec::with_capacity(n);
+        for i in 0..n {
+            let u = values[i];
+            let (mut ge, mut gn) = (0.0, 0.0);
+            for k in self.offsets[i] as usize..self.offsets[i + 1] as usize {
+                let difference = values[self.neighbors[k] as usize] - u;
+                ge += self.east[k] * difference;
+                gn += self.north[k] * difference;
+            }
+            east.push(ge);
+            north.push(gn);
+        }
+        (east, north)
+    }
 }
 
 #[cfg(test)]

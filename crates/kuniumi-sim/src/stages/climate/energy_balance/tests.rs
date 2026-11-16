@@ -29,13 +29,13 @@
 #![allow(clippy::disallowed_methods)]
 
 use core::f64::consts::PI;
-use std::sync::OnceLock;
 
 use kuniumi_math::rng::fnv1a64;
 use kuniumi_math::units::deg_to_rad;
-use kuniumi_world::{PlanetParams, Settings, World};
+use kuniumi_world::{PlanetParams, Settings};
 
 use super::*;
+use crate::stages::climate::test_worlds::{earth_10k, earth_reference};
 use crate::stages::crust::SURFACE_HEIGHT;
 
 /// Asserts `|actual − expected| ≤ tolerance`.
@@ -108,57 +108,8 @@ fn p2_coefficient(grid: &SphereGrid, values: &[f64]) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
-// The Earth runs.
-
-/// A world and the periodic state of its energy balance.
-struct Run {
-    world: World,
-    model: EnergyBalance,
-    temperature: Temperature,
-}
-
-/// The Earth-parameter world of seed 1 on `cells` cells through the Crust
-/// stage, and its periodic state with Earth's parameters.
-fn earth_run(cells: u32) -> Run {
-    let params = PlanetParams::earth();
-    let settings = Settings {
-        cells,
-        allow_partial: true,
-        ..Settings::default()
-    };
-    let world = crate::generate_through_crust(&params, &settings, 1).expect("a partial world");
-    let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
-    let model = EnergyBalance::new(
-        &EnergyBalanceParams::earth(),
-        &world.grid,
-        heights,
-        world.sea_level_m,
-        params.orbital_period_s,
-    );
-    let temperature = model.periodic_state(&monthly_insolation(&params, &world.grid));
-    Run {
-        world,
-        model,
-        temperature,
-    }
-}
-
-/// The run on 10,000 cells, once.
-fn earth_10k() -> &'static Run {
-    static RUN: OnceLock<Run> = OnceLock::new();
-    RUN.get_or_init(|| earth_run(10_000))
-}
-
-/// The run of the criteria: 40,000 cells in release builds, the 10,000
-/// cells of [`earth_10k`] in debug builds.
-fn earth_reference() -> &'static Run {
-    static RUN: OnceLock<Run> = OnceLock::new();
-    if cfg!(debug_assertions) {
-        earth_10k()
-    } else {
-        RUN.get_or_init(|| earth_run(40_000))
-    }
-}
+// The Earth runs: shared with the other climate tests
+// ([`crate::stages::climate::test_worlds`]).
 
 /// The latitude (degrees) of cell `i`.
 fn latitude_deg(grid: &SphereGrid, i: usize) -> f64 {

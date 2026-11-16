@@ -17,7 +17,11 @@
 //!   `solve_without_coupling_divides_by_the_mass`: the general solve of
 //!   `(M + c L) u = b` (ticket M4-02) against Gaussian elimination and
 //!   exact cases, and its panics;
-//! - `golden_fingerprint_of_an_implicit_step`.
+//! - `golden_fingerprint_of_an_implicit_step`;
+//! - `gradient_by_hand`, `gradient_of_a_constant_is_zero`,
+//!   `gradient_converges_on_harmonics`: the least-squares gradient (ticket
+//!   M4-03) on the octahedron by hand, and against the analytic gradients
+//!   of `z`, `3z² − 1` and `xy` on grids of 10⁴ and 4 × 10⁴ cells.
 //!
 //! The diffusion number of a step is `N = c · max_i(Σ_j w_ij / a_i)` with
 //! `c = Δt κ / R²`: forward Euler is stable for `N ≤ 1` at every cell
@@ -1033,3 +1037,127 @@ fn golden_fingerprint_of_an_implicit_step() {
 
 /// The fingerprint of `golden_fingerprint_of_an_implicit_step`.
 const GOLDEN_FINGERPRINT: u64 = 0x85B3_7FE4_3AB1_E898;
+
+// ---------------------------------------------------------------------------
+// The gradient (ticket M4-03).
+
+#[test]
+fn gradient_by_hand() {
+    // On the octahedron every neighbour lies a quarter turn away, `π/2`,
+    // and the four of a cell lie east, north, west and south of it in its
+    // frame. At +X (cell 0) east is +Y and north +Z; at +Z (cell 4, the
+    // north pole) east is +Y and north −X (the frame of `coords`). The
+    // displacements are `±π/2` along each axis, the weights `4/π²`, the
+    // normal matrix `2 I`, so the coefficients are `±1/π`:
+    // `g_e = (u_east − u_west)/π`, `g_n = (u_north − u_south)/π`.
+    let grid = SphereGrid::octahedron();
+    let gradient = Gradient::new(&grid);
+    assert_eq!(gradient.len(), 6);
+    assert!(!gradient.is_empty());
+    // +X, −X, +Y, −Y, +Z, −Z.
+    let u = [1.0, 2.0, 3.0, 5.0, 7.0, 11.0];
+    let (east, north) = gradient.apply(&u);
+    // (cell, east neighbour, west, north, south)
+    let cases = [
+        (0, 2, 3, 4, 5), // +X: east +Y, north +Z
+        (2, 1, 0, 4, 5), // +Y: east −X, north +Z
+        (4, 2, 3, 1, 0), // +Z: east +Y, north −X
+        (5, 2, 3, 0, 1), // −Z: east +Y, north +X
+    ];
+    for (i, e, w, n, s) in cases {
+        let expected_east = (u[e] - u[w]) / PI;
+        let expected_north = (u[n] - u[s]) / PI;
+        assert!(
+            (east[i] - expected_east).abs() <= 1e-15,
+            "cell {i}: east {} against {expected_east}",
+            east[i]
+        );
+        assert!(
+            (north[i] - expected_north).abs() <= 1e-15,
+            "cell {i}: north {} against {expected_north}",
+            north[i]
+        );
+    }
+    // The gradient of z at the equator is 1 per radian; the chords of the
+    // octahedron give 2/π.
+    let z: Vec<f64> = grid.positions().iter().map(|p| p.z).collect();
+    let (_, north) = gradient.apply(&z);
+    assert!((north[0] - 2.0 / PI).abs() <= 1e-15, "{}", north[0]);
+}
+
+#[test]
+fn gradient_of_a_constant_is_zero() {
+    let gradient = Gradient::new(grid());
+    let (east, north) = gradient.apply(&vec![3.7; grid().len()]);
+    assert!(east.iter().chain(&north).all(|&g| g == 0.0));
+}
+
+/// The largest and the RMS error of the gradient of `f` (a function of the
+/// position in space) on `grid`, against the tangential part of its
+/// gradient in space `df`, both relative to the largest `|∇u|`.
+fn gradient_errors(
+    grid: &SphereGrid,
+    f: impl Fn(kuniumi_math::Vec3) -> f64,
+    df: impl Fn(kuniumi_math::Vec3) -> kuniumi_math::Vec3,
+) -> (f64, f64) {
+    let values: Vec<f64> = grid.positions().iter().map(|&p| f(p)).collect();
+    let (east, north) = Gradient::new(grid).apply(&values);
+    let (mut largest, mut squares, mut scale) = (0.0_f64, 0.0, 0.0_f64);
+    for (i, &p) in grid.positions().iter().enumerate() {
+        let g = df(p);
+        let (ge, gn) = (
+            g.dot(kuniumi_sphere::coords::east(p)),
+            g.dot(kuniumi_sphere::coords::north(p)),
+        );
+        let error = ((east[i] - ge).powi(2) + (north[i] - gn).powi(2)).sqrt();
+        largest = largest.max(error);
+        squares += error * error;
+        scale = scale.max((ge * ge + gn * gn).sqrt());
+    }
+    (
+        largest / scale,
+        (squares / grid.len() as f64).sqrt() / scale,
+    )
+}
+
+#[test]
+fn gradient_converges_on_harmonics() {
+    use kuniumi_math::Vec3;
+    // The gradient on the sphere of a function in space is the tangential
+    // part of its gradient in space: z → (0, 0, 1), 3z² − 1 → (0, 0, 6z),
+    // xy → (y, x, 0); its east and north components are the dot products
+    // with the frame (the normal part drops out).
+    let fine = SphereGrid::fibonacci(40_000, 1).expect("grid");
+    type Field = (&'static str, fn(Vec3) -> f64, fn(Vec3) -> Vec3);
+    let fields: [Field; 3] = [
+        ("z", |p| p.z, |_| Vec3::new(0.0, 0.0, 1.0)),
+        (
+            "3z² − 1",
+            |p| 3.0 * p.z * p.z - 1.0,
+            |p| Vec3::new(0.0, 0.0, 6.0 * p.z),
+        ),
+        ("xy", |p| p.x * p.y, |p| Vec3::new(p.y, p.x, 0.0)),
+    ];
+    for (name, f, df) in fields {
+        let (largest, rms) = gradient_errors(grid(), f, df);
+        let (largest_fine, rms_fine) = gradient_errors(&fine, f, df);
+        println!(
+            "{name}: 10,000 cells largest {largest:.3e} RMS {rms:.3e}; \
+             40,000 cells largest {largest_fine:.3e} RMS {rms_fine:.3e}"
+        );
+        assert!(rms <= 0.012 && largest <= 0.06, "{name} at 10,000 cells");
+        // First order: the error halves with the spacing (the largest
+        // error of `xy` by a ratio of 0.60, the others by 0.46 to 0.50).
+        assert!(rms_fine <= 0.6 * rms, "{name}: RMS {rms_fine} after {rms}");
+        assert!(
+            largest_fine <= 0.65 * largest,
+            "{name}: largest {largest_fine} after {largest}"
+        );
+    }
+}
+
+#[test]
+#[should_panic(expected = "apply needs one value per cell")]
+fn gradient_needs_one_value_per_cell() {
+    Gradient::new(&SphereGrid::octahedron()).apply(&[0.0; 5]);
+}

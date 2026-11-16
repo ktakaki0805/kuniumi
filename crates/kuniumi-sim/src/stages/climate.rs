@@ -19,8 +19,16 @@
 //! model (twelve equal months, the northern spring equinox at 79.5/365 of
 //! the year; ticket M4-01); and the monthly sea-level and surface
 //! temperature from the seasonal energy balance run to a periodic state,
-//! [`energy_balance::monthly_temperature`] (ticket M4-02). The stage itself
-//! is wired by ticket M4-07; until then the runner skips it.
+//! [`energy_balance::monthly_temperature`] (ticket M4-02); and the monthly
+//! sea-level pressure and surface winds of the pressure belts, whose cells
+//! follow the rotation rate, and of the thermal lows and highs of the
+//! land–sea contrast, [`circulation::monthly_circulation`] (ticket M4-03).
+//! The stage itself is wired by ticket M4-07; until then the runner skips
+//! it.
 
+pub mod circulation;
 pub mod energy_balance;
 pub mod insolation;
+
+#[cfg(test)]
+mod test_worlds;

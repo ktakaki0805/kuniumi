@@ -465,6 +465,25 @@ section: every change after which an existing seed produces a different world
   (40,000 cells) against North & Coakley's observed sea-level temperature:
   every 10° band within 3.8 K, global mean surface temperature 287.96 K;
   about 45 s on 40,000 cells. Not yet used by the pipeline (M4-02).
+- `kuniumi_sim::operators::Gradient`: the least-squares gradient of a cell
+  field in each cell's east/north frame (weights `1/θ²`, first-order
+  accurate on the jittered grid, a constant gives exactly 0) (M4-03).
+- `kuniumi_sim::stages::climate::circulation`: monthly sea-level pressure
+  and surface winds (`CirculationParams`, `Cells`, `ZonalFit`,
+  `CirculationModel`, `surface_wind`, `monthly_circulation`). Pressure belts
+  (equatorial low, subtropical highs, subpolar lows, polar highs; Earth
+  1010, 1018, 1000 and 1015 hPa, provisional) whose Hadley edge and cell
+  width scale as `30° / √(Ω a / Ω⊕ a⊕)` (Held 2000; Rhines 1975), an odd
+  number of cells per hemisphere (8 h: 5, Earth: 3, 240 h: 1); the pattern
+  follows the thermal equator, the warmest latitude of a Legendre fit of
+  the month's sea-level temperature (within ±60°); thermal lows and highs
+  from the hydrostatic factor `exp(h (T̄/T − 1))`, `h` = 0.36; the global
+  mean kept at the surface pressure; winds from the balance of pressure
+  gradient, Coriolis force and linear friction (`r` = 4.8 × 10⁻⁵ s⁻¹: 21–30°
+  across the isobars at 35–60° on Earth, straight down the gradient at the
+  equator). Earth's annual zonal mean: trades to 25°, westerlies at 35–60°.
+  About 0.9 s for twelve months at 650,000 cells. Not yet used by the
+  pipeline (M4-03).
 
 ### Changed
 
