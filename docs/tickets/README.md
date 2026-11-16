@@ -136,6 +136,7 @@ parallel with later milestones.
 | [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
 | [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-12](M4-12-mixed-layer.md) | Sea-surface fronts: a mixed layer under the atmosphere | M4-05 |
+| [M4-13](M4-13-latent-heat.md) | Latent heat: evaporation paid by the energy balance | M4-06 |
 | [M4-08](M4-08-earth-calibration.md) | Earth calibration harness | M4-07 |
 
 ### M5 — Hydrology and biomes (first complete planet)

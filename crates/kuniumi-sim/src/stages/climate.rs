@@ -29,12 +29,17 @@
 //! sea-surface temperature, the energy balance with the heat carried by
 //! those currents and taken by coastal upwelling under the monthly wind
 //! stress, [`sea_surface::monthly_sea_surface_temperature`] (ticket
-//! M4-05). The stage itself is wired by ticket M4-07; until then the runner
-//! skips it.
+//! M4-05); and the monthly precipitation, evaporation and column water
+//! vapour, the vapour carried by the surface winds, evaporated from the sea
+//! and recycled over land, raining where the column exceeds its share of
+//! saturation, where the wind converges and where it rises on slopes,
+//! [`moisture::monthly_moisture`] (ticket M4-06). The stage itself is wired
+//! by ticket M4-07; until then the runner skips it.
 
 pub mod circulation;
 pub mod energy_balance;
 pub mod insolation;
+pub mod moisture;
 pub mod ocean;
 pub mod sea_surface;
 

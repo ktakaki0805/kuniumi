@@ -36,7 +36,10 @@ In:
 
 To be refined: the periodicity criterion and maximum number of model years,
 which fields are kept monthly versus annual only (output size), whether wind
-and currents are written as two scalar fields each.
+and currents are written as two scalar fields each. The moisture of M4-06
+(`moisture::monthly_moisture`) also gives monthly evaporation and column
+vapour, and reports `converged`, `unsettled_steps` and `failed_solves`, to be
+reported like the energy balance's convergence.
 
 ## Acceptance criteria
 

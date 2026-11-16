@@ -1,17 +1,23 @@
-//! The Earth runs shared by the climate tests (tickets M4-02 and M4-03): the
-//! Earth-parameter world of seed 1 through the Crust stage and the periodic
-//! state of its energy balance, each computed once per test process, so
-//! that the tests of the energy balance and of the circulation use the
-//! same runs. On 40,000 cells, the world of the calibration of ticket
-//! M4-02, in release builds (about a minute); on 10,000 cells in debug
+//! The Earth runs shared by the climate tests (tickets M4-02 to M4-06): the
+//! Earth-parameter world of seed 1 through the Crust stage, the periodic
+//! state of its energy balance and the periodic state of its sea surface
+//! with currents and upwelling, each computed once per test process, so
+//! that the tests of the energy balance, the circulation, the sea surface
+//! and the moisture use the same runs. On 40,000 cells, the world of the
+//! calibration of ticket M4-02, in release builds (about a minute for the
+//! energy balance, two more for the sea surface); on 10,000 cells in debug
 //! builds, where the world differs.
 
 use std::sync::OnceLock;
 
+use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{PlanetParams, Settings, World};
 
+use super::circulation::monthly_circulation;
 use super::energy_balance::{EnergyBalance, EnergyBalanceParams, Temperature};
-use super::insolation::monthly_insolation;
+use super::insolation::{MONTHS, monthly_insolation};
+use super::ocean::{OceanParams, monthly_wind_stress, ocean_currents};
+use super::sea_surface::{SeaSurfaceModel, SeaSurfaceParams, coastal_upwelling_m3_s};
 use crate::stages::crust::SURFACE_HEIGHT;
 
 /// A world and the periodic state of its energy balance.
@@ -64,5 +70,83 @@ pub(crate) fn earth_reference() -> &'static Run {
         earth_10k()
     } else {
         RUN.get_or_init(|| earth_run(40_000))
+    }
+}
+
+/// Earth's sea surface on a run of this module (ticket M4-05): the model
+/// and its periodic state.
+pub(crate) struct EarthSea {
+    /// The energy balance with currents and upwelling.
+    pub(crate) model: SeaSurfaceModel,
+    /// Its periodic state.
+    pub(crate) temperature: Temperature,
+}
+
+/// The sea surface of a planet as
+/// [`super::sea_surface::monthly_sea_surface_temperature`] builds it,
+/// before its periodic state: its energy balance with currents, the
+/// currents of the circulation of `temperature`, and the monthly upwelling.
+pub(crate) fn sea_model(
+    params: &PlanetParams,
+    grid: &SphereGrid,
+    heights: &[f64],
+    sea_level: f64,
+    temperature: &Temperature,
+) -> SeaSurfaceModel {
+    let circulation = monthly_circulation(params, grid, temperature);
+    let currents = ocean_currents(params, grid, heights, sea_level, &circulation, temperature);
+    let balance = EnergyBalance::new(
+        &SeaSurfaceParams::energy_balance(params),
+        grid,
+        heights,
+        sea_level,
+        params.orbital_period_s,
+    );
+    let ocean_params = OceanParams::for_planet(params);
+    let sea = SeaSurfaceParams::earth();
+    let stress = monthly_wind_stress(&ocean_params, &circulation, &temperature.sea_level_k);
+    let upwelling: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
+        coastal_upwelling_m3_s(&sea, &ocean_params, grid, balance.ocean(), &stress[k])
+    });
+    SeaSurfaceModel::new(
+        balance,
+        &sea,
+        grid,
+        params.radius_m,
+        &currents.transport_m3_s,
+        upwelling,
+    )
+}
+
+/// The sea surface of the run `run` with Earth's parameters.
+fn earth_sea(run: &Run) -> EarthSea {
+    let params = PlanetParams::earth();
+    let grid = &run.world.grid;
+    let heights = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
+    let model = sea_model(
+        &params,
+        grid,
+        heights,
+        run.world.sea_level_m,
+        &run.temperature,
+    );
+    let temperature = model.periodic_state(&monthly_insolation(&params, grid));
+    EarthSea { model, temperature }
+}
+
+/// The sea surface of the 10,000-cell run, once.
+pub(crate) fn earth_sea_10k() -> &'static EarthSea {
+    static SEA: OnceLock<EarthSea> = OnceLock::new();
+    SEA.get_or_init(|| earth_sea(earth_10k()))
+}
+
+/// The sea surface of the run of the criteria: 40,000 cells in release
+/// builds, the 10,000 cells of [`earth_sea_10k`] in debug builds.
+pub(crate) fn earth_sea_reference() -> &'static EarthSea {
+    static SEA: OnceLock<EarthSea> = OnceLock::new();
+    if cfg!(debug_assertions) {
+        earth_sea_10k()
+    } else {
+        SEA.get_or_init(|| earth_sea(earth_reference()))
     }
 }

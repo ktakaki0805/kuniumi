@@ -34,7 +34,9 @@ use super::*;
 use crate::stages::climate::circulation::monthly_circulation;
 use crate::stages::climate::energy_balance::monthly_temperature;
 use crate::stages::climate::ocean::{OceanModel, ocean_currents};
-use crate::stages::climate::test_worlds::{Run, earth_10k, earth_reference};
+use crate::stages::climate::test_worlds::{
+    earth_10k, earth_reference, earth_sea_10k, earth_sea_reference, sea_model,
+};
 use crate::stages::crust::SURFACE_HEIGHT;
 
 /// One degree in radians.
@@ -506,49 +508,6 @@ fn the_advection_conserves_heat_in_a_closed_basin() {
     assert!(currents.transport_m3_s.iter().any(|&q| q > 1e6));
 }
 
-/// Earth's sea surface on a run of `test_worlds`: the model, its periodic
-/// state and the energy balance's run.
-struct EarthSea {
-    model: SeaSurfaceModel,
-    temperature: Temperature,
-}
-
-/// The sea surface of a planet as [`monthly_sea_surface_temperature`]
-/// builds it, before its periodic state: its energy balance with currents,
-/// the currents of `circulation` and `temperature`, and the monthly
-/// upwelling.
-fn sea_model(
-    params: &PlanetParams,
-    grid: &SphereGrid,
-    heights: &[f64],
-    sea_level: f64,
-    temperature: &Temperature,
-) -> SeaSurfaceModel {
-    let circulation = monthly_circulation(params, grid, temperature);
-    let currents = ocean_currents(params, grid, heights, sea_level, &circulation, temperature);
-    let balance = EnergyBalance::new(
-        &SeaSurfaceParams::energy_balance(params),
-        grid,
-        heights,
-        sea_level,
-        params.orbital_period_s,
-    );
-    let ocean_params = OceanParams::for_planet(params);
-    let sea = SeaSurfaceParams::earth();
-    let stress = monthly_wind_stress(&ocean_params, &circulation, &temperature.sea_level_k);
-    let upwelling: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
-        coastal_upwelling_m3_s(&sea, &ocean_params, grid, balance.ocean(), &stress[k])
-    });
-    SeaSurfaceModel::new(
-        balance,
-        &sea,
-        grid,
-        params.radius_m,
-        &currents.transport_m3_s,
-        upwelling,
-    )
-}
-
 /// The largest `|storage − (absorbed − emitted)|` (W/m²) of a year of
 /// sub-steps of `model` from its warm start, and the most heat upwelling
 /// took in a sub-step; every solve converged.
@@ -564,38 +523,6 @@ fn year_budget(model: &SeaSurfaceModel, insolation: &[Vec<f64>; MONTHS]) -> (f64
         }
     }
     (worst, upwelled)
-}
-
-fn earth_sea(run: &Run) -> EarthSea {
-    let params = PlanetParams::earth();
-    let grid = &run.world.grid;
-    let heights = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
-    let model = sea_model(
-        &params,
-        grid,
-        heights,
-        run.world.sea_level_m,
-        &run.temperature,
-    );
-    let temperature = model.periodic_state(&monthly_insolation(&params, grid));
-    EarthSea { model, temperature }
-}
-
-/// The sea surface of the 10,000-cell run, once.
-fn earth_sea_10k() -> &'static EarthSea {
-    static SEA: OnceLock<EarthSea> = OnceLock::new();
-    SEA.get_or_init(|| earth_sea(earth_10k()))
-}
-
-/// The sea surface of the run of the criteria: 40,000 cells in release
-/// builds, the 10,000 cells of [`earth_sea_10k`] in debug builds.
-fn earth_sea_reference() -> &'static EarthSea {
-    static SEA: OnceLock<EarthSea> = OnceLock::new();
-    if cfg!(debug_assertions) {
-        earth_sea_10k()
-    } else {
-        SEA.get_or_init(|| earth_sea(earth_reference()))
-    }
 }
 
 #[test]

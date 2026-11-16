@@ -526,6 +526,27 @@ section: every change after which an existing seed produces a different world
   the oceans at 45–65° 2.0–3.7 K warmer than the western sides; periodic in
   12 years, about 61 s on 40,000 cells. Not yet used by the pipeline
   (M4-05).
+- `kuniumi_sim::stages::climate::moisture`: the monthly precipitation,
+  evaporation and column water vapour (`MoistureParams`, `MoistureModel`,
+  `MoistureMonth`, `MoistureStep`, `WaterBudget`, `Moisture`,
+  `monthly_moisture`; `saturation_vapour_pressure_pa`,
+  `boiling_temperature_k`, `vapour_scale_height_m`). The column vapour is
+  carried by the surface winds of M4-03 in upwind flux form (water
+  conserved edge by edge), the divergent part of the wind carrying half the
+  column (`δ` = 0.5, the vertical vapour contrast of the trade-wind
+  boundary layer); the ocean evaporates by the bulk formula with the
+  sea-surface temperature of M4-05 (`C_E` = 1.2 × 10⁻³, a gust speed of
+  2 m/s, provisional), the land re-evaporates 60 % of its precipitation;
+  it rains the excess over 85 % of the column's saturation (Clausius–
+  Clapeyron at the surface temperature, so that high ground holds less) in
+  4 hours, the vapour that the net convergence brings, and the vapour lifted
+  by the upslope wind (`ε_o` = 0.75, provisional). Four implicit sub-steps a
+  month, the threshold by the primal–dual active set method, BiCGSTAB.
+  Earth's world (seed 1, 40,000 cells): 1.05 m/yr and 24.6 kg/m² of
+  precipitable water; 10° S–10° N 3.9 times the global mean, 20–30° 0.03
+  times; the west coasts of 40–60° 5.6–9.2 times the interior; windward
+  slopes 7.1 times the lee; the year's budget closed within 10⁻¹³;
+  periodic in 3 years. Not yet used by the pipeline (M4-06).
 
 ### Changed
 

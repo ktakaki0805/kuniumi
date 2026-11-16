@@ -37,6 +37,16 @@ In:
   preconditioner (about 100 iterations at 40,000 cells, 5.07 s per model
   year against 3.73 s without currents, measured in the same run); the
   choice above covers it too.
+- The moisture of M4-06 solves, every sub-step, a non-symmetric upwind
+  system by BiCGSTAB a few times (the active set of the precipitation
+  threshold; about 80 iterations per solve at 40,000 cells), and once per
+  month a Poisson equation for the divergent wind by the conjugate gradient
+  method (426, 832 and 1,660 iterations at 10,000, 40,000 and 160,000
+  cells): per model year 1.0 s, 9.6 s and 101 s (the energy balance alone
+  0.44, 3.7 and 39 s), periodic in 3 years, so 3.0 s, 29 s and 303 s plus
+  0.5, 4.4 and 40 s for the months (release, M4-06); the choice above
+  covers it too (on a coarse climate grid the rain shadows would need the
+  planet grid's relief).
 - Timing at 650,000 cells recorded; results compared with the full-resolution
   model on 160,000 cells.
 - The spin-up of planets with little heat transport (decided with the owner

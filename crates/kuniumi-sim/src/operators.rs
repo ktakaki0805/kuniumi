@@ -58,11 +58,12 @@
 //! [`Gradient`] is the least-squares gradient of a cell field in each
 //! cell's east/north frame (ticket M4-03): the pressure gradient that
 //! drives the surface winds of the Climate stage
-//! ([`crate::stages::climate::circulation`]), and later the slope that
-//! lifts moist air. (The curl of the wind stress of the ocean,
-//! [`crate::stages::climate::ocean`], is the circulation around each
-//! cell instead, ticket M4-04.) The non-symmetric systems of the ocean are
-//! solved by [`crate::sparse::bicgstab`].
+//! ([`crate::stages::climate::circulation`]), and the slope that lifts
+//! moist air ([`crate::stages::climate::moisture`], ticket M4-06). (The
+//! curl of the wind stress of the ocean, [`crate::stages::climate::ocean`],
+//! is the circulation around each cell instead, ticket M4-04.) The
+//! non-symmetric systems of the ocean are solved by
+//! [`crate::sparse::bicgstab`].
 //!
 //! Everything here depends only on its inputs, through IEEE `+ − × ÷` and
 //! `sqrt` in a fixed order: every sum and dot product runs sequentially over
