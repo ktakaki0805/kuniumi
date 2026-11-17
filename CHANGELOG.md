@@ -559,6 +559,15 @@ section: every change after which an existing seed produces a different world
   the grid (12, 14 and 15 for the energy balance's sub-step on 2,500,
   10,000 and 40,000 cells; 13–14 on 650,000, where the Jacobi
   preconditioner needed 662) (M4-09).
+- `kuniumi_sim::sparse`: `downwind_order`, the order of the rows of an
+  upwind matrix in which every cell follows the cells that flow into it
+  (Kahn's topological sort, closed streamlines cut where the inflow left
+  behind is the smallest share of the diagonal, ties by index);
+  `SparseMatrix::permuted`, a matrix renumbered in an order; and
+  `bicgstab_gauss_seidel`, BiCGSTAB preconditioned by one Gauss–Seidel
+  sweep in row order, which solves an acyclic upwind system in one
+  iteration. `moisture::NONLINEAR_SWEEPS` (40),
+  `MoistureMonth::downwind_order` and `MoistureStep::active` (M4-14).
 
 ### Changed
 
@@ -820,6 +829,17 @@ section: every change after which an existing seed produces a different world
   moisture's twelve months in 12 s (the potential in at most 29
   iterations); on 160,000 cells 39 s, 48 s and 2.5 s against 313 s, 433 s
   and 40 s (M4-09).
+- The moisture's sub-steps first sweep their equations 40 times by
+  nonlinear Gauss–Seidel in each month's downwind order, then run the
+  active set method from the sweeps' result with every linear solve by
+  `bicgstab_gauss_seidel` in that order, to the same tolerance and stops:
+  one or two solves per sub-step instead of three to six, of up to about
+  ten iterations instead of 35 to 305. Earth (seed 1) on 650,000 cells: the
+  twelve months and the periodic state in 81 s (40 minutes before); on
+  160,000 cells the periodic state in 8.2 s against 303 s.
+  `MoistureModel::substep(month, vapour)` no longer takes the active set
+  of the previous sub-step: the sweeps choose it, and the step returns the
+  set of its last solve in `MoistureStep::active` (M4-14).
 
 ### Removed
 
@@ -914,6 +934,14 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M4-14: the moisture of `moisture::monthly_moisture` changes within the
+  solver's tolerance (the downwind sweeps and solves stop at the same
+  relative residual as the Jacobi-preconditioned BiCGSTAB did, from
+  another start; Earth on 160,000 cells: every monthly-mean vapour within
+  5.0 × 10⁻⁹ kg/m², every monthly precipitation within 8.6 × 10⁻⁹ mm/day,
+  in the same 3 years): the golden value of ticket M4-06 is recorded
+  again. No world of the pipeline changes, as the Climate stage is not
+  wired yet.
 - M4-09: the monthly temperatures of `energy_balance::monthly_temperature`,
   and with them the circulation, the currents, the sea surface of
   `sea_surface::monthly_sea_surface_temperature` and the moisture of

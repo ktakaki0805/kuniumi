@@ -74,7 +74,9 @@
 //! (10 iterations per sub-step on 650,000 cells against 771 with the
 //! Jacobi preconditioner; ticket M4-09, prototype). It does not suit
 //! systems dominated by advection, such as the moisture's
-//! ([`crate::stages::climate::moisture`]; ticket M4-14).
+//! ([`crate::stages::climate::moisture`]), which a Gauss–Seidel sweep in a
+//! downwind order of the cells solves instead
+//! ([`crate::sparse::bicgstab_gauss_seidel`]; ticket M4-14).
 //!
 //! # Determinism
 //!

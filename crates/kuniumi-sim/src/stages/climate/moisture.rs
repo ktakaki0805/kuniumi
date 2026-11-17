@@ -169,19 +169,54 @@
 //! 30 by 0.0016 and 0.049; the global and zonal means agree to
 //! 0.01 mm/day (ticket M4-06, prototype).
 //!
-//! The saturation excess is piecewise linear in `W'`. Each sub-step solves
-//! it by the primal–dual active set method, a semi-smooth Newton method
-//! (M. Hintermüller, K. Ito & K. Kunisch 2002, "The primal-dual active set
-//! strategy as a semismooth Newton method", SIAM J. Optim. 13, 865–888):
-//! with the set of the cells above the threshold, the linear system with
-//! `(W − r_c W_s)/τ_c` on those cells is solved, the set updated from the
-//! solution, until it repeats; at most [`MAX_ACTIVE_SET_ITERATIONS`]
-//! times, started from the previous sub-step's set. The matrix has the
-//! upwind inflows `min(c_e, 0)` off the diagonal and `a_i/Δt`, the outflows
-//! `Σ max(c_e, 0)`, the ocean's `a_i C_E U / H_w` and the precipitation's
-//! coefficients (times `1 − β` on land) on it: a non-symmetric M-matrix,
-//! solved by [`crate::sparse::bicgstab`] with the Jacobi preconditioner to
-//! [`SOLVER_TOLERANCE`], started from the state. Each sub-step's
+//! The matrix of a sub-step has the upwind inflows `min(c_e, 0)` off the
+//! diagonal and `a_i/Δt`, the outflows `Σ max(c_e, 0)`, the ocean's
+//! `a_i C_E U / H_w` and the precipitation's coefficients (times `1 − β` on
+//! land) on it: a non-symmetric M-matrix whose columns are strictly
+//! diagonally dominant (a column's entries off the diagonal are the
+//! outflows that its diagonal holds besides `a_i/Δt` and the sinks). The
+//! Courant numbers `Σ max(c_e, 0) Δt / a_i` reach thousands (8,450 on
+//! 650,000 cells; ticket M4-09), so the vapour of a sub-step travels many
+//! cells along the wind. The saturation excess is piecewise linear in
+//! `W'`; each sub-step solves the system in two parts (ticket M4-14):
+//!
+//! - **Nonlinear sweeps.** [`NONLINEAR_SWEEPS`] Gauss–Seidel sweeps of the
+//!   sub-step's equations in the month's downwind order
+//!   ([`MoistureMonth::downwind_order`], [`crate::sparse::downwind_order`]
+//!   of the matrix without the excess), from the previous state: each cell
+//!   solves its own piecewise-linear equation with its neighbours' latest
+//!   values, below the threshold or, where that solution exceeds it, above
+//!   it (the two agree at the threshold). In the downwind order a sweep
+//!   carries the vapour along the wind in one pass, and only the closed
+//!   streamlines that the order cuts need more. The system is a
+//!   continuous, surjective M-function (an M-matrix plus an isotone
+//!   function of each cell's own vapour), for which the nonlinear
+//!   Gauss–Seidel iteration converges in any order and from any start to
+//!   the unique solution (W. C. Rheinboldt 1970, "On M-functions and their
+//!   application to nonlinear Gauss–Seidel iterations and to network
+//!   flows", J. Math. Anal. Appl. 32, 274–307); on the Earth-parameter
+//!   world it gains a factor of about 0.6 (160,000 cells) to 0.8 (650,000)
+//!   per sweep, and the cells above the threshold settle within 10 to 30.
+//! - **The active set method**, the primal–dual active set method, a
+//!   semi-smooth Newton method (M. Hintermüller, K. Ito & K. Kunisch 2002,
+//!   "The primal-dual active set strategy as a semismooth Newton method",
+//!   SIAM J. Optim. 13, 865–888), from the sweeps' set and vapour: with
+//!   the set of the cells above the threshold, the linear system with
+//!   `(W − r_c W_s)/τ_c` on those cells is solved, the set updated from the
+//!   solution, until it repeats; at most [`MAX_ACTIVE_SET_ITERATIONS`]
+//!   times. Each linear system is solved in the downwind order by
+//!   [`crate::sparse::bicgstab_gauss_seidel`] (BiCGSTAB preconditioned by
+//!   one Gauss–Seidel sweep) to [`SOLVER_TOLERANCE`].
+//!
+//! The sweeps only choose the start: the result is the solution of the
+//! same system with the same stops (the set repeats, the solve reaches its
+//! tolerance) as with any other start or linear solver. Against the
+//! Jacobi-preconditioned BiCGSTAB from the previous sub-step's set (ticket
+//! M4-06), the periodic state of the Earth-parameter world differs by at
+//! most 1.1 × 10⁻⁹, 1.9 × 10⁻⁹ and 5.0 × 10⁻⁹ kg/m² of monthly-mean vapour
+//! on 10,000, 40,000 and 160,000 cells, the error that the solvers leave at
+//! their tolerance, with one or two linear solves per sub-step where the
+//! Jacobi solver needed three to six (ticket M4-14). Each sub-step's
 //! precipitation and evaporation are evaluated from `W'` with the
 //! coefficients of its last solve, so the global budget
 //! `Σ a (W' − W)/Δt = Σ a (E − P)` closes up to the solver: the fluxes of
@@ -195,6 +230,15 @@
 //! changes by more than [`PERIODIC_TOLERANCE_KG_M2`] from one year to the
 //! next, at most [`MAX_YEARS`]; the vapour forgets its start within weeks.
 //! It reports the water budget of its last year.
+//!
+//! # Cost
+//!
+//! On the Earth-parameter world of seed 1 (release; ticket M4-14) the
+//! twelve months, with their potentials (ticket M4-09) and downwind orders,
+//! take 0.15, 0.70, 3.4 and 18.7 s on 10,000, 40,000, 160,000 and 650,000
+//! cells, and the periodic state (3 years) 0.3, 1.5, 8.2 and 62 s; with
+//! the Jacobi-preconditioned solves of ticket M4-06 the periodic state took
+//! 3.0, 26.6 and 303 s and 40 minutes on 650,000 cells.
 //!
 //! # Calibration
 //!
@@ -253,9 +297,12 @@
 //!   constant latent heats; above the boiling point the saturation is held
 //!   at it.
 //!
-//! Everything runs sequentially over the cells in index order with IEEE
-//! arithmetic and the transcendental functions of [`kuniumi_math::det`];
-//! there is no randomness.
+//! Everything runs sequentially with IEEE arithmetic and the
+//! transcendental functions of [`kuniumi_math::det`], over the cells in
+//! index order except the sub-steps' sweeps and solves, which run in each
+//! month's downwind order ([`crate::sparse::downwind_order`]: integers and
+//! the bits of non-negative shares compared, ties broken by index, so the
+//! order itself is deterministic; ticket M4-14); there is no randomness.
 
 use kuniumi_math::{Vec3, det};
 use kuniumi_sphere::{SphereGrid, coords};
@@ -266,16 +313,25 @@ use super::energy_balance::{EnergyBalanceParams, SUBSTEPS_PER_MONTH, Temperature
 use super::insolation::MONTHS;
 use crate::multigrid::{self, Multigrid};
 use crate::operators::{self as ops, Gradient, Laplacian, Solve};
-use crate::sparse::{SparseMatrix, bicgstab};
+use crate::sparse::{SparseMatrix, bicgstab_gauss_seidel, downwind_order};
 
 /// The relative residual at which the solve of a sub-step stops
-/// ([`crate::sparse::bicgstab`]): 10⁻¹².
+/// ([`crate::sparse::bicgstab_gauss_seidel`]): 10⁻¹².
 pub const SOLVER_TOLERANCE: f64 = 1e-12;
 
 /// The iterations after which a solve stops whether or not it has reached
-/// its tolerance: 20,000 (a solve of the Earth-parameter world takes about
-/// 80 on 40,000 cells).
+/// its tolerance: 20,000 (after the sweeps a solve of the Earth-parameter
+/// world takes none to about 20; ticket M4-14).
 pub const SOLVER_MAX_ITERATIONS: u32 = 20_000;
+
+/// The nonlinear Gauss–Seidel sweeps of each sub-step in the month's
+/// downwind order before its active set method (module documentation,
+/// "Time stepping"): 40, chosen with the owner in ticket M4-14 from the
+/// cost of the periodic state of the Earth-parameter world (650,000 cells:
+/// 30, 40, 50 and 60 sweeps 89, 73, 68 and 68 s; 160,000 cells: 20, 30,
+/// 40 and 60 sweeps 11.5, 10.1, 10.2 and 13.3 s; prototype). They choose
+/// only the start of the solves, not the solution.
+pub const NONLINEAR_SWEEPS: u32 = 40;
 
 /// The relative residual at which the solve of the potential of the
 /// divergent wind stops ([`crate::multigrid::conjugate_gradient`]):
@@ -522,8 +578,12 @@ pub struct MoistureMonth {
     exchange_m_s: Vec<f64>,
     /// `ε_c (−δ D)⁺ + ε_o (v·∇z)⁺ / H_w` (s⁻¹).
     lift_per_s: Vec<f64>,
-    /// The upwind advection: the outflows on the diagonal, the inflows off
-    /// it.
+    /// The downwind order of the month's sub-step matrix: `order[q]` is the
+    /// cell in place `q`.
+    order: Vec<u32>,
+    /// The upwind advection renumbered in `order`
+    /// ([`SparseMatrix::permuted`]): the outflows on the diagonal, the
+    /// inflows off it.
     advection: SparseMatrix,
     /// What the solve of the potential did.
     potential: Solve,
@@ -573,6 +633,15 @@ impl MoistureMonth {
     pub fn potential_solve(&self) -> Solve {
         self.potential
     }
+
+    /// The downwind order of the month's cells
+    /// ([`crate::sparse::downwind_order`] of its sub-step matrix without
+    /// the saturation excess; module documentation, "Time stepping"):
+    /// `order[q]` is the cell in place `q`, after the cells that flow into
+    /// it except where closed streamlines are cut.
+    pub fn downwind_order(&self) -> &[u32] {
+        &self.order
+    }
 }
 
 /// One sub-step of the moisture ([`MoistureModel::substep`]): the
@@ -591,7 +660,10 @@ pub struct MoistureStep {
     pub evaporation_mean_kg_m2_s: f64,
     /// The mean precipitation.
     pub precipitation_mean_kg_m2_s: f64,
-    /// The linear solves of the active set method.
+    /// The set of the last solve: the cells whose excess over the
+    /// threshold rains (the cells above the threshold where `settled`).
+    pub active: Vec<bool>,
+    /// The linear solves of the active set method, after the sweeps.
     pub active_set_iterations: u32,
     /// Whether the active set repeated within
     /// [`MAX_ACTIVE_SET_ITERATIONS`] (otherwise the last solve's set is
@@ -938,7 +1010,7 @@ impl MoistureModel {
             );
         }
         // The upwind advection: outflows on the diagonal, inflows off it.
-        let mut diagonal = Vec::with_capacity(n);
+        let mut outflows = Vec::with_capacity(n);
         let mut rows: Vec<Vec<(u32, f64)>> = Vec::with_capacity(n);
         for i in 0..n {
             let mut out = 0.0;
@@ -946,12 +1018,27 @@ impl MoistureModel {
             for k in self.range(i) {
                 let c = flow[k];
                 out += positive(c);
-                row.push((self.neighbors[k], if c < 0.0 { c } else { 0.0 }));
+                if c < 0.0 {
+                    row.push((self.neighbors[k], c));
+                }
             }
             row.sort_by_key(|e| e.0);
-            diagonal.push(out);
+            outflows.push(out);
             rows.push(row);
         }
+        // The downwind order of the sub-step matrix without the excess (the
+        // same in every sub-step of the month), and the advection in it.
+        let sub_step: Vec<f64> = (0..n)
+            .map(|i| {
+                outflows[i]
+                    + self.own_coefficient(i, lift_per_s[i], exchange_m_s[i], scale_height_m[i])
+            })
+            .collect();
+        let advection = SparseMatrix::from_rows(sub_step, &rows);
+        let order = downwind_order(&advection);
+        let advection = advection
+            .permuted(&order)
+            .with_diagonal(order.iter().map(|&i| outflows[i as usize]).collect());
         MoistureMonth {
             flow,
             divergence_per_s,
@@ -962,7 +1049,8 @@ impl MoistureModel {
             saturated_kg_m2,
             exchange_m_s,
             lift_per_s,
-            advection: SparseMatrix::from_rows(diagonal, &rows),
+            order,
+            advection,
             potential,
         }
     }
@@ -1005,30 +1093,101 @@ impl MoistureModel {
             .collect()
     }
 
+    /// The share of a cell's precipitation that leaves its column: 1 on the
+    /// ocean, `1 − β` on land, where the share `β` evaporates again.
+    fn keep(&self, i: usize) -> f64 {
+        if self.ocean[i] {
+            1.0
+        } else {
+            1.0 - self.params.recycling_fraction
+        }
+    }
+
+    /// The coefficient of cell `i`'s own vapour in its row of a sub-step
+    /// besides the outflows and the saturation excess (module documentation,
+    /// "Time stepping"): `a_i/Δt + a_i keep lift`, plus the ocean's
+    /// `a_i C_E U / H_w`, with the month's lift `lift_per_s` (s⁻¹), exchange
+    /// `C_E U` (`exchange_m_s`, m/s) and scale height `scale_height_m` (m).
+    /// The month's downwind order and every sub-step use it.
+    fn own_coefficient(
+        &self,
+        i: usize,
+        lift_per_s: f64,
+        exchange_m_s: f64,
+        scale_height_m: f64,
+    ) -> f64 {
+        let a = self.areas_sr[i];
+        let mut d = a / self.substep_s + a * self.keep(i) * lift_per_s;
+        if self.ocean[i] {
+            d += a * exchange_m_s / scale_height_m;
+        }
+        d
+    }
+
+    /// The rows of a sub-step of the month `month` from the vapour
+    /// `vapour_kg_m2` in the month's downwind order (module documentation,
+    /// "Time stepping"); the inputs are checked by the caller.
+    fn rows(&self, month: &MoistureMonth, vapour_kg_m2: &[f64]) -> SubstepRows {
+        let n = self.len();
+        let p = &self.params;
+        let dt = self.substep_s;
+        let tau = p.condensation_time_s;
+        let mut rows = SubstepRows {
+            dry_diagonal: Vec::with_capacity(n),
+            wet_diagonal: Vec::with_capacity(n),
+            dry_rhs: Vec::with_capacity(n),
+            wet_rhs: Vec::with_capacity(n),
+            limit: Vec::with_capacity(n),
+        };
+        for (q, &i) in month.order.iter().enumerate() {
+            let i = i as usize;
+            let a = self.areas_sr[i];
+            let keep = self.keep(i);
+            let d = self.own_coefficient(
+                i,
+                month.lift_per_s[i],
+                month.exchange_m_s[i],
+                month.scale_height_m[i],
+            );
+            let mut b = a * vapour_kg_m2[i] / dt;
+            if self.ocean[i] {
+                b += a * month.exchange_m_s[i] * month.saturation_density_kg_m3[i];
+            }
+            let threshold = p.precipitation_threshold * month.saturated_kg_m2[i];
+            let out = month.advection.diagonal()[q];
+            rows.dry_diagonal.push(out + d);
+            rows.wet_diagonal.push(out + (d + a * keep / tau));
+            rows.dry_rhs.push(b);
+            rows.wet_rhs.push(b + a * keep * threshold / tau);
+            rows.limit.push(threshold);
+        }
+        rows
+    }
+
     /// One backward-Euler sub-step of the month `month` from the vapour
-    /// `vapour_kg_m2` (kg/m², replaced by the new one), with `active` the
-    /// cells above the threshold at the start (replaced by the set of the
-    /// last solve), solved by the active set method (module documentation,
-    /// "Time stepping").
+    /// `vapour_kg_m2` (kg/m², replaced by the new one): the nonlinear
+    /// Gauss–Seidel sweeps in the month's downwind order, then the active
+    /// set method from their result (module documentation, "Time
+    /// stepping"); the set of its last solve is the step's
+    /// [`MoistureStep::active`].
     ///
     /// # Panics
     ///
-    /// If `month` is not of this model's grid, if `vapour_kg_m2` or `active`
-    /// does not hold one value per cell, or a vapour is not finite.
-    pub fn substep(
-        &self,
-        month: &MoistureMonth,
-        vapour_kg_m2: &mut [f64],
-        active: &mut [bool],
-    ) -> MoistureStep {
+    /// If `month` is not of this model's grid, if `vapour_kg_m2` does not
+    /// hold one value per cell, or a vapour is not finite.
+    pub fn substep(&self, month: &MoistureMonth, vapour_kg_m2: &mut [f64]) -> MoistureStep {
         let n = self.len();
         assert!(
-            month.lift_per_s.len() == n && month.flow.len() == self.neighbors.len(),
+            month.lift_per_s.len() == n
+                && month.order.len() == n
+                && month.flow.len() == self.neighbors.len(),
             "a sub-step needs a month of its model's grid"
         );
-        assert!(
-            vapour_kg_m2.len() == n && active.len() == n,
-            "a sub-step needs one vapour and one flag per cell"
+        assert_eq!(
+            vapour_kg_m2.len(),
+            n,
+            "a sub-step needs one vapour per cell: {} for {n} cells",
+            vapour_kg_m2.len()
         );
         assert!(
             vapour_kg_m2.iter().all(|w| w.is_finite()),
@@ -1037,80 +1196,84 @@ impl MoistureModel {
         let p = &self.params;
         let dt = self.substep_s;
         let tau = p.condensation_time_s;
-        let land_keep = 1.0 - p.recycling_fraction;
         let threshold: Vec<f64> = month
             .saturated_kg_m2
             .iter()
             .map(|w| p.precipitation_threshold * w)
             .collect();
-        let mut x = vapour_kg_m2.to_vec();
+        let matrix = &month.advection;
+        let rows = self.rows(month, vapour_kg_m2);
+        let limit = &rows.limit;
+        let mut x: Vec<f64> = month
+            .order
+            .iter()
+            .map(|&i| vapour_kg_m2[i as usize])
+            .collect();
+        for _ in 0..NONLINEAR_SWEEPS {
+            nonlinear_sweep(matrix, &rows, &mut x);
+        }
+        // The active set method from the sweeps' set.
+        let mut active: Vec<bool> = (0..n).map(|q| x[q] > limit[q]).collect();
         let mut iterations = 0;
         let mut settled = false;
         let mut solves_converged = true;
         loop {
             iterations += 1;
-            let mut diagonal = month.advection.diagonal().to_vec();
-            let mut rhs = Vec::with_capacity(n);
-            for i in 0..n {
-                let a = self.areas_sr[i];
-                let keep = if self.ocean[i] { 1.0 } else { land_keep };
-                let mut d = a / dt + a * keep * month.lift_per_s[i];
-                let mut b = a * vapour_kg_m2[i] / dt;
-                if self.ocean[i] {
-                    let e = month.exchange_m_s[i];
-                    d += a * e / month.scale_height_m[i];
-                    b += a * e * month.saturation_density_kg_m3[i];
-                }
-                if active[i] {
-                    d += a * keep / tau;
-                    b += a * keep * threshold[i] / tau;
-                }
-                diagonal[i] += d;
-                rhs.push(b);
-            }
-            let matrix = month.advection.with_diagonal(diagonal);
-            let solve = bicgstab(
-                &matrix,
-                &rhs,
+            let pick = |dry: &[f64], wet: &[f64]| -> Vec<f64> {
+                (0..n)
+                    .map(|q| if active[q] { wet[q] } else { dry[q] })
+                    .collect()
+            };
+            let system = matrix.with_diagonal(pick(&rows.dry_diagonal, &rows.wet_diagonal));
+            let solve = bicgstab_gauss_seidel(
+                &system,
+                &pick(&rows.dry_rhs, &rows.wet_rhs),
                 SOLVER_TOLERANCE,
                 SOLVER_MAX_ITERATIONS,
                 &mut x,
             );
             solves_converged &= solve.converged();
-            let next: Vec<bool> = (0..n).map(|i| x[i] > threshold[i]).collect();
-            if next.as_slice() == &active[..] {
+            let next: Vec<bool> = (0..n).map(|q| x[q] > limit[q]).collect();
+            if next == active {
                 settled = true;
                 break;
             }
             if iterations >= MAX_ACTIVE_SET_ITERATIONS {
                 break;
             }
-            active.copy_from_slice(&next);
+            active = next;
+        }
+        // Back in the cells' order.
+        let mut w = vec![0.0; n];
+        let mut raining = vec![false; n];
+        for (q, &i) in month.order.iter().enumerate() {
+            w[i as usize] = x[q];
+            raining[i as usize] = active[q];
         }
         let mut precipitation = Vec::with_capacity(n);
         let mut evaporation = Vec::with_capacity(n);
         let (mut storage, mut e_sum, mut p_sum) = (0.0, 0.0, 0.0);
         for i in 0..n {
-            let excess = if active[i] {
-                (x[i] - threshold[i]) / tau
+            let excess = if raining[i] {
+                (w[i] - threshold[i]) / tau
             } else {
                 0.0
             };
-            let pr = month.lift_per_s[i] * x[i] + excess;
+            let pr = month.lift_per_s[i] * w[i] + excess;
             let ev = if self.ocean[i] {
                 month.exchange_m_s[i]
-                    * (month.saturation_density_kg_m3[i] - x[i] / month.scale_height_m[i])
+                    * (month.saturation_density_kg_m3[i] - w[i] / month.scale_height_m[i])
             } else {
                 p.recycling_fraction * pr
             };
             let a = self.areas_sr[i];
-            storage += a * (x[i] - vapour_kg_m2[i]) / dt;
+            storage += a * (w[i] - vapour_kg_m2[i]) / dt;
             e_sum += a * ev;
             p_sum += a * pr;
             precipitation.push(pr);
             evaporation.push(ev);
         }
-        vapour_kg_m2.copy_from_slice(&x);
+        vapour_kg_m2.copy_from_slice(&w);
         debug_assert!(
             vapour_kg_m2
                 .iter()
@@ -1124,6 +1287,7 @@ impl MoistureModel {
             storage_mean_kg_m2_s: storage / self.total_area_sr,
             evaporation_mean_kg_m2_s: e_sum / self.total_area_sr,
             precipitation_mean_kg_m2_s: p_sum / self.total_area_sr,
+            active: raining,
             active_set_iterations: iterations,
             settled,
             solves_converged,
@@ -1146,7 +1310,6 @@ impl MoistureModel {
         let per_step = 1.0 / SUBSTEPS_PER_MONTH as f64;
         let total = |w: &[f64]| (0..n).map(|i| self.areas_sr[i] * w[i]).sum::<f64>();
         let mut w = self.initial_vapour_kg_m2(&months[0]);
-        let mut active = vec![false; n];
         let mut previous: Option<[Vec<f64>; MONTHS]> = None;
         let mut unsettled_steps = 0;
         let mut failed_solves = months
@@ -1163,7 +1326,7 @@ impl MoistureModel {
             let mut vapour: [Vec<f64>; MONTHS] = core::array::from_fn(|_| vec![0.0; n]);
             for (m, month) in months.iter().enumerate() {
                 for _ in 0..SUBSTEPS_PER_MONTH {
-                    let step = self.substep(month, &mut w, &mut active);
+                    let step = self.substep(month, &mut w);
                     unsettled_steps += u32::from(!step.settled);
                     failed_solves += u32::from(!step.solves_converged);
                     e_sum += total(&step.evaporation_kg_m2_s);
@@ -1210,6 +1373,39 @@ impl MoistureModel {
             }
             previous = Some(vapour);
         }
+    }
+}
+
+/// The rows of a sub-step in the month's downwind order (row `q` is the
+/// cell `order[q]`; [`MoistureModel::substep`]): the diagonal and the
+/// right-hand side of a cell below the threshold (`dry`) and above it
+/// (`wet`, with the saturation excess), and its threshold `r_c W_s`.
+struct SubstepRows {
+    dry_diagonal: Vec<f64>,
+    wet_diagonal: Vec<f64>,
+    dry_rhs: Vec<f64>,
+    wet_rhs: Vec<f64>,
+    limit: Vec<f64>,
+}
+
+/// One nonlinear Gauss–Seidel sweep of the sub-step's rows `rows` with the
+/// renumbered advection `matrix` over the vapour `x` (in the downwind
+/// order): each cell solves its own piecewise-linear equation with its
+/// neighbours' latest values, below the threshold or, where that solution
+/// exceeds it, above it (module documentation, "Time stepping").
+fn nonlinear_sweep(matrix: &SparseMatrix, rows: &SubstepRows, x: &mut [f64]) {
+    for q in 0..x.len() {
+        let (columns, values) = matrix.row(q);
+        let mut inflow = 0.0;
+        for (&c, &v) in columns.iter().zip(values) {
+            inflow += v * x[c as usize];
+        }
+        let below = (rows.dry_rhs[q] - inflow) / rows.dry_diagonal[q];
+        x[q] = if below > rows.limit[q] {
+            (rows.wet_rhs[q] - inflow) / rows.wet_diagonal[q]
+        } else {
+            below
+        };
     }
 }
 

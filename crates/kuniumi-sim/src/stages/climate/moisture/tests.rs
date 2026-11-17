@@ -18,6 +18,8 @@
 //!   `the_saturation_stops_at_the_boiling_point`.
 //!
 //! Ticket M4-09 (the multigrid): `the_potential_matches_the_jacobi_solver`.
+//! Ticket M4-14 (the downwind sweeps and solves):
+//! `the_sweeps_solve_a_cell_exactly`, `a_substep_matches_the_jacobi_solver`.
 //!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! the sea surface of ticket M4-05 (its temperatures) and the circulation of
@@ -389,9 +391,8 @@ fn transport_conserves_water_and_is_monotone() {
             &vec![400.0; n],
         );
         let mut w = start.clone();
-        let mut active = vec![false; n];
         for _ in 0..MONTHS * 4 {
-            let step = model.substep(&month, &mut w, &mut active);
+            let step = model.substep(&month, &mut w);
             assert!(step.settled && step.solves_converged);
             assert!(step.precipitation_kg_m2_s.iter().all(|&p| p == 0.0));
             assert!(step.evaporation_kg_m2_s.iter().all(|&e| e == 0.0));
@@ -513,11 +514,11 @@ fn land_recycles_its_share_and_lift_rains() {
     );
     let month = model.month(ue, vn, t);
     let mut w = model.initial_vapour_kg_m2(&month);
-    let mut active = vec![false; n];
-    let mut step = model.substep(&month, &mut w, &mut active);
+    let mut step = model.substep(&month, &mut w);
     for _ in 0..3 {
-        step = model.substep(&month, &mut w, &mut active);
+        step = model.substep(&month, &mut w);
     }
+    let active = &step.active;
     let (mut land, mut lifted, mut raining) = (0, 0, 0);
     for i in 0..n {
         let p = step.precipitation_kg_m2_s[i];
@@ -550,6 +551,186 @@ fn land_recycles_its_share_and_lift_rains() {
     }
     println!("{land} land cells, {lifted} lifted, {raining} above the threshold");
     assert!(land > 1_000 && lifted > 1_000 && raining > 100);
+}
+
+#[test]
+fn the_sweeps_solve_a_cell_exactly() {
+    // Ticket M4-14. Without wind (no transport, no lift) every row is its
+    // own equation and the downwind order is the index order, so one
+    // nonlinear sweep solves each cell's piecewise-linear equation exactly,
+    // and in a sub-step the solve that follows only confirms it (one solve,
+    // its set repeating). By hand, with e = C_E U_g on the ocean and the land's
+    // share 1 − β = 0.4 of its precipitation lost: below the threshold
+    // W' = (W/Δt + e ρ_vs)/(1/Δt + e/H_w) (on land W' = W); above it
+    // W' = (W/Δt + e ρ_vs + κ r_c W_s/τ_c)/(1/Δt + e/H_w + κ/τ_c), κ = 1 on
+    // the ocean and 0.4 on land; a cell rains where the first exceeds the
+    // threshold. A random start of 0 to 2 r_c W_s at a uniform 288 K, a
+    // third of the cells land: both branches on both surfaces, within
+    // 10⁻¹² of the closed form.
+    let grid = grid_10k();
+    let n = grid.len();
+    let params = MoistureParams::earth();
+    let heights: Vec<f64> = (0..n)
+        .map(|i| if i % 3 == 0 { 100.0 } else { -1_000.0 })
+        .collect();
+    let model = MoistureModel::new(&params, grid, &heights, 0.0, YEAR_S);
+    let zero = vec![0.0; n];
+    let month = model.month(&zero, &zero, &vec![288.0; n]);
+    assert_eq!(month.downwind_order(), (0..n as u32).collect::<Vec<u32>>());
+    let rho = month.saturation_density_kg_m3()[0];
+    let h = month.scale_height_m()[0];
+    let threshold = 0.85 * month.saturated_kg_m2()[0];
+    let (dt, tau, e) = (model.substep_s(), 14_400.0, 1.2e-3 * 2.0);
+    let mut rng = Rng::for_stream(3, "test/moisture");
+    let start: Vec<f64> = (0..n).map(|_| 2.0 * threshold * rng.next_f64()).collect();
+    let mut swept = start.clone();
+    nonlinear_sweep(&month.advection, &model.rows(&month, &start), &mut swept);
+    let mut w = start.clone();
+    let step = model.substep(&month, &mut w);
+    assert!(step.settled && step.solves_converged);
+    assert_eq!(step.active_set_iterations, 1);
+    let mut counts = [0usize; 4];
+    for i in 0..n {
+        let (exchange, keep) = if model.ocean()[i] {
+            (e, 1.0)
+        } else {
+            (0.0, 0.4)
+        };
+        let dry = (start[i] / dt + exchange * rho) / (1.0 / dt + exchange / h);
+        let rains = dry > threshold;
+        let expected = if rains {
+            (start[i] / dt + exchange * rho + keep * threshold / tau)
+                / (1.0 / dt + exchange / h + keep / tau)
+        } else {
+            dry
+        };
+        for (what, v) in [("one sweep", swept[i]), ("the sub-step", w[i])] {
+            assert!(
+                (v - expected).abs() <= 1e-12 * expected,
+                "{what}, cell {i}: {v} against {expected}"
+            );
+        }
+        assert_eq!(step.active[i], rains, "cell {i}");
+        counts[usize::from(model.ocean()[i]) * 2 + usize::from(rains)] += 1;
+    }
+    println!("land dry, land raining, ocean dry, ocean raining: {counts:?}");
+    assert!(counts.iter().all(|&c| c > 100));
+}
+
+/// One backward-Euler sub-step as ticket M4-06 solved it: the active set
+/// method from the set `active` with every linear solve by
+/// [`crate::sparse::bicgstab`] (the Jacobi preconditioner) on the matrix in
+/// the cells' order, built here from the month's flows; the new vapour,
+/// the set of the last solve and the solves.
+fn substep_by_jacobi(
+    model: &MoistureModel,
+    month: &MoistureMonth,
+    vapour: &[f64],
+    active: &[bool],
+) -> (Vec<f64>, Vec<bool>, u32) {
+    let n = model.len();
+    let p = &model.params;
+    let (dt, tau) = (model.substep_s, p.condensation_time_s);
+    let mut outflows = Vec::with_capacity(n);
+    let mut rows: Vec<Vec<(u32, f64)>> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut out = 0.0;
+        let mut row = Vec::new();
+        for k in model.range(i) {
+            let c = month.flow[k];
+            out += c.max(0.0);
+            row.push((model.neighbors[k], c.min(0.0)));
+        }
+        row.sort_by_key(|e| e.0);
+        outflows.push(out);
+        rows.push(row);
+    }
+    let advection = crate::sparse::SparseMatrix::from_rows(outflows, &rows);
+    let threshold: Vec<f64> = month
+        .saturated_kg_m2
+        .iter()
+        .map(|w| p.precipitation_threshold * w)
+        .collect();
+    let mut set = active.to_vec();
+    let mut x = vapour.to_vec();
+    for solves in 1..=MAX_ACTIVE_SET_ITERATIONS {
+        let mut diagonal = advection.diagonal().to_vec();
+        let mut rhs = Vec::with_capacity(n);
+        for i in 0..n {
+            let a = model.areas_sr[i];
+            let keep = if model.ocean[i] {
+                1.0
+            } else {
+                1.0 - p.recycling_fraction
+            };
+            let mut d = a / dt + a * keep * month.lift_per_s[i];
+            let mut b = a * vapour[i] / dt;
+            if model.ocean[i] {
+                d += a * month.exchange_m_s[i] / month.scale_height_m[i];
+                b += a * month.exchange_m_s[i] * month.saturation_density_kg_m3[i];
+            }
+            if set[i] {
+                d += a * keep / tau;
+                b += a * keep * threshold[i] / tau;
+            }
+            diagonal[i] += d;
+            rhs.push(b);
+        }
+        let solve = crate::sparse::bicgstab(
+            &advection.with_diagonal(diagonal),
+            &rhs,
+            SOLVER_TOLERANCE,
+            SOLVER_MAX_ITERATIONS,
+            &mut x,
+        );
+        assert!(solve.converged());
+        let next: Vec<bool> = (0..n).map(|i| x[i] > threshold[i]).collect();
+        if next == set {
+            return (x, set, solves);
+        }
+        set = next;
+    }
+    panic!("the Jacobi active set method did not settle");
+}
+
+#[test]
+fn a_substep_matches_the_jacobi_solver() {
+    // Ticket M4-14: Earth's world on 10,000 cells, the sub-steps of a
+    // month from the start of the periodic state, then each sub-step of
+    // the next month solved both ways from the same vapour: by the sweeps
+    // and the downwind Gauss–Seidel solves of `substep`, and by the active
+    // set method of ticket M4-06 with the Jacobi solver (started, as its
+    // periodic state was, from the previous sub-step's set). Both solve the
+    // same system to SOLVER_TOLERANCE: the same set of raining cells, every
+    // vapour within 10⁻⁹ of the largest; the sweeps leave fewer solves.
+    let earth = earth_moisture_10k();
+    let model = &earth.model;
+    let mut w = model.initial_vapour_kg_m2(&earth.months[0]);
+    let mut step = model.substep(&earth.months[0], &mut w);
+    for _ in 1..4 {
+        step = model.substep(&earth.months[0], &mut w);
+    }
+    let (mut worst, mut largest) = (0.0_f64, 0.0_f64);
+    let (mut solves, mut jacobi_solves) = (0, 0);
+    for _ in 0..4 {
+        let (expected, set, s) = substep_by_jacobi(model, &earth.months[1], &w, &step.active);
+        step = model.substep(&earth.months[1], &mut w);
+        assert!(step.settled && step.solves_converged);
+        assert_eq!(step.active, set);
+        for (a, e) in w.iter().zip(&expected) {
+            worst = worst.max((a - e).abs());
+            largest = largest.max(e.abs());
+        }
+        solves += step.active_set_iterations;
+        jacobi_solves += s;
+    }
+    println!(
+        "largest difference {:e} of the largest vapour {largest:.2} kg/m²; {solves} solves \
+         against {jacobi_solves}",
+        worst / largest
+    );
+    assert!(worst <= 1e-9 * largest, "{worst:e} of {largest:e}");
+    assert!(solves < jacobi_solves);
 }
 
 // ---------------------------------------------------------------------------
@@ -620,14 +801,12 @@ fn the_budget_closes_in_every_substep() {
     // amount, and every active set settles.
     let earth = earth_moisture_10k();
     let model = &earth.model;
-    let n = model.len();
     let mut w = model.initial_vapour_kg_m2(&earth.months[0]);
-    let mut active = vec![false; n];
     let mut worst: f64 = 0.0;
     let mut iterations = 0;
     for month in &earth.months {
         for _ in 0..4 {
-            let step = model.substep(month, &mut w, &mut active);
+            let step = model.substep(month, &mut w);
             assert!(step.settled && step.solves_converged);
             let imbalance = step.storage_mean_kg_m2_s
                 - (step.evaporation_mean_kg_m2_s - step.precipitation_mean_kg_m2_s);
@@ -1178,7 +1357,7 @@ fn a_substep_needs_a_month_of_its_grid() {
     let small = SphereGrid::fibonacci(1_000, 1).expect("grid");
     let other = MoistureModel::new(&MoistureParams::earth(), &small, &[0.0; 1_000], 0.0, YEAR_S);
     let month = other.month(&[0.0; 1_000], &[0.0; 1_000], &[288.0; 1_000]);
-    model.substep(&month, &mut vec![0.0; 10_000], &mut vec![false; 10_000]);
+    model.substep(&month, &mut vec![0.0; 10_000]);
 }
 
 #[test]
@@ -1263,7 +1442,10 @@ fn golden_fingerprint_of_earth_moisture() {
     // world has a different hydrological cycle. Recorded after the other
     // tests passed and the images of out/M4-06 were viewed (ticket M4-06,
     // Result); recorded again when the solvers of the temperatures and of
-    // the potential became the multigrid (ticket M4-09).
+    // the potential became the multigrid (ticket M4-09), and when the
+    // sub-steps became the downwind sweeps and solves (ticket M4-14, after
+    // the tests above passed and the images of out/M4-14 were viewed; this
+    // periodic state within 1.1 × 10⁻⁹ kg/m² of the Jacobi solver's).
     let run = earth_10k();
     let earth = earth_moisture_10k();
     let m = &earth.moisture;
@@ -1291,4 +1473,4 @@ fn golden_fingerprint_of_earth_moisture() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
-const GOLDEN_FINGERPRINT: u64 = 0xFE04_B92F_C2B5_4AAA;
+const GOLDEN_FINGERPRINT: u64 = 0x5B63_B12B_058C_535F;

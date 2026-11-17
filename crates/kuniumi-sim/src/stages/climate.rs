@@ -36,8 +36,10 @@
 //! [`moisture::monthly_moisture`] (ticket M4-06). The diffusion of the
 //! energy balance, the sea surface and the moisture's potential are solved
 //! with the multigrid of [`crate::multigrid`], whose iterations do not grow
-//! with the grid (ticket M4-09). The stage itself is wired by ticket M4-07;
-//! until then the runner skips it.
+//! with the grid (ticket M4-09); the moisture's upwind advection by
+//! nonlinear Gauss–Seidel sweeps and BiCGSTAB in a downwind order of the
+//! cells ([`crate::sparse::downwind_order`], ticket M4-14). The stage
+//! itself is wired by ticket M4-07; until then the runner skips it.
 
 pub mod circulation;
 pub mod energy_balance;

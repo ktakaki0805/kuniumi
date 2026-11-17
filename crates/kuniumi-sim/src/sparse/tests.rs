@@ -365,3 +365,340 @@ fn bicgstab_needs_a_finite_right_hand_side() {
         &mut [0.0; 3],
     );
 }
+
+// ---------------------------------------------------------------------------
+// The downwind order and the Gauss–Seidel preconditioner (ticket M4-14).
+
+/// Whether `order` holds every index below `n` once.
+fn is_permutation(order: &[u32], n: usize) -> bool {
+    let mut seen = vec![false; n];
+    order.len() == n
+        && order.iter().all(|&i| {
+            let fresh = (i as usize) < n && !seen[i as usize];
+            if fresh {
+                seen[i as usize] = true;
+            }
+            fresh
+        })
+}
+
+/// The position of each index in `order`.
+fn positions(order: &[u32]) -> Vec<usize> {
+    let mut position = vec![0; order.len()];
+    for (q, &i) in order.iter().enumerate() {
+        position[i as usize] = q;
+    }
+    position
+}
+
+/// A random upwind matrix of size `n` without cycles: each cell receives
+/// from up to three cells of lower rank in a random ranking (random
+/// inflows over three decades), and its diagonal is its outflows plus a
+/// mass of 0.01 to 1, as the moisture's upwind advection with its mass
+/// term (column sums positive). Returned sparse and dense, with the
+/// ranking.
+fn acyclic_flow(n: usize, rng: &mut Rng) -> (SparseMatrix, Vec<Vec<f64>>) {
+    // A random ranking: cell `rank_order[r]` has rank r.
+    let mut keys: Vec<(u64, usize)> = (0..n).map(|i| (rng.next_u64(), i)).collect();
+    keys.sort_unstable();
+    let rank_order: Vec<usize> = keys.iter().map(|&(_, i)| i).collect();
+    let mut dense = vec![vec![0.0; n]; n];
+    let mut outflow = vec![0.0; n];
+    for r in 1..n {
+        let i = rank_order[r];
+        for _ in 0..3 {
+            let j = rank_order[rng.below(r as u64) as usize];
+            let w = (10.0_f64).powf(rng.range_f64(-1.5, 1.5));
+            dense[i][j] -= w;
+            outflow[j] += w;
+        }
+    }
+    let mut rows = vec![Vec::new(); n];
+    let mut diagonal = vec![0.0; n];
+    for i in 0..n {
+        for (j, &v) in dense[i].iter().enumerate() {
+            if v != 0.0 {
+                rows[i].push((j as u32, v));
+            }
+        }
+        diagonal[i] = outflow[i] + rng.range_f64(0.01, 1.0);
+        dense[i][i] = diagonal[i];
+    }
+    (SparseMatrix::from_rows(diagonal, &rows), dense)
+}
+
+#[test]
+fn the_downwind_order_is_a_permutation() {
+    // Random M-matrices with cycles everywhere (rings and random columns)
+    // and an acyclic flow: every index once, and the same order bit for bit
+    // when computed again.
+    let mut rng = Rng::for_stream(15, "test/sparse/order");
+    for &(n, slack) in &[(1, 0.1), (5, 0.1), (60, 0.0), (400, 0.05)] {
+        let (m, _) = m_matrix(n, slack, &mut rng);
+        let order = downwind_order(&m);
+        assert!(is_permutation(&order, n), "n = {n}: {order:?}");
+        assert_eq!(order, downwind_order(&m));
+    }
+    let (m, _) = acyclic_flow(300, &mut rng);
+    assert!(is_permutation(&downwind_order(&m), 300));
+    let empty = SparseMatrix::from_rows(Vec::new(), &[]);
+    assert!(downwind_order(&empty).is_empty());
+}
+
+#[test]
+fn an_acyclic_flow_is_ordered_downwind() {
+    // Without cycles every cell comes after the cells that flow into it,
+    // so the matrix renumbered in the order is lower triangular, one
+    // Gauss–Seidel sweep solves it exactly and BiCGSTAB preconditioned by
+    // it converges in one iteration, to the dense solution (within 10⁻¹²
+    // of the largest value). In index order the same system needs more
+    // iterations.
+    let mut rng = Rng::for_stream(16, "test/sparse/acyclic");
+    for n in [10, 100, 400] {
+        let (m, dense) = acyclic_flow(n, &mut rng);
+        let order = downwind_order(&m);
+        let position = positions(&order);
+        for i in 0..n {
+            let (columns, values) = m.row(i);
+            for (&j, &v) in columns.iter().zip(values) {
+                assert!(
+                    v >= 0.0 || position[j as usize] < position[i],
+                    "n = {n}: {j} → {i}"
+                );
+            }
+        }
+        let p = m.permuted(&order);
+        for q in 0..n {
+            assert!(
+                p.row(q).0.iter().all(|&c| (c as usize) < q),
+                "row {q} has an upper entry"
+            );
+        }
+        let b: Vec<f64> = (0..n).map(|_| rng.range_f64(0.0, 1.0)).collect();
+        let exact = dense_solve(dense, b.clone());
+        let pb: Vec<f64> = order.iter().map(|&i| b[i as usize]).collect();
+        let mut px = vec![0.0; n];
+        let solve = bicgstab_gauss_seidel(&p, &pb, 1e-12, 100, &mut px);
+        assert!(solve.converged(), "n = {n}: {solve:?}");
+        assert_eq!(solve.iterations, 1, "n = {n}: {solve:?}");
+        let largest = exact.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+        for (q, &i) in order.iter().enumerate() {
+            let e = exact[i as usize];
+            assert!(
+                (px[q] - e).abs() <= 1e-12 * largest,
+                "n = {n}: {} against {e}",
+                px[q]
+            );
+        }
+        let mut x = vec![0.0; n];
+        let unordered = bicgstab_gauss_seidel(&m, &b, 1e-12, 100, &mut x);
+        println!(
+            "n = {n}: in index order {} iterations",
+            unordered.iterations
+        );
+        assert!(unordered.converged() && unordered.iterations > 1);
+    }
+}
+
+#[test]
+fn a_cycle_is_broken_at_its_weakest_inflow() {
+    // A ring 0 → 1 → … → 5 → 0 (cell i receives 1 from cell i − 1, except
+    // cell 4, which receives only 0.01 from cell 3), a cell 6 that
+    // receives from cell 2, and a cell 7 that receives from nothing; every
+    // diagonal 2. By hand: cell 7 is ready first; then no cell is ready, and
+    // cell 4 has the least inflow from unordered cells over its diagonal
+    // (0.005 against 0.5), so the ring is cut before it and followed
+    // downwind: 5, 0, 1, 2; then cells 3 and 6 are ready, by index.
+    let mut rows = vec![Vec::new(); 8];
+    for i in 0..6_u32 {
+        let from = (i + 5) % 6;
+        rows[i as usize].push((from, if i == 4 { -0.01 } else { -1.0 }));
+    }
+    rows[6].push((2, -1.0));
+    let m = SparseMatrix::from_rows(vec![2.0; 8], &rows);
+    assert_eq!(downwind_order(&m), vec![7, 4, 5, 0, 1, 2, 3, 6]);
+    // Entries that are not inflows (positive, or zero) do not order.
+    let mut rows = rows.clone();
+    rows[7].push((6, 0.0));
+    rows[3].push((7, 0.5));
+    let m = SparseMatrix::from_rows(vec![2.0; 8], &rows);
+    assert_eq!(downwind_order(&m), vec![7, 4, 5, 0, 1, 2, 3, 6]);
+}
+
+#[test]
+fn a_cut_weighs_only_the_inflow_left_behind() {
+    // Two rings, 0 ⇄ 1 (inflows 1) and 2 ⇄ 3, where cell 2 also receives
+    // 1.5 from cell 0 and only 0.1 from cell 3, and cell 3 receives 1 from
+    // cell 2; every diagonal 2. By hand: no cell is ready; the shares of
+    // the inflow from unordered cells are 0.5, 0.5, 0.8 and 0.5, so ring 0
+    // ⇄ 1 is cut first, before cell 0 (the lowest index), and cell 1 follows.
+    // Then cell 2 has only its 0.1 from cell 3 left (share 0.05, against
+    // cell 3's 0.5), so the second ring is cut before cell 2, although cell
+    // 2's whole inflow (share 0.8) is the largest: 0, 1, 2, 3. Weighing the
+    // whole inflow would cut before cell 3 instead: 0, 1, 3, 2.
+    let m = SparseMatrix::from_rows(
+        vec![2.0; 4],
+        &[
+            vec![(1, -1.0)],
+            vec![(0, -1.0)],
+            vec![(0, -1.5), (3, -0.1)],
+            vec![(2, -1.0)],
+        ],
+    );
+    assert_eq!(downwind_order(&m), vec![0, 1, 2, 3]);
+}
+
+#[test]
+fn the_permuted_matrix_is_the_same_operator() {
+    // Row and column q of the renumbered matrix are row and column
+    // order[q] of the matrix: the same entries (bit for bit) at the new
+    // places, each row's columns increasing, and the same product up to
+    // the order of the sums (within 10⁻¹⁴ of the row's magnitude).
+    let mut rng = Rng::for_stream(17, "test/sparse/permuted");
+    let n = 200;
+    let (m, _) = m_matrix(n, 0.02, &mut rng);
+    let mut keys: Vec<(u64, u32)> = (0..n as u32).map(|i| (rng.next_u64(), i)).collect();
+    keys.sort_unstable();
+    let order: Vec<u32> = keys.iter().map(|&(_, i)| i).collect();
+    let position = positions(&order);
+    let p = m.permuted(&order);
+    assert_eq!(p.len(), n);
+    let x: Vec<f64> = (0..n).map(|_| rng.range_f64(-1.0, 1.0)).collect();
+    let px: Vec<f64> = order.iter().map(|&i| x[i as usize]).collect();
+    let (mut ax, mut pax) = (vec![0.0; n], vec![0.0; n]);
+    m.apply(&x, &mut ax);
+    p.apply(&px, &mut pax);
+    for (q, &i) in order.iter().enumerate() {
+        let i = i as usize;
+        assert_same_bits(p.diagonal()[q], m.diagonal()[i]);
+        let (columns, values) = m.row(i);
+        let mut expected: Vec<(u32, u64)> = columns
+            .iter()
+            .zip(values)
+            .map(|(&j, v)| (position[j as usize] as u32, v.to_bits()))
+            .collect();
+        expected.sort_unstable();
+        let (pc, pv) = p.row(q);
+        let actual: Vec<(u32, u64)> = pc.iter().zip(pv).map(|(&c, v)| (c, v.to_bits())).collect();
+        assert_eq!(actual, expected, "row {q}");
+        let scale = m.diagonal()[i] * 2.0;
+        assert!((pax[q] - ax[i]).abs() <= 1e-14 * scale, "row {q}");
+    }
+}
+
+/// Asserts that two doubles are the same bits.
+fn assert_same_bits(a: f64, b: f64) {
+    assert_eq!(a.to_bits(), b.to_bits(), "{a} against {b}");
+}
+
+#[test]
+fn bicgstab_gauss_seidel_matches_a_dense_solution() {
+    // The random M-matrices of `bicgstab_matches_a_dense_solution`, in index
+    // order and in their downwind order: the solution within 10⁻¹⁰ of the
+    // largest |x| of the dense one (the weakly dominant ones, nearly
+    // singular, within 10⁻⁸ as for `bicgstab`), the reported residual the
+    // true one; fewer iterations than the Jacobi preconditioner's.
+    let mut rng = Rng::for_stream(11, "test/sparse/m-matrix");
+    for &(n, slack) in &[(5, 0.1), (20, 0.0), (60, 0.01), (150, 0.0), (400, 0.05)] {
+        let (m, dense) = m_matrix(n, slack, &mut rng);
+        let b: Vec<f64> = (0..n).map(|_| rng.range_f64(-1.0, 1.0)).collect();
+        let exact = dense_solve(dense, b.clone());
+        let largest = exact.iter().fold(0.0_f64, |a, v| a.max(v.abs()));
+        let bound = if slack == 0.0 { 1e-8 } else { 1e-10 };
+        let mut jacobi = vec![0.0; n];
+        let reference = bicgstab(&m, &b, 1e-12, 10_000, &mut jacobi);
+        for order in [(0..n as u32).collect::<Vec<u32>>(), downwind_order(&m)] {
+            let p = m.permuted(&order);
+            let pb: Vec<f64> = order.iter().map(|&i| b[i as usize]).collect();
+            let mut px = vec![0.0; n];
+            let solve = bicgstab_gauss_seidel(&p, &pb, 1e-12, 10_000, &mut px);
+            assert!(solve.converged(), "n = {n}: {solve:?}");
+            assert!(solve.relative_residual <= 1e-12, "n = {n}: {solve:?}");
+            assert!(
+                solve.iterations <= reference.iterations,
+                "n = {n}: {solve:?} against Jacobi {reference:?}"
+            );
+            for (q, &i) in order.iter().enumerate() {
+                let e = exact[i as usize];
+                assert!(
+                    (px[q] - e).abs() <= bound * largest,
+                    "n = {n}, x[{i}] = {} against {e} (largest {largest})",
+                    px[q]
+                );
+            }
+            let mut ax = vec![0.0; n];
+            p.apply(&px, &mut ax);
+            let (mut rr, mut bb) = (0.0, 0.0);
+            for q in 0..n {
+                rr += (pb[q] - ax[q]) * (pb[q] - ax[q]);
+                bb += pb[q] * pb[q];
+            }
+            assert!(
+                (rr / bb).sqrt() <= 1e-11,
+                "n = {n}: true residual {}",
+                (rr / bb).sqrt()
+            );
+        }
+    }
+}
+
+#[test]
+fn bicgstab_gauss_seidel_stops() {
+    // A zero right-hand side gives zero; a start that solves the system is
+    // returned bit for bit after no iteration; the iteration limit; the
+    // same bits when solved again.
+    let m = small();
+    let mut x = vec![3.0, -2.0, 1.0];
+    let solve = bicgstab_gauss_seidel(&m, &[0.0; 3], 1e-12, 100, &mut x);
+    assert!(solve.converged() && solve.iterations == 0);
+    assert!(x.iter().all(|&v| v == 0.0 && v.is_sign_positive()));
+    let d = SparseMatrix::from_rows(vec![2.0, 4.0, 8.0], &[vec![], vec![], vec![]]);
+    let mut x = vec![0.5, 0.25, 0.125];
+    let solve = bicgstab_gauss_seidel(&d, &[1.0; 3], 1e-12, 100, &mut x);
+    assert!(solve.converged() && solve.iterations == 0);
+    assert_eq!(x, vec![0.5, 0.25, 0.125]);
+    let mut rng = Rng::for_stream(13, "test/sparse/limit");
+    let (m, _) = m_matrix(300, 0.0, &mut rng);
+    let b: Vec<f64> = (0..300).map(|_| rng.range_f64(-1.0, 1.0)).collect();
+    let mut x = vec![0.0; 300];
+    let solve = bicgstab_gauss_seidel(&m, &b, 1e-12, 2, &mut x);
+    assert_eq!(solve.iterations, 2);
+    assert!(!solve.converged());
+    assert!(solve.relative_residual > 1e-12 && solve.relative_residual.is_finite());
+    let mut y = vec![0.0; 300];
+    let again = bicgstab_gauss_seidel(&m, &b, 1e-12, 2, &mut y);
+    assert_eq!(solve, again);
+    assert!(x.iter().zip(&y).all(|(a, b)| a.to_bits() == b.to_bits()));
+}
+
+#[test]
+#[should_panic(expected = "every row once")]
+fn permuted_needs_a_permutation() {
+    small().permuted(&[0, 0, 2]);
+}
+
+#[test]
+#[should_panic(expected = "every row once")]
+fn permuted_needs_one_entry_per_row() {
+    small().permuted(&[0, 1]);
+}
+
+#[test]
+#[should_panic(expected = "positive finite diagonal")]
+fn the_downwind_order_needs_a_positive_diagonal() {
+    let m = SparseMatrix::from_rows(vec![1.0, 0.0], &[vec![(1, -1.0)], vec![(0, -1.0)]]);
+    downwind_order(&m);
+}
+
+#[test]
+#[should_panic(expected = "non-zero diagonal")]
+fn bicgstab_gauss_seidel_needs_a_non_zero_diagonal() {
+    let m = SparseMatrix::from_rows(vec![1.0, 0.0], &[vec![(1, -1.0)], vec![(0, -1.0)]]);
+    bicgstab_gauss_seidel(&m, &[1.0, 1.0], 1e-10, 10, &mut [0.0; 2]);
+}
+
+#[test]
+#[should_panic(expected = "finite right-hand side")]
+fn bicgstab_gauss_seidel_needs_a_finite_right_hand_side() {
+    bicgstab_gauss_seidel(&small(), &[1.0, f64::NAN, 1.0], 1e-10, 10, &mut [0.0; 3]);
+}

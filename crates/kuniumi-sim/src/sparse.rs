@@ -1,19 +1,49 @@
 //! Sparse linear systems that are not symmetric (ticket M4-04): a square
 //! matrix stored by rows ([`SparseMatrix`]) and the BiCGSTAB method with
-//! the Jacobi preconditioner ([`bicgstab`]).
+//! the Jacobi preconditioner ([`bicgstab`]); for upwind advection, a
+//! downwind order of the rows ([`downwind_order`]), the matrix renumbered
+//! in it ([`SparseMatrix::permuted`]) and BiCGSTAB preconditioned by a
+//! Gauss–Seidel sweep in that order ([`bicgstab_gauss_seidel`], ticket
+//! M4-14).
 //!
 //! The ocean's Stommel model ([`crate::stages::climate::ocean`]) solves
-//! with it the advection–diffusion system of its streamfunction, whose
-//! matrix is a non-symmetric M-matrix, and the moisture
-//! ([`crate::stages::climate::moisture`]) its upwind advection; the
+//! with [`bicgstab`] the advection–diffusion system of its streamfunction,
+//! whose matrix is a non-symmetric M-matrix; the moisture
+//! ([`crate::stages::climate::moisture`]) solves its upwind advection with
+//! [`bicgstab_gauss_seidel`] in the downwind order of each month; the
 //! symmetric systems of the diffusion and the sea surface's system are
 //! solved with the multigrid of [`crate::multigrid`] (ticket M4-09), whose
 //! BiCGSTAB is this one with the V-cycle for the preconditioner.
 //!
+//! # The downwind order
+//!
+//! An upwind discretisation of advection has off its diagonal only the
+//! inflows of each cell (`a_ij < 0`: cell `i` receives from cell `j`).
+//! Numbered so that every cell comes after the cells that flow into it,
+//! the matrix is lower triangular where the flow has no cycles, and one
+//! Gauss–Seidel sweep in that order solves it: the "downwind numbering"
+//! of W. Hackbusch & T. Probst (1997, "Downwind Gauß–Seidel smoothing for
+//! convection dominated problems", Numer. Linear Algebra Appl. 4, 85–102)
+//! and J. Bey & G. Wittum (1997, "Downwind numbering: robust multigrid for
+//! convection-diffusion problems", Appl. Numer. Math. 23, 177–192). Where
+//! streamlines close the flow has cycles, and the order must cut each of
+//! them somewhere; [`downwind_order`] cuts where the inflow left behind is
+//! the smallest share of a row's diagonal, so that the entries above the
+//! diagonal in the order, which the sweep does not solve, are as small as
+//! its greedy choice makes them (on the moisture's systems of the
+//! Earth-parameter world, 6 % of a row's diagonal on average on 10,000 to
+//! 650,000 cells, against 36 % in index order on 10,000; ticket M4-14,
+//! prototype).
+//!
 //! Everything runs sequentially in row order with IEEE `+ − × ÷` and
 //! `sqrt`: every product and dot product sums in a fixed order
-//! (docs/conventions.md, "Determinism", rules 2 and 6), so the results are
-//! the same on every platform.
+//! (docs/conventions.md, "Determinism", rules 2 and 6), and the downwind
+//! order compares integers and the bits of non-negative doubles, ties
+//! broken by index (rule 5), so the results are the same on every
+//! platform.
+
+use core::cmp::Reverse;
+use std::collections::BinaryHeap;
 
 use crate::operators::Solve;
 
@@ -167,6 +197,158 @@ impl SparseMatrix {
             *out = sum;
         }
     }
+
+    /// The matrix renumbered by `order`: row and column `q` of the result
+    /// are row and column `order[q]` of this one, `P A Pᵀ` with
+    /// `(P x)_q = x_{order[q]}`. Each row keeps its entries, bit for bit,
+    /// with their columns renumbered and sorted (ticket M4-14).
+    ///
+    /// # Panics
+    ///
+    /// If `order` does not list every row once.
+    pub fn permuted(&self, order: &[u32]) -> Self {
+        let n = self.len();
+        let mut position = vec![u32::MAX; n];
+        let mut valid = order.len() == n;
+        for (q, &i) in order.iter().enumerate() {
+            let i = i as usize;
+            if !valid || i >= n || position[i] != u32::MAX {
+                valid = false;
+                break;
+            }
+            // At most u32::MAX rows (`from_rows`).
+            position[i] = q as u32;
+        }
+        assert!(
+            valid,
+            "permuted needs an order that lists every row once: {} entries for {n} rows",
+            order.len()
+        );
+        let mut offsets = Vec::with_capacity(n + 1);
+        let mut columns = Vec::with_capacity(self.columns.len());
+        let mut values = Vec::with_capacity(self.values.len());
+        let mut row: Vec<(u32, f64)> = Vec::new();
+        offsets.push(0);
+        for &i in order {
+            let (cols, vals) = self.row(i as usize);
+            row.clear();
+            row.extend(
+                cols.iter()
+                    .zip(vals)
+                    .map(|(&j, &v)| (position[j as usize], v)),
+            );
+            // The columns of a row are distinct, so the order is unique.
+            row.sort_unstable_by_key(|e| e.0);
+            for &(c, v) in &row {
+                columns.push(c);
+                values.push(v);
+            }
+            offsets.push(columns.len());
+        }
+        Self {
+            diagonal: order.iter().map(|&i| self.diagonal[i as usize]).collect(),
+            offsets,
+            columns,
+            values,
+        }
+    }
+}
+
+/// The downwind order of the rows of `matrix` (module documentation, "The
+/// downwind order"): `order[q]` is the row in place `q`, for
+/// [`SparseMatrix::permuted`] (ticket M4-14).
+///
+/// The entries off the diagonal that are negative are the inflows of
+/// their row (`a_ij < 0`: row `i` receives from row `j`); the others do
+/// not order. Kahn's topological sort of the inflow graph (A. B. Kahn 1962,
+/// "Topological sorting of large networks", Commun. ACM 5, 558–562): a row
+/// is ready when every row it receives from is ordered, and the ready row
+/// of the lowest index comes next. Where no row is ready (the flow has
+/// cycles), the next is the unordered row whose inflow from unordered rows
+/// `Σ_j (−a_ij)` is the smallest share of its diagonal `a_ii`, ties by
+/// index. A binary heap of `(ready or not, the share's bits, index)` with
+/// lazy deletion: `O(nnz log n)`.
+///
+/// # Panics
+///
+/// If a diagonal entry is not positive and finite.
+pub fn downwind_order(matrix: &SparseMatrix) -> Vec<u32> {
+    let n = matrix.len();
+    let diagonal = &matrix.diagonal;
+    // Written so that NaN fails.
+    assert!(
+        diagonal.iter().all(|&d| d > 0.0 && d.is_finite()),
+        "the downwind order needs a positive finite diagonal"
+    );
+    // The inflows of each row (their number and sum), and the rows that
+    // each row flows into (by increasing index).
+    let mut count = vec![0u32; n];
+    let mut remaining = vec![0.0; n];
+    let mut starts = vec![0usize; n + 1];
+    for (i, (c, r)) in count.iter_mut().zip(&mut remaining).enumerate() {
+        let (cols, vals) = matrix.row(i);
+        for (&j, &v) in cols.iter().zip(vals) {
+            if v < 0.0 {
+                *c += 1;
+                *r += -v;
+                starts[j as usize + 1] += 1;
+            }
+        }
+    }
+    for j in 0..n {
+        starts[j + 1] += starts[j];
+    }
+    let mut fill = starts.clone();
+    let mut receivers = vec![(0u32, 0.0); starts[n]];
+    for i in 0..n {
+        let (cols, vals) = matrix.row(i);
+        for (&j, &v) in cols.iter().zip(vals) {
+            if v < 0.0 {
+                receivers[fill[j as usize]] = (i as u32, -v);
+                fill[j as usize] += 1;
+            }
+        }
+    }
+    // The key of a row: ready rows first, then the smallest share; the
+    // share is non-negative (a remaining sum that rounding takes below
+    // zero, or to −0, counts as +0), so its bits order as its value.
+    let key = |count: u32, remaining: f64, d: f64| -> (u8, u64) {
+        if count == 0 {
+            (0, 0)
+        } else {
+            let r = if remaining > 0.0 { remaining } else { 0.0 };
+            (1, (r / d).to_bits())
+        }
+    };
+    let mut keys: Vec<(u8, u64)> = (0..n)
+        .map(|i| key(count[i], remaining[i], diagonal[i]))
+        .collect();
+    let mut heap: BinaryHeap<Reverse<(u8, u64, u32)>> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, k)| Reverse((k.0, k.1, i as u32)))
+        .collect();
+    let mut ordered = vec![false; n];
+    let mut order = Vec::with_capacity(n);
+    while let Some(Reverse((ready, share, i))) = heap.pop() {
+        let i = i as usize;
+        if ordered[i] || keys[i] != (ready, share) {
+            // A stale entry: the row is ordered or its key has changed.
+            continue;
+        }
+        ordered[i] = true;
+        order.push(i as u32);
+        for &(j, w) in &receivers[starts[i]..starts[i + 1]] {
+            let j = j as usize;
+            if !ordered[j] {
+                count[j] -= 1;
+                remaining[j] -= w;
+                keys[j] = key(count[j], remaining[j], diagonal[j]);
+                heap.push(Reverse((keys[j].0, keys[j].1, j as u32)));
+            }
+        }
+    }
+    order
 }
 
 /// `Σ_i x_i y_i`, sequentially in index order.
@@ -241,6 +423,63 @@ pub fn bicgstab(
         }
     };
     bicgstab_with(matrix, rhs, tolerance, max_iterations, values, &mut jacobi)
+}
+
+/// Solves `A x = b` by the BiCGSTAB method of [`bicgstab`] (the same
+/// iteration, stops, breakdowns and restarts), right-preconditioned by one
+/// forward Gauss–Seidel sweep in row order, `M = D + L` with `D` the
+/// diagonal of `A` and `L` its entries below the diagonal: for a matrix
+/// renumbered in its [`downwind_order`] ([`SparseMatrix::permuted`]), so
+/// that the sweep follows the flow and solves an acyclic upwind system
+/// exactly, in one iteration (ticket M4-14). `values` hold the start and
+/// become the solution, `A = matrix`, `b = rhs`; the returned [`Solve`] as
+/// [`bicgstab`]'s.
+///
+/// # Panics
+///
+/// As [`bicgstab`]: if `rhs` or `values` does not hold one entry per row,
+/// if a diagonal entry is zero, if a right-hand side or a value is not
+/// finite, if `tolerance` is not in `(0, 1)`.
+pub fn bicgstab_gauss_seidel(
+    matrix: &SparseMatrix,
+    rhs: &[f64],
+    tolerance: f64,
+    max_iterations: u32,
+    values: &mut [f64],
+) -> Solve {
+    let n = matrix.len();
+    assert_eq!(
+        rhs.len(),
+        n,
+        "bicgstab_gauss_seidel needs one right-hand side per row: {} for {n} rows",
+        rhs.len()
+    );
+    assert_eq!(
+        values.len(),
+        n,
+        "bicgstab_gauss_seidel needs one value per row: {} values for {n} rows",
+        values.len()
+    );
+    assert!(
+        matrix.diagonal.iter().all(|&d| d != 0.0),
+        "bicgstab_gauss_seidel needs a non-zero diagonal (the Gauss–Seidel sweep divides by it)"
+    );
+    check_system("bicgstab_gauss_seidel", rhs, values, tolerance);
+    let mut sweep = |r: &[f64], z: &mut [f64]| {
+        for q in 0..n {
+            let mut sum = r[q];
+            for k in matrix.offsets[q]..matrix.offsets[q + 1] {
+                let c = matrix.columns[k] as usize;
+                if c > q {
+                    // The columns increase: the rest of the row is above.
+                    break;
+                }
+                sum -= matrix.values[k] * z[c];
+            }
+            z[q] = sum / matrix.diagonal[q];
+        }
+    };
+    bicgstab_with(matrix, rhs, tolerance, max_iterations, values, &mut sweep)
 }
 
 /// Checks the right-hand side, the start and the tolerance of a solve by
