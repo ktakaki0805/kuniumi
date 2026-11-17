@@ -19,17 +19,20 @@
 //! filled surface ([`Drainage::build`]), accumulates the discharge from the
 //! precipitation down that graph ([`Drainage::accumulate`]), erodes the
 //! original surface along it ([`incise`]), and diffuses the land
-//! ([`diffuse`]). Until the Climate stage exists the
-//! precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`] everywhere.
+//! ([`diffuse`]). The precipitation is [`PLACEHOLDER_PRECIPITATION_M_S`]
+//! everywhere, although the Climate stage runs before this one (ticket
+//! M4-07): its precipitation is exactly 0 on 13 to 35 % of the land of the
+//! Earth-parameter worlds, where uplift would never erode (peaks of 39 to
+//! 106 km after the default 10 Myr), so erosion follows the climate's rain
+//! only from ticket M4-19.
 //!
 //! The stage ([`run`], ticket M3-05) runs [`erode`] on the world's
 //! `surface_height`, its land first roughened by up to 1 m ([`roughen`],
 //! ticket M3-06: on land that is exactly level, the routing would
 //! otherwise draw straight parallel rivers), with its `uplift_rate` and
 //! its erosion settings,
-//! `Settings::erosion` (ticket M3-07), after the Crust stage (the runner
-//! skips the Climate stage until it exists), and adds the rivers of the
-//! final surface ([`Rivers`]): [`DRAINAGE_AREA`] (m²), [`DISCHARGE`] (m³/s)
+//! `Settings::erosion` (ticket M3-07), after the Crust and Climate stages,
+//! and adds the rivers of the final surface ([`Rivers`]): [`DRAINAGE_AREA`] (m²), [`DISCHARGE`] (m³/s)
 //! and [`DEPRESSION_DEPTH`] (m). With the default settings, 1,000 steps of
 //! 10⁴ yr, the continental interiors, which have no uplift, are planed down
 //! to the sea level and the highest peaks depend on the resolution (5.6 to
@@ -192,7 +195,7 @@ fn inflow_m3_s(inputs: &ErosionInputs<'_>) -> Vec<f64> {
 /// field [`UPLIFT_RATE`] of the Tectonics stage, the settings
 /// `world.settings.erosion`, the planet's radius, the world's sea level and
 /// the placeholder precipitation [`PLACEHOLDER_PRECIPITATION_M_S`] on every
-/// cell (until the Climate stage exists), replacing the heights in place;
+/// cell (until ticket M4-19), replacing the heights in place;
 /// then adds the [`Rivers`] of the final surface as the fields
 /// [`DRAINAGE_AREA`] (`m^2`), [`DISCHARGE`] (`m^3/s`) and
 /// [`DEPRESSION_DEPTH`] (`m`), in that order. The progress of [`erode`],
@@ -347,9 +350,9 @@ pub fn roughen(height_m: &mut [f64], sea_level_m: f64, amplitude_m: f64, rng: &m
     }
 }
 
-/// The precipitation (m/s) that drives erosion until the Climate stage
-/// exists: 1 m/yr everywhere (3.17 × 10⁻⁸ m/s), about Earth's global mean
-/// (ticket M3-03).
+/// The precipitation (m/s) that drives erosion until it follows the
+/// climate's (ticket M4-19; module documentation): 1 m/yr everywhere
+/// (3.17 × 10⁻⁸ m/s), about Earth's global mean (ticket M3-03).
 pub const PLACEHOLDER_PRECIPITATION_M_S: f64 = 1.0 / SECONDS_PER_YEAR;
 
 /// The drainage network that one step of [`incise`] follows, one entry per
@@ -636,7 +639,7 @@ pub struct ErosionInputs<'a> {
     /// stage's `uplift_rate`.
     pub uplift_rate_m_s: &'a [f64],
     /// The precipitation of each cell (m/s), finite and not negative;
-    /// [`PLACEHOLDER_PRECIPITATION_M_S`] until the Climate stage exists.
+    /// [`PLACEHOLDER_PRECIPITATION_M_S`] in the pipeline until ticket M4-19.
     pub precipitation_m_s: &'a [f64],
 }
 

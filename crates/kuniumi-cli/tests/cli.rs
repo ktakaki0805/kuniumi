@@ -85,9 +85,10 @@ fn grid_writes_maps_and_statistics() {
     }
 }
 
-/// The fields of a world stopped after the Erosion stage (the Climate stage
-/// skipped), in the order `generate` writes them.
-const WORLD_FIELDS: [&str; 16] = [
+/// The fields of a world stopped after the Erosion stage, in the order
+/// `generate` writes them: the Climate stage's (ticket M4-07) after the
+/// Crust stage's `surface_height`.
+const WORLD_FIELDS: [&str; 46] = [
     "cell_area",
     "neighbor_count",
     "plate_id",
@@ -101,6 +102,36 @@ const WORLD_FIELDS: [&str; 16] = [
     "uplift_rate",
     "trench",
     "surface_height",
+    "temperature_annual",
+    "temperature_m01",
+    "temperature_m02",
+    "temperature_m03",
+    "temperature_m04",
+    "temperature_m05",
+    "temperature_m06",
+    "temperature_m07",
+    "temperature_m08",
+    "temperature_m09",
+    "temperature_m10",
+    "temperature_m11",
+    "temperature_m12",
+    "precipitation_annual",
+    "precipitation_m01",
+    "precipitation_m02",
+    "precipitation_m03",
+    "precipitation_m04",
+    "precipitation_m05",
+    "precipitation_m06",
+    "precipitation_m07",
+    "precipitation_m08",
+    "precipitation_m09",
+    "precipitation_m10",
+    "precipitation_m11",
+    "precipitation_m12",
+    "wind_east",
+    "wind_north",
+    "current_east",
+    "current_north",
     "drainage_area",
     "discharge",
     "depression_depth",
@@ -132,11 +163,13 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     let out = dir.to_str().expect("UTF-8 path");
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "1000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
-    // Each stage's progress in whole percent, each line once: the 1,000
-    // steps of the Erosion stage give every percent from 0 to 100.
+    // Each stage's progress in whole percent, each line once: the Climate
+    // stage's after each of its models (ticket M4-07), and the 1,000 steps
+    // of the Erosion stage give every percent from 0 to 100.
     let mut expected = String::from(
         "[grid] 0%\n[grid] 100%\n[tectonics] 0%\n[tectonics] 100%\n\
-         [crust] 0%\n[crust] 100%\n",
+         [crust] 0%\n[crust] 100%\n\
+         [climate] 0%\n[climate] 35%\n[climate] 41%\n[climate] 88%\n[climate] 100%\n",
     );
     for percent in 0..=100 {
         expected.push_str(&format!("[erosion] {percent}%\n"));
@@ -182,6 +215,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "    \"grid\",",
         "    \"tectonics\",",
         "    \"crust\",",
+        "    \"climate\",",
         "    \"erosion\"",
         "      \"name\": \"cell_area\",",
         "      \"unit\": \"sr\",",
@@ -199,6 +233,10 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "      \"name\": \"uplift_rate\",",
         "      \"name\": \"trench\",",
         "      \"name\": \"surface_height\",",
+        "      \"name\": \"temperature_annual\",",
+        "      \"unit\": \"K\",",
+        "      \"name\": \"precipitation_m12\",",
+        "      \"name\": \"current_north\",",
         "      \"name\": \"drainage_area\",",
         "      \"unit\": \"m^2\",",
         "      \"name\": \"discharge\",",
@@ -497,8 +535,11 @@ fn generate_writes_a_world_that_reads_back() {
 /// were looked at (world-breaking), and again by ticket M3-06 (the land
 /// roughened by up to 1 m before the first erosion step, world-breaking)
 /// after the tests of `stages::erosion` (`roughness_tests.rs`,
-/// `stage_tests.rs`) passed and the maps of `out/M3-06` were looked at.
-const GOLDEN_FIELDS: [(&str, u64); 16] = [
+/// `stage_tests.rs`) passed and the maps of `out/M3-06` were looked at. The
+/// 30 fields of the Climate stage were recorded by ticket M4-07 after the
+/// tests of `stages::climate` (`stage_tests.rs`) passed and the maps of
+/// `out/M4-07` were looked at; the 16 others are unchanged by it.
+const GOLDEN_FIELDS: [(&str, u64); 46] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
     ("plate_id", 0x5E9F_DB0A_B6B7_D521),
@@ -512,6 +553,36 @@ const GOLDEN_FIELDS: [(&str, u64); 16] = [
     ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
     ("surface_height", 0xDB1E_0D68_718E_F38C),
+    ("temperature_annual", 0xFF24_2A93_4B03_A8C2),
+    ("temperature_m01", 0x7FE2_38B3_F3BA_B43D),
+    ("temperature_m02", 0x4242_937F_03B3_44AE),
+    ("temperature_m03", 0x040D_BD3D_D4DA_512C),
+    ("temperature_m04", 0xC716_20A1_ED90_0D55),
+    ("temperature_m05", 0x9B29_15E9_1E0B_9487),
+    ("temperature_m06", 0x2542_6CE0_7E35_C028),
+    ("temperature_m07", 0xA99C_B6D7_FEBF_2BE1),
+    ("temperature_m08", 0xC516_1D9D_5039_A086),
+    ("temperature_m09", 0xEAA3_99E1_C708_A0C5),
+    ("temperature_m10", 0x510F_07EC_20CD_22BC),
+    ("temperature_m11", 0xBEFC_322D_09A7_0E1D),
+    ("temperature_m12", 0xEA55_231B_FAF0_46E0),
+    ("precipitation_annual", 0xF93C_0FFA_FFF1_1237),
+    ("precipitation_m01", 0x7B8D_501B_566D_1C6B),
+    ("precipitation_m02", 0xEC21_4ED9_902E_5225),
+    ("precipitation_m03", 0x459A_0976_0917_E752),
+    ("precipitation_m04", 0xD82E_ED54_5720_EB32),
+    ("precipitation_m05", 0xBEAE_B60D_20FD_3CDA),
+    ("precipitation_m06", 0x9470_CFFF_154E_1673),
+    ("precipitation_m07", 0xB90A_44C9_24D6_5EA4),
+    ("precipitation_m08", 0x996F_F05B_EF93_24AC),
+    ("precipitation_m09", 0x17BC_8D25_FD01_DBF0),
+    ("precipitation_m10", 0x88C2_030D_E637_36E2),
+    ("precipitation_m11", 0x427A_6DDC_1A18_AE3E),
+    ("precipitation_m12", 0x3E77_2771_40A8_7DA1),
+    ("wind_east", 0x79DE_B0C5_1CB0_DAF5),
+    ("wind_north", 0x2DE9_A598_FAF3_5BCB),
+    ("current_east", 0x6DEF_6FF2_B674_8B9C),
+    ("current_north", 0x10DD_6480_93A6_7708),
     ("drainage_area", 0x74B7_97DE_863F_9C2A),
     ("discharge", 0x714B_06C0_204A_48F6),
     ("depression_depth", 0x2128_8731_7CB9_00EB),
@@ -583,10 +654,11 @@ fn generate_golden_fingerprints() {
 #[test]
 fn generate_without_erosion_steps_keeps_the_relief_of_the_crust_stage() {
     // With 0 steps the Erosion stage leaves the surface height of the Crust
-    // stage bit for bit; the fields of the earlier stages and the sea level
-    // never depend on the erosion settings.
+    // stage bit for bit; the fields of the earlier stages, the climate's,
+    // which is that of the Crust stage's relief, and the sea level never
+    // depend on the erosion settings.
     let dir = golden_world("generate_without_erosion_steps", 0);
-    for (name, golden) in &GOLDEN_FIELDS[..12] {
+    for (name, golden) in GOLDEN_FIELDS[..12].iter().chain(&GOLDEN_FIELDS[13..43]) {
         assert_eq!(fingerprint_of(&dir, name), *golden, "{name}");
     }
     let height = fingerprint_of(&dir, "surface_height");

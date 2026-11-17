@@ -568,6 +568,19 @@ section: every change after which an existing seed produces a different world
   sweep in row order, which solves an acyclic upwind system in one
   iteration. `moisture::NONLINEAR_SWEEPS` (40),
   `MoistureMonth::downwind_order` and `MoistureStep::active` (M4-14).
+- The Climate stage (`kuniumi_sim::stages::climate::run`), in the pipeline
+  after the Crust stage: the models of M4-02 to M4-06 composed once, in the
+  order of the design and as they were calibrated (`climate`, `Climate`):
+  the energy balance without currents, its winds, their currents, the sea
+  surface with them, the moisture, each to its own periodic state. Its 30
+  fields: `temperature_annual`, `temperature_m01` … `temperature_m12` (K,
+  monthly-mean surface temperature; over the ocean the sea-surface
+  temperature), `precipitation_annual`, `precipitation_m01` …
+  `precipitation_m12` (m/s), the annual-mean surface wind `wind_east`,
+  `wind_north` and the currents `current_east`, `current_north` (m/s); the
+  constants of their names and `PROGRESS`. Earth (seed 1, 10,000 cells):
+  288.98 K and 0.93 m/yr; on 650,000 cells the stage takes about 11
+  minutes. The Erosion stage keeps its uniform 1 m/yr until M4-19 (M4-07).
 
 ### Changed
 
@@ -840,6 +853,10 @@ section: every change after which an existing seed produces a different world
   `MoistureModel::substep(month, vapour)` no longer takes the active set
   of the previous sub-step: the sweeps choose it, and the step returns the
   set of its last solve in `MoistureStep::active` (M4-14).
+- `kuniumi_sim::generate` and `kuniumi generate` run the Climate stage, no
+  longer skipped: a world has the stages `grid`, `tectonics`, `crust`,
+  `climate` and `erosion`, and stops at Hydrology; `next_stage` of a world
+  without its climate is Climate (M4-07).
 
 ### Removed
 
@@ -934,6 +951,9 @@ section: every change after which an existing seed produces a different world
 
 ### World-breaking
 
+- M4-07: every world gains the Climate stage and its 30 fields (a world
+  directory 60 files more); every field that existed before keeps its
+  values bit for bit, as erosion keeps its uniform 1 m/yr.
 - M4-14: the moisture of `moisture::monthly_moisture` changes within the
   solver's tolerance (the downwind sweeps and solves stop at the same
   relative residual as the Jacobi-preconditioned BiCGSTAB did, from

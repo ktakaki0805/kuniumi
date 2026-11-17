@@ -679,6 +679,7 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use kuniumi_sim::stages::crust::SURFACE_HEIGHT;
+    use kuniumi_sim::{StageId, pipeline};
     use kuniumi_world::{PlanetParams, Settings};
 
     use super::*;
@@ -773,18 +774,24 @@ mod tests {
         }
     }
 
-    /// The scene of `params`, seed 1, 100,000 cells, without erosion steps
-    /// (the relief of the Crust stage; 1,000 steps at 100,000 cells take
-    /// most of a minute in a debug build, and the deepest point, which
-    /// bounds the relief, is ocean floor that erosion leaves alone).
+    /// The scene of `params`, seed 1, 100,000 cells, through the Crust
+    /// stage (its relief: the deepest point, which bounds the relief, is
+    /// ocean floor that erosion leaves alone; the climate and 1,000 erosion
+    /// steps at 100,000 cells would take many minutes in a debug build).
     fn scene_of(params: &PlanetParams) -> Scene {
-        let mut settings = Settings {
+        let settings = Settings {
             cells: 100_000,
             allow_partial: true,
             ..Settings::default()
         };
-        settings.erosion.steps = 0;
-        let world = kuniumi_sim::generate(params, &settings, 1, &mut |_| {}).unwrap();
+        let through_crust = |stage: StageId| {
+            if stage <= StageId::Crust {
+                pipeline::implementation(stage)
+            } else {
+                pipeline::Implementation::Missing
+            }
+        };
+        let world = pipeline::run(params, &settings, 1, &through_crust, &mut |_| {}).unwrap();
         Scene::new("w".into(), world, None).unwrap()
     }
 

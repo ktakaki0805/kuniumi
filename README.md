@@ -55,9 +55,13 @@ and hypsometry against Earth's values) and `hypsometry.png` (the elevation
 histogram); once the Erosion stage has run, `rivers.png` (the rivers over
 the elevation map) and, in `metrics.txt`, the drainage metrics (Hack's law
 and the distribution of drainage areas); and `world.json` with the
-metadata. The Climate stage does not exist yet and is skipped: erosion
-runs under a uniform rain of 1 m/yr, and its default 1,000 steps take
-about two minutes at 650,000 cells. While later stages are missing it
+metadata. The Climate stage adds the monthly and annual-mean temperature
+and precipitation (`temperature_m01` … `temperature_m12`,
+`temperature_annual`, `precipitation_m01` … `precipitation_m12`,
+`precipitation_annual`), the annual-mean wind and the ocean currents, in
+about 11 minutes at 650,000 cells; erosion still runs under a
+uniform rain of 1 m/yr, and its default 1,000 steps take about two
+minutes. While later stages are missing it
 then exits with code 2, naming the first of them. The directory can be
 read back into the same world (`kuniumi_io::world_dir::read`).
 

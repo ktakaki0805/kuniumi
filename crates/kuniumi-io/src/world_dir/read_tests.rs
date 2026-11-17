@@ -130,7 +130,7 @@ fn reads_back_a_generated_world_bit_exactly() {
     // Erosion settings that are not the defaults, recorded with the world
     // and used by its Erosion stage (7 steps).
     let settings = Settings {
-        cells: 20_000,
+        cells: 2_000,
         allow_partial: true,
         erosion: ErosionSettings {
             erodibility: 1.0 / 3.0 * 1e-9,
@@ -144,9 +144,12 @@ fn reads_back_a_generated_world_bit_exactly() {
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 1, &mut |_| {}).unwrap();
     assert_eq!(world.settings, settings);
     // Every stage that exists so far, with its fields.
-    assert_eq!(world.stages, ["grid", "tectonics", "crust", "erosion"]);
-    assert_eq!(world.grid.len(), 20_000);
-    assert_eq!(world.fields.len(), 16);
+    assert_eq!(
+        world.stages,
+        ["grid", "tectonics", "crust", "climate", "erosion"]
+    );
+    assert_eq!(world.grid.len(), 2_000);
+    assert_eq!(world.fields.len(), 46);
     assert!(world.fields.iter().any(|f| f.kind == FieldKind::Class));
     let (dir, copy) = (scratch("generated"), scratch("generated_copy"));
     assert_round_trip(&world, &dir, &copy);
@@ -993,7 +996,7 @@ fn reads_through_any_opener() {
         ..Settings::default()
     };
     let world = kuniumi_sim::generate(&PlanetParams::earth(), &settings, 3, &mut |_| {}).unwrap();
-    assert_eq!(world.fields.len(), 16);
+    assert_eq!(world.fields.len(), 46);
     let disk = scratch("read_with");
     write_maps_of_width(&disk, &world, 64).unwrap();
     let files = files_of(&disk);

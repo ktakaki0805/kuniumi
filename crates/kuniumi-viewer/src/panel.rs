@@ -874,8 +874,9 @@ mod tests {
 
     #[test]
     fn the_panel_fits_a_short_window() {
-        // A world with many fields (ticket MV-07): the 16 of a generated
-        // world and 44 copies of cell_area under other names, 60 in all.
+        // A world with many fields (ticket MV-07): the 46 of a generated
+        // world (16 before the Climate stage of ticket M4-07) and 14 copies
+        // of cell_area under other names, 60 in all.
         let settings = Settings {
             cells: 1_000,
             allow_partial: true,
@@ -885,7 +886,7 @@ mod tests {
             kuniumi_sim::generate(&PlanetParams::earth(), &settings, 3, &mut |_| {}).unwrap();
         let area = world.fields[0].clone();
         assert_eq!(area.name, "cell_area");
-        for k in 0..44 {
+        for k in 0..14 {
             world.fields.push(Field {
                 name: format!("extra_{k:02}"),
                 ..area.clone()

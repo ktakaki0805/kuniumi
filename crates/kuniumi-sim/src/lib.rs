@@ -7,10 +7,10 @@
 //!
 //! Stages run in [`StageId::PIPELINE`] order, through the runner in
 //! [`pipeline`]; each adds its outputs to the [`World`] as named fields in SI
-//! units. Until the Climate stage exists, the runner skips it and the
-//! Erosion stage uses a placeholder precipitation ([`pipeline`], "Skipped
-//! stages"). Climate and erosion will alternate two or three times (see the
-//! design document, "侵食と地形発達").
+//! units. The Climate stage runs once, before Erosion (ticket M4-07), whose
+//! rivers still follow a uniform placeholder precipitation until ticket
+//! M4-19 ([`stages::erosion`]); climate and erosion will alternate two or
+//! three times (see the design document, "侵食と地形発達").
 //!
 //! [`drainage`] routes water over a surface, for erosion and hydrology
 //! (design, "侵食と地形発達 / 1ステップの処理"). [`metrics`] measures
@@ -160,11 +160,15 @@ impl From<FieldError> for SimError {
 /// `boundary_type`, `convergence_rate`, `crust_thickness`, `crust_age`,
 /// `uplift_rate` and `trench`; the Crust stage ([`stages::crust`]), which
 /// turns the crust into relief, `surface_height`, and sets the sea level
-/// that holds the planet's water; and, the Climate stage being skipped until
-/// ticket M4-07 ([`pipeline`], "Skipped stages"), the Erosion stage
+/// that holds the planet's water; the Climate stage ([`stages::climate`],
+/// ticket M4-07), which adds the monthly and annual-mean temperature and
+/// precipitation, the annual-mean wind and the currents (`temperature_annual`,
+/// `temperature_m01` … `temperature_m12`, `precipitation_annual`,
+/// `precipitation_m01` … `precipitation_m12`, `wind_east`, `wind_north`,
+/// `current_east`, `current_north`); and the Erosion stage
 /// ([`stages::erosion`]), which erodes `surface_height` with the world's
-/// [`Settings::erosion`] under a uniform placeholder precipitation and adds
-/// the rivers: `drainage_area`, `discharge` and `depression_depth`. With
+/// [`Settings::erosion`] under a uniform placeholder precipitation (the
+/// climate's from ticket M4-19) and adds the rivers: `drainage_area`, `discharge` and `depression_depth`. With
 /// [`Settings::allow_partial`] that world is returned when the next stage
 /// turns out to be missing ([`next_stage`] names it); otherwise it is
 /// dropped and the error names the stage.
@@ -175,7 +179,7 @@ impl From<FieldError> for SimError {
 /// progress is reported; [`SimError::Grid`] if the grid cannot be built
 /// (not expected); without [`Settings::allow_partial`],
 /// [`SimError::NotImplemented`] naming the first stage that does not exist
-/// yet and is not skipped, now always [`StageId::Hydrology`].
+/// yet, now always [`StageId::Hydrology`].
 pub fn generate(
     params: &PlanetParams,
     settings: &Settings,
@@ -189,8 +193,7 @@ pub fn generate(
 /// name is not in [`World::stages`]) and that the pipeline does not skip
 /// ([`pipeline::next_stage`] with [`pipeline::implementation`]): the stage a
 /// partial world stopped at, or `None` for a complete world. A world
-/// generated now has skipped Climate (until ticket M4-07) and stops at
-/// [`StageId::Hydrology`].
+/// generated now stops at [`StageId::Hydrology`].
 pub fn next_stage(world: &World) -> Option<StageId> {
     pipeline::next_stage(world, &pipeline::implementation)
 }
@@ -211,6 +214,24 @@ pub(crate) fn generate_through_crust(
         } else {
             pipeline::Implementation::Missing
         }
+    };
+    pipeline::run(params, settings, seed, &table, &mut |_| {})
+}
+
+/// [`generate`] with the Climate stage skipped, for the tests that need
+/// eroded worlds but not their climate (whose cost in debug builds is
+/// about a minute at 10,000 cells): the Erosion stage does not use the
+/// climate yet (until ticket M4-19), so such a world is the world of
+/// [`generate`] without the climate's fields and stage.
+#[cfg(test)]
+pub(crate) fn generate_without_climate(
+    params: &PlanetParams,
+    settings: &Settings,
+    seed: u64,
+) -> Result<World, SimError> {
+    let table = |stage: StageId| match stage {
+        StageId::Climate => pipeline::Implementation::Skipped,
+        _ => pipeline::implementation(stage),
     };
     pipeline::run(params, settings, seed, &table, &mut |_| {})
 }
@@ -284,21 +305,26 @@ mod tests {
         }
     }
 
-    /// The stages that run now: Grid, Tectonics, Crust and, Climate being
-    /// skipped, Erosion.
-    const RUN: [StageId; 4] = [
+    /// The stages that run now: Grid, Tectonics, Crust, Climate and
+    /// Erosion.
+    const RUN: [StageId; 5] = [
         StageId::Grid,
         StageId::Tectonics,
         StageId::Crust,
+        StageId::Climate,
         StageId::Erosion,
     ];
 
     /// The progress reports of a run of [`RUN`] with `steps` erosion steps:
-    /// 0 and 1 for each stage, and `k / steps` after each erosion step.
+    /// 0 and 1 for each stage, the climate's [`stages::climate::PROGRESS`],
+    /// and `k / steps` after each erosion step.
     fn expected_reports(steps: u32) -> Vec<Progress> {
         RUN.into_iter()
             .flat_map(|stage| {
                 let mut fractions = vec![0.0];
+                if stage == StageId::Climate {
+                    fractions.extend(stages::climate::PROGRESS);
+                }
                 if stage == StageId::Erosion {
                     fractions.extend((1..=steps).map(|k| f64::from(k) / f64::from(steps)));
                 }
@@ -311,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn generate_runs_grid_tectonics_crust_and_erosion_then_stops_at_hydrology() {
+    fn generate_runs_grid_tectonics_crust_climate_and_erosion_then_stops_at_hydrology() {
         let mut settings = settings(1_000);
         settings.erosion.steps = 3;
         let mut reports = Vec::new();
@@ -344,7 +370,10 @@ mod tests {
             reports.push(p)
         })
         .expect("a partial world");
-        assert_eq!(world.stages, ["grid", "tectonics", "crust", "erosion"]);
+        assert_eq!(
+            world.stages,
+            ["grid", "tectonics", "crust", "climate", "erosion"]
+        );
         assert_eq!(next_stage(&world), Some(StageId::Hydrology));
         assert_eq!(
             (world.seed, &world.settings, &world.params),
@@ -356,27 +385,45 @@ mod tests {
             .iter()
             .map(|f| (f.name.as_str(), f.unit.as_str(), f.kind))
             .collect();
-        assert_eq!(
-            fields,
-            [
-                ("cell_area", "sr", FieldKind::Quantity),
-                ("neighbor_count", "", FieldKind::Class),
-                ("plate_id", "", FieldKind::Class),
-                ("plate_velocity_east", "m/s", FieldKind::Quantity),
-                ("plate_velocity_north", "m/s", FieldKind::Quantity),
-                ("crust_type", "", FieldKind::Class),
-                ("boundary_type", "", FieldKind::Class),
-                ("convergence_rate", "m/s", FieldKind::Quantity),
-                ("crust_thickness", "m", FieldKind::Quantity),
-                ("crust_age", "s", FieldKind::Quantity),
-                ("uplift_rate", "m/s", FieldKind::Quantity),
-                ("trench", "", FieldKind::Class),
-                ("surface_height", "m", FieldKind::Quantity),
-                ("drainage_area", "m^2", FieldKind::Quantity),
-                ("discharge", "m^3/s", FieldKind::Quantity),
-                ("depression_depth", "m", FieldKind::Quantity),
-            ]
-        );
+        let mut expected = vec![
+            ("cell_area", "sr", FieldKind::Quantity),
+            ("neighbor_count", "", FieldKind::Class),
+            ("plate_id", "", FieldKind::Class),
+            ("plate_velocity_east", "m/s", FieldKind::Quantity),
+            ("plate_velocity_north", "m/s", FieldKind::Quantity),
+            ("crust_type", "", FieldKind::Class),
+            ("boundary_type", "", FieldKind::Class),
+            ("convergence_rate", "m/s", FieldKind::Quantity),
+            ("crust_thickness", "m", FieldKind::Quantity),
+            ("crust_age", "s", FieldKind::Quantity),
+            ("uplift_rate", "m/s", FieldKind::Quantity),
+            ("trench", "", FieldKind::Class),
+            ("surface_height", "m", FieldKind::Quantity),
+            ("temperature_annual", "K", FieldKind::Quantity),
+        ];
+        let months = (1..=12).map(|k| format!("temperature_m{k:02}"));
+        let names: Vec<String> = months
+            .chain(["precipitation_annual".to_owned()])
+            .chain((1..=12).map(|k| format!("precipitation_m{k:02}")))
+            .collect();
+        for name in &names {
+            let unit = if name.starts_with("temperature") {
+                "K"
+            } else {
+                "m/s"
+            };
+            expected.push((name.as_str(), unit, FieldKind::Quantity));
+        }
+        expected.extend([
+            ("wind_east", "m/s", FieldKind::Quantity),
+            ("wind_north", "m/s", FieldKind::Quantity),
+            ("current_east", "m/s", FieldKind::Quantity),
+            ("current_north", "m/s", FieldKind::Quantity),
+            ("drainage_area", "m^2", FieldKind::Quantity),
+            ("discharge", "m^3/s", FieldKind::Quantity),
+            ("depression_depth", "m", FieldKind::Quantity),
+        ]);
+        assert_eq!(fields, expected);
         let plates = stages::tectonics::partition(&world.grid, 12, 7);
         let ids: Vec<f64> = plates.iter().map(|&p| f64::from(p)).collect();
         assert_eq!(world.fields[2].values, ids);
@@ -402,14 +449,45 @@ mod tests {
     }
 
     #[test]
-    fn the_bounds_of_the_planet_parameters_generate_finite_worlds() {
-        // Earth, and each of the 2⁷ corners of the box of the bounded fields
-        // (each at its lower or upper bound, the others Earth's), with the
-        // gravity moved just inside the bulk density range where the
-        // corner's radius and gravity do not fit together (ticket M2-08):
-        // at 13,000 km, 1 m/s² becomes 10.9 m/s² (3,000 kg/m³); at
-        // 1,500 km, 1 m/s² becomes 1.26 and 40 m/s² 6.71 (3,000 and
-        // 16,000 kg/m³).
+    fn the_climate_changes_no_other_field() {
+        // Erosion keeps its uniform rain until ticket M4-19 (the owner's
+        // choice in ticket M4-07): with or without the Climate stage, every
+        // other field and the sea level are the same, bit for bit.
+        let mut settings = settings(1_000);
+        settings.allow_partial = true;
+        settings.erosion.steps = 5;
+        let with = generate(&PlanetParams::earth(), &settings, 2, &mut |_| {}).expect("a world");
+        let without =
+            generate_without_climate(&PlanetParams::earth(), &settings, 2).expect("a world");
+        let mut stages = without.stages.clone();
+        stages.insert(3, "climate".to_owned());
+        assert_eq!(with.stages, stages);
+        assert_eq!(with.sea_level_m.to_bits(), without.sea_level_m.to_bits());
+        let others: Vec<&kuniumi_world::Field> = with
+            .fields
+            .iter()
+            .filter(|f| without.field(&f.name).is_some())
+            .collect();
+        assert_eq!(others.len(), without.fields.len());
+        assert_eq!(with.fields.len(), without.fields.len() + 30);
+        for (a, b) in others.into_iter().zip(&without.fields) {
+            assert_eq!((&a.name, &a.unit, a.kind), (&b.name, &b.unit, b.kind));
+            let bits = |f: &kuniumi_world::Field| -> Vec<u64> {
+                f.values.iter().map(|v| v.to_bits()).collect()
+            };
+            assert!(bits(a) == bits(b), "{}", a.name);
+        }
+    }
+
+    /// Earth, and each of the 2⁷ corners of the box of the bounded fields
+    /// (each at its lower or upper bound, the others Earth's; corner `c`
+    /// takes the upper bound of field `k` where bit `k` of `c` is set, the
+    /// radius first), with the gravity moved just inside the bulk density
+    /// range where the corner's radius and gravity do not fit together
+    /// (ticket M2-08): at 13,000 km, 1 m/s² becomes 10.9 m/s²
+    /// (3,000 kg/m³); at 1,500 km, 1 m/s² becomes 1.26 and 40 m/s² 6.71
+    /// (3,000 and 16,000 kg/m³). Earth is `None`, a corner `Some(c)`.
+    fn bound_planets() -> Vec<(Option<u32>, PlanetParams)> {
         let earth = PlanetParams::earth();
         let bounds = [
             (PlanetParams::MIN_RADIUS_M, PlanetParams::MAX_RADIUS_M),
@@ -435,7 +513,7 @@ mod tests {
                 PlanetParams::MAX_SURFACE_PRESSURE_PA,
             ),
         ];
-        let mut planets = vec![earth.clone()];
+        let mut planets = vec![(None, earth.clone())];
         for corner in 0..1_u32 << bounds.len() {
             let [r, g, rotation, orbit, flux, ocean, pressure] = core::array::from_fn(|k| {
                 let (lo, hi) = bounds[k];
@@ -461,36 +539,128 @@ mod tests {
                     PlanetParams::MAX_BULK_DENSITY_KG_M3 / density * (1.0 - 1e-12);
             }
             assert_eq!(p.validate(), Ok(()), "{p:?}");
-            planets.push(p);
+            planets.push((Some(corner), p));
         }
+        planets
+    }
+
+    /// The settings of the bounds tests: 1,000 cells, the default 10 Myr of
+    /// erosion in release builds and a tenth of it in debug builds.
+    fn bounds_settings() -> Settings {
         let mut settings = Settings {
             cells: 1_000,
             allow_partial: true,
             ..Settings::default()
         };
-        // The default 10 Myr of erosion in release builds; a tenth of it in
-        // debug builds, where 129 runs of 1,000 steps take over a minute.
         if cfg!(debug_assertions) {
             settings.erosion.steps = 100;
         }
-        for p in &planets {
-            let world = generate(p, &settings, 3, &mut |_| {}).expect("a partial world");
-            assert_eq!(
-                world.stages,
-                ["grid", "tectonics", "crust", "erosion"],
-                "{p:?}"
+        settings
+    }
+
+    /// Generates the planet `p` with `settings` (seed 3) and checks that the
+    /// world runs to Hydrology with a finite sea level and finite fields.
+    fn assert_finite_world(p: &PlanetParams, settings: &Settings) {
+        let world = generate(p, settings, 3, &mut |_| {}).expect("a partial world");
+        assert_eq!(
+            world.stages,
+            ["grid", "tectonics", "crust", "climate", "erosion"],
+            "{p:?}"
+        );
+        // Checked here as well as by the runner's debug assertion, so that
+        // release builds check it too.
+        assert!(world.sea_level_m.is_finite(), "{p:?}");
+        for field in &world.fields {
+            assert!(
+                field.values.iter().all(|v| v.is_finite()),
+                "{}: {p:?}",
+                field.name
             );
-            // Checked here as well as by the runner's debug assertion, so
-            // that release builds check it too.
-            assert!(world.sea_level_m.is_finite(), "{p:?}");
-            for field in &world.fields {
-                assert!(
-                    field.values.iter().all(|v| v.is_finite()),
-                    "{}: {p:?}",
-                    field.name
-                );
-            }
         }
+    }
+
+    /// Generates the planets of [`bound_planets`] that `keep` keeps
+    /// ([`assert_finite_world`]). Release builds run every corner kept;
+    /// debug builds, where the climate takes about 6 s a planet, the
+    /// corners whose index halved is a multiple of 8 (8 of each radius) and
+    /// Earth.
+    fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
+        let settings = bounds_settings();
+        let debug = cfg!(debug_assertions);
+        let mut ran = 0;
+        for (corner, p) in bound_planets() {
+            if !keep(corner) || (debug && corner.is_some_and(|c| (c >> 1) % 8 != 0)) {
+                continue;
+            }
+            ran += 1;
+            assert_finite_world(&p, &settings);
+        }
+        assert!(ran >= 8, "{ran} planets");
+    }
+
+    #[test]
+    fn the_orbits_at_their_bounds_generate_finite_worlds() {
+        // The parameters that the corners keep at Earth's values, at their
+        // bounds, with the strongest seasons the Climate stage meets
+        // (review of ticket M4-07): obliquity 90° and e = 0.99 under
+        // 2,500 W/m² on a thin, fast planet (monthly means beyond
+        // 10,000 K, tickets M4-02 and M4-06) and under 400 W/m² on a thick,
+        // slow one; obliquity 180° and 0 with the perihelion at 270° and
+        // e = 0.99; and no continental crust and only continental crust.
+        let earth = PlanetParams::earth();
+        let planets = [
+            PlanetParams {
+                obliquity_rad: core::f64::consts::FRAC_PI_2,
+                orbital_eccentricity: 0.99,
+                stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
+                rotation_period_s: PlanetParams::MIN_ROTATION_PERIOD_S,
+                surface_pressure_pa: PlanetParams::MIN_SURFACE_PRESSURE_PA,
+                ..earth.clone()
+            },
+            PlanetParams {
+                obliquity_rad: core::f64::consts::FRAC_PI_2,
+                orbital_eccentricity: 0.99,
+                stellar_flux_w_m2: PlanetParams::MIN_STELLAR_FLUX_W_M2,
+                rotation_period_s: PlanetParams::MAX_ROTATION_PERIOD_S,
+                surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
+                ..earth.clone()
+            },
+            PlanetParams {
+                obliquity_rad: core::f64::consts::PI,
+                ..earth.clone()
+            },
+            PlanetParams {
+                obliquity_rad: 0.0,
+                orbital_eccentricity: 0.99,
+                perihelion_longitude_rad: 1.5 * core::f64::consts::PI,
+                ..earth.clone()
+            },
+            PlanetParams {
+                continental_crust_fraction: 0.0,
+                ..earth.clone()
+            },
+            PlanetParams {
+                continental_crust_fraction: 1.0,
+                ..earth.clone()
+            },
+        ];
+        let settings = bounds_settings();
+        for p in &planets {
+            assert_eq!(p.validate(), Ok(()), "{p:?}");
+            assert_finite_world(p, &settings);
+        }
+    }
+
+    #[test]
+    fn the_bounds_of_the_planet_parameters_generate_finite_worlds_at_the_lower_radius() {
+        // Earth and the 64 corners at the lowest radius, 1,500 km.
+        assert_finite_worlds(|corner| corner.is_none_or(|c| c & 1 == 0));
+    }
+
+    #[test]
+    fn the_bounds_of_the_planet_parameters_generate_finite_worlds_at_the_upper_radius() {
+        // The 64 corners at the largest radius, 13,000 km.
+        assert_finite_worlds(|corner| corner.is_some_and(|c| c & 1 == 1));
     }
 
     #[test]
@@ -505,18 +675,14 @@ mod tests {
             1,
         )
         .expect("a partial world");
-        // The pipeline skips Climate until ticket M4-07: a world without it
-        // goes on with Erosion.
+        // No stage is skipped since ticket M4-07: a world without its
+        // climate goes on with Climate.
         for k in 0..StageId::PIPELINE.len() {
             world.stages = StageId::PIPELINE[..k]
                 .iter()
                 .map(|s| s.name().to_owned())
                 .collect();
-            let expected = StageId::PIPELINE[k..]
-                .iter()
-                .copied()
-                .find(|&s| s != StageId::Climate);
-            assert_eq!(next_stage(&world), expected, "{k}");
+            assert_eq!(next_stage(&world), Some(StageId::PIPELINE[k]), "{k}");
         }
         world.stages = StageId::PIPELINE
             .iter()
@@ -524,7 +690,7 @@ mod tests {
             .collect();
         assert_eq!(next_stage(&world), None);
         world.stages.retain(|s| s != "climate");
-        assert_eq!(next_stage(&world), None);
+        assert_eq!(next_stage(&world), Some(StageId::Climate));
         world.stages = StageId::PIPELINE
             .iter()
             .map(|s| s.name().to_owned())

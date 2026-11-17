@@ -27,7 +27,9 @@ use super::*;
 
 /// The Earth worlds of seeds 1–3 and the dry Earth world of seed 1
 /// (`ocean_volume_m3 = 0`, no ocean but the cells at the sea level), 10,000
-/// cells, after 10 steps of the default erosion settings, generated once.
+/// cells, after 10 steps of the default erosion settings, without the
+/// climate, which erosion does not use yet
+/// ([`crate::generate_without_climate`]), generated once.
 fn eroded_worlds() -> &'static [World] {
     static WORLDS: OnceLock<Vec<World>> = OnceLock::new();
     WORLDS.get_or_init(|| {
@@ -53,7 +55,7 @@ fn eroded_worlds() -> &'static [World] {
         .iter()
         .map(|(params, seed)| {
             let world =
-                crate::generate(params, &settings, *seed, &mut |_| {}).expect("a partial world");
+                crate::generate_without_climate(params, &settings, *seed).expect("a partial world");
             assert_eq!(world.stages, ["grid", "tectonics", "crust", "erosion"]);
             world
         })

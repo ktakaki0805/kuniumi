@@ -16,13 +16,14 @@
 //!
 //! # Skipped stages
 //!
-//! The Climate stage does not exist until ticket M4-07, and the Erosion
-//! stage after it does: until then the runner skips Climate
-//! ([`Implementation::Skipped`]), and the Erosion stage drives its rivers
-//! with a uniform placeholder precipitation
-//! ([`stages::erosion::PLACEHOLDER_PRECIPITATION_M_S`]) instead of the
-//! climate's (ticket M3-05). A skipped stage reports no progress and is not
+//! A stage that does not exist yet while a later one does can be skipped
+//! ([`Implementation::Skipped`]): it reports no progress and is not
 //! recorded in [`World::stages`], so a world says which stages it has run.
+//! Until ticket M4-07 the pipeline skipped the Climate stage; now every
+//! stage of [`implementation`] either runs or is missing, and tables of
+//! tests use the skip. The Erosion stage still drives its rivers with a
+//! uniform placeholder precipitation
+//! ([`stages::erosion::PLACEHOLDER_PRECIPITATION_M_S`]) until ticket M4-19.
 
 use kuniumi_world::{Field, FieldKind, PlanetParams, Settings, World};
 
@@ -55,15 +56,15 @@ pub enum Implementation {
 ///
 /// The Grid stage, which builds the world instead of extending it, is run by
 /// [`run`] itself and has no [`StageFn`]; it is [`Implementation::Missing`]
-/// here. The Tectonics stage ([`stages::tectonics::run`]) and the Crust
-/// stage ([`stages::crust::run`]) follow it; Climate is skipped until ticket
-/// M4-07 (module documentation, "Skipped stages"); then the Erosion stage
-/// ([`stages::erosion::run`]) runs. Hydrology and Biomes are missing.
+/// here. The Tectonics stage ([`stages::tectonics::run`]), the Crust stage
+/// ([`stages::crust::run`]), the Climate stage ([`stages::climate::run`],
+/// ticket M4-07) and the Erosion stage ([`stages::erosion::run`]) follow
+/// it. Hydrology and Biomes are missing.
 pub fn implementation(stage: StageId) -> Implementation {
     match stage {
         StageId::Tectonics => Implementation::Stage(stages::tectonics::run),
         StageId::Crust => Implementation::Stage(stages::crust::run),
-        StageId::Climate => Implementation::Skipped,
+        StageId::Climate => Implementation::Stage(stages::climate::run),
         StageId::Erosion => Implementation::Stage(stages::erosion::run),
         StageId::Grid | StageId::Hydrology | StageId::Biomes => Implementation::Missing,
     }

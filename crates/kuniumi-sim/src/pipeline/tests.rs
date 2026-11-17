@@ -281,7 +281,8 @@ fn skipped_stages_are_passed_over() {
 
 #[test]
 fn skips_climate_and_stops_at_hydrology() {
-    // The shape of the real table until ticket M4-07.
+    // The shape of the real table until ticket M4-07, which made the
+    // Climate stage run.
     let entry = |s: StageId| match s {
         StageId::Climate => Entry::Skipped,
         StageId::Hydrology | StageId::Biomes => Entry::Missing,
@@ -551,8 +552,8 @@ fn rejects_progress_outside_0_1() {
     );
 }
 
-/// The real table: Tectonics, Crust and Erosion exist, Climate is skipped
-/// until ticket M4-07, the rest are missing. That the stages are the right
+/// The real table: Tectonics, Crust, Climate (since ticket M4-07) and
+/// Erosion exist, the rest are missing. That the stages are the right
 /// functions is checked through their outputs by the tests of `generate`
 /// (`lib.rs`).
 #[test]
@@ -564,8 +565,9 @@ fn the_real_table() {
             Implementation::Missing => Entry::Missing,
         };
         let expected = match stage {
-            StageId::Tectonics | StageId::Crust | StageId::Erosion => Entry::Fake,
-            StageId::Climate => Entry::Skipped,
+            StageId::Tectonics | StageId::Crust | StageId::Climate | StageId::Erosion => {
+                Entry::Fake
+            }
             StageId::Grid | StageId::Hydrology | StageId::Biomes => Entry::Missing,
         };
         assert_eq!(kind, expected, "{stage:?}");
