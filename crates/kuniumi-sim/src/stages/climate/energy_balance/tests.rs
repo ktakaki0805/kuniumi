@@ -10,7 +10,6 @@
 //! - criterion 2: `continental_interiors_swing_more_than_open_oceans`;
 //! - criterion 3: `earth_converges_to_a_periodic_state`,
 //!   `test_planets_away_from_the_ice_edge_converge_within_forty_years`,
-//!   `a_planet_near_the_snowball_edge_reports_it_has_not_converged`,
 //!   `extreme_planets_stay_finite_and_report_convergence`,
 //!   `an_unfinished_run_reports_its_last_year`;
 //! - criterion 4: `energy_is_conserved_in_every_substep`,
@@ -23,6 +22,15 @@
 //!   `golden_fingerprint_of_earth_temperature`.
 //!
 //! Ticket M4-09 (the multigrid): `a_substep_matches_the_jacobi_solver`.
+//!
+//! Ticket M4-15 (the balance step): criterion 1,
+//! `slow_planets_reach_a_stable_periodic_state_with_little_heat_transport`,
+//! `…_at_twelve_hours`, `…_near_a_bifurcation`,
+//! `a_planet_near_the_snowball_edge_freezes_over`; criterion 2,
+//! `a_planet_leaves_an_unstable_periodic_state`; criterion 3,
+//! `earth_stays_within_the_tolerance_of_its_periodic_state`; and
+//! `the_step_weighs_the_drift_by_the_memory_of_the_year`,
+//! `the_balance_step_keeps_the_fixed_point`.
 //!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! on 40,000 cells, the world of the calibration, in release builds (about
@@ -537,9 +545,56 @@ fn earth_converges_to_a_periodic_state() {
 }
 
 #[test]
-fn the_annual_correction_keeps_the_fixed_point() {
-    // Earth's world on 2,000 cells, to 10⁻⁷ K with and without the annual
-    // correction: the same periodic state within 10⁻⁵ K.
+fn the_damping_halves_a_swinging_step() {
+    // Ticket M4-15: cell 0 swings (its drift turns and is as large as the
+    // year before), cell 1 keeps its sign, cell 2 turns but falls to a third
+    // each year. The shifts are 1 K beyond the end of the year.
+    let mut damping = StepDamping::new(3);
+    let start = [0.0, 0.0, 0.0];
+    let floor = 1.0 / 64.0;
+    let mut expected = [1.0, 1.0, 1.0];
+    for year in 0..10 {
+        let sign = if year % 2 == 0 { 1.0 } else { -1.0 };
+        let third = sign / f64::from(3_u32.pow(year));
+        let end = [sign, 1.0, third];
+        let mut stepped: Vec<f64> = end.iter().map(|e| e + 1.0).collect();
+        damping.apply(&start, &end, &mut stepped);
+        if year > 0 {
+            expected[0] = if expected[0] > floor {
+                0.5 * expected[0]
+            } else {
+                floor
+            };
+        }
+        for i in 0..3 {
+            assert_same(stepped[i] - end[i], expected[i], "the damped shift");
+        }
+    }
+    assert_same(expected[0], floor, "the floor");
+    // Cell 0 turns once more (from −1 to +1), staying at the floor, then
+    // keeps its sign and doubles back to the whole shift.
+    for factor in [
+        floor,
+        2.0 * floor,
+        4.0 * floor,
+        8.0 * floor,
+        16.0 * floor,
+        0.5,
+        1.0,
+        1.0,
+    ] {
+        let end = [1.0, 1.0, 1.0];
+        let mut stepped: Vec<f64> = end.iter().map(|e| e + 1.0).collect();
+        damping.apply(&start, &end, &mut stepped);
+        assert_same(stepped[0] - end[0], factor, "the factor again");
+    }
+}
+
+#[test]
+fn the_balance_step_keeps_the_fixed_point() {
+    // Earth's world on 2,000 cells, to 10⁻⁷ K with and without the balance
+    // step (ticket M4-15; the annual correction of ticket M4-02 before):
+    // the same periodic state within 10⁻⁵ K, in fewer years with it.
     let params = PlanetParams::earth();
     let settings = Settings {
         cells: 2_000,
@@ -560,7 +615,7 @@ fn the_annual_correction_keeps_the_fixed_point() {
     let without = model.periodic_state_with(&insolation, false, 1e-7, 1_000);
     let difference = largest_change_k(&with.sea_level_k, &without.sea_level_k);
     println!(
-        "with the correction {} years, without {} years; largest difference {difference:.2e} K",
+        "with the step {} years, without {} years; largest difference {difference:.2e} K",
         with.years, without.years
     );
     assert!(with.converged && without.converged);
@@ -722,11 +777,10 @@ fn test_planets_away_from_the_ice_edge_converge_within_forty_years() {
     // within 40 years (criterion 3; Earth itself in
     // `earth_converges_to_a_periodic_state`, the corners of the range with
     // Earth's D in `extreme_planets_stay_finite_and_report_convergence`).
-    // The same D does not guarantee it near a bifurcation (module
-    // documentation, "The periodic state";
-    // `a_planet_near_the_snowball_edge_reports_it_has_not_converged`), nor
-    // do thinner or faster-spinning planets with strong seasons (12 h at
-    // 0.3 bar and 60°: up to 153 years).
+    // Near a bifurcation, or with less heat transport and strong seasons,
+    // planets took up to 113 and 988 years before the balance step of
+    // ticket M4-15 (`a_planet_near_the_snowball_edge_freezes_over`,
+    // `slow_planets_reach_a_stable_periodic_state_*`).
     let earth = PlanetParams::earth();
     // Pressures in standard atmospheres (101,325 Pa).
     let planet = |hours: f64, atm: f64, obliquity_deg: f64| PlanetParams {
@@ -774,13 +828,160 @@ fn test_planets_away_from_the_ice_edge_converge_within_forty_years() {
     }
 }
 
+/// A planet of the ticket M4-15 cases: Earth with a rotation period of
+/// `hours`, a surface pressure of `pressure_pa`, an obliquity of
+/// `obliquity_deg` and a stellar flux of `flux_w_m2`.
+fn slow_planet(hours: f64, pressure_pa: f64, obliquity_deg: f64, flux_w_m2: f64) -> PlanetParams {
+    PlanetParams {
+        rotation_period_s: hours * 3_600.0,
+        surface_pressure_pa: pressure_pa,
+        obliquity_rad: deg_to_rad(obliquity_deg),
+        stellar_flux_w_m2: flux_w_m2,
+        ..PlanetParams::earth()
+    }
+}
+
+/// Checks that the energy balance of the planet `params` on the world of
+/// `seed` with `cells` cells reaches a stable periodic state within
+/// MAX_YEARS (ticket M4-15, criterion 1): periodic, and 30 more years
+/// without the balance step from the start of its last year move no
+/// monthly mean by more than 10⁻² K and end with a change of at most the
+/// periodic tolerance (an unstable state or a ghost would move on).
+/// Returns the years.
+fn assert_stable_periodic_state(name: &str, params: &PlanetParams, seed: u64, cells: u32) -> u32 {
+    let settings = Settings {
+        cells,
+        allow_partial: true,
+        ..Settings::default()
+    };
+    let world = crate::generate_through_crust(params, &settings, seed).expect("a partial world");
+    let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
+    let model = EnergyBalance::new(
+        &EnergyBalanceParams::for_planet(params),
+        &world.grid,
+        heights,
+        world.sea_level_m,
+        params.orbital_period_s,
+    );
+    let insolation = monthly_insolation(params, &world.grid);
+    let (t, start) = periodic_run(
+        &model,
+        &insolation,
+        None,
+        true,
+        PERIODIC_TOLERANCE_K,
+        MAX_YEARS,
+    );
+    let (bare, _) = periodic_run(&model, &insolation, Some(start), false, 0.0, 30);
+    let moved = largest_change_k(&t.sea_level_k, &bare.sea_level_k);
+    println!(
+        "{name} ({cells} cells, seed {seed}): {} years, change {:.2e} K; 30 years without the \
+         step move it by {moved:.2e} K, the last by {:.2e} K",
+        t.years, t.change_k, bare.change_k
+    );
+    assert!(t.converged, "{name}: {} years, {:e} K", t.years, t.change_k);
+    for month in t.sea_level_k.iter().chain(&t.surface_k) {
+        assert!(month.iter().all(|v| v.is_finite() && *v > 0.0), "{name}");
+    }
+    assert!(moved <= 1e-2, "{name}: {moved:e}");
+    assert!(
+        bare.change_k <= PERIODIC_TOLERANCE_K,
+        "{name}: {:e}",
+        bare.change_k
+    );
+    t.years
+}
+
+/// The cells of the slow-planet tests: 10,000 in release builds, where the
+/// planets took 59 to 203 years with the annual correction of ticket M4-02
+/// (ticket M4-15), and 2,000 in debug builds, where these planets are not
+/// slow but the same checks run.
+fn slow_cells() -> u32 {
+    if cfg!(debug_assertions) {
+        2_000
+    } else {
+        10_000
+    }
+}
+
 #[test]
-fn a_planet_near_the_snowball_edge_reports_it_has_not_converged() {
+fn slow_planets_reach_a_stable_periodic_state_with_little_heat_transport() {
+    // Ticket M4-15, criterion 1: 8 h at 0.1 bar (D = D⊕ / 91), the
+    // obliquities 45°, 60° and 90°, seed 1: 130, 203 and 119 years on
+    // 10,000 cells with the correction of ticket M4-02, 11, 18 and 15
+    // with the balance step in the prototype.
+    for obliquity in [45.0, 60.0, 90.0] {
+        let params = slow_planet(8.0, 1e4, obliquity, 1361.0);
+        let name = format!("8 h, 0.1 bar, {obliquity}°");
+        let years = assert_stable_periodic_state(&name, &params, 1, slow_cells());
+        assert!(years <= 40, "{name}: {years} years");
+    }
+}
+
+#[test]
+fn slow_planets_reach_a_stable_periodic_state_at_twelve_hours() {
+    // Ticket M4-15, criterion 1: 12 h at 0.3 bar and obliquity 60°, seed 1:
+    // 153 years on 10,000 cells with the correction of ticket M4-02, 29
+    // with the balance step in the prototype.
+    let params = slow_planet(12.0, 3e4, 60.0, 1361.0);
+    let years = assert_stable_periodic_state("12 h, 0.3 bar, 60°", &params, 1, slow_cells());
+    assert!(years <= 40, "{years} years");
+}
+
+#[test]
+fn slow_planets_reach_a_stable_periodic_state_near_a_bifurcation() {
+    // Ticket M4-15, criterion 1: Earth at 1,282 W/m² (seed 1; a snowball
+    // after 70 years with the correction of ticket M4-02), and 24 h at
+    // 0.5 atm with obliquity 90° at 1,370 and 1,375 W/m² (seed 2; 64 and 59
+    // years): 10, 11 and 13 years with the balance step in the prototype.
+    let earth = PlanetParams {
+        stellar_flux_w_m2: 1_282.0,
+        ..PlanetParams::earth()
+    };
+    let years = assert_stable_periodic_state("Earth at 1,282 W/m²", &earth, 1, slow_cells());
+    assert!(years <= 25, "{years} years");
+    for flux in [1_370.0, 1_375.0] {
+        let params = slow_planet(24.0, 0.5 * 101_325.0, 90.0, flux);
+        let name = format!("24 h, 0.5 atm, 90°, {flux} W/m²");
+        let years = assert_stable_periodic_state(&name, &params, 2, slow_cells());
+        assert!(years <= 25, "{name}: {years} years");
+    }
+}
+
+#[test]
+fn earth_stays_within_the_tolerance_of_its_periodic_state() {
+    // Ticket M4-15, criterion 3 (as reworded with the owner): Earth's
+    // periodic state (the shared run: 40,000 cells in release builds,
+    // 10,000 in debug builds) within 3 × 10⁻⁴ K of the same model run to
+    // 10⁻⁷ K (measured 9.84 × 10⁻⁵ and 6.73 × 10⁻⁵ K; the annual
+    // correction of ticket M4-02 landed 1.05 × 10⁻³ and 6.9 × 10⁻⁴ K
+    // away).
+    let run = earth_reference();
+    let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
+    let converged = run.model.periodic_state_with(&insolation, true, 1e-7, 400);
+    let difference = largest_change_k(&run.temperature.sea_level_k, &converged.sea_level_k);
+    println!(
+        "{} cells: {} years; to 10⁻⁷ K in {} years, {difference:.2e} K away",
+        run.world.grid.len(),
+        run.temperature.years,
+        converged.years
+    );
+    assert!(converged.converged);
+    assert!(difference <= 3e-4, "{difference:e}");
+}
+
+#[test]
+fn a_planet_near_the_snowball_edge_freezes_over() {
     // Earth with 1,296 W/m² on the world of seed 2 (2,000 cells): close to
-    // the ice–albedo bifurcation its ice spreads slowly, then collapses
-    // into a snowball after about 100 years (review of ticket M4-02), so the
-    // run stops at MAX_YEARS unconverged, with finite, positive
-    // temperatures of its last year.
+    // the ice–albedo bifurcation its years creep past the ghost of the lost
+    // warm state and collapse into a snowball, periodic only after 113
+    // years with the annual correction of ticket M4-02 and about 540
+    // without any step (ticket M4-15, prototype). With the balance step it
+    // is periodic within MAX_YEARS (prototype: 13 years) at that snowball:
+    // in release builds within 10⁻² K of the years without the step, run
+    // here to the same tolerance (the convergence errors of the two, each
+    // at most 10⁻³ K a year; prototype 2.7 × 10⁻³ K); in debug builds, too
+    // slow for those years, frozen over everywhere.
     let params = PlanetParams {
         stellar_flux_w_m2: 1_296.0,
         ..PlanetParams::earth()
@@ -792,7 +993,15 @@ fn a_planet_near_the_snowball_edge_reports_it_has_not_converged() {
     };
     let world = crate::generate_through_crust(&params, &settings, 2).expect("a partial world");
     let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
-    let t = monthly_temperature(&params, &world.grid, heights, world.sea_level_m);
+    let model = EnergyBalance::new(
+        &EnergyBalanceParams::for_planet(&params),
+        &world.grid,
+        heights,
+        world.sea_level_m,
+        params.orbital_period_s,
+    );
+    let insolation = monthly_insolation(&params, &world.grid);
+    let t = model.periodic_state(&insolation);
     let annual = annual_k(&t.surface_k);
     println!(
         "{} years, change {:.3e} K, global mean surface {:.2} K",
@@ -800,11 +1009,154 @@ fn a_planet_near_the_snowball_edge_reports_it_has_not_converged() {
         t.change_k,
         global_mean(&world.grid, &annual)
     );
-    assert!(!t.converged);
-    assert_eq!(t.years, MAX_YEARS);
-    assert!(t.change_k > PERIODIC_TOLERANCE_K && t.change_k.is_finite());
+    assert!(t.converged && t.years <= MAX_YEARS);
     for month in t.sea_level_k.iter().chain(&t.surface_k) {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
+    }
+    // Frozen over: every cell under full snow and ice (at or below `T_f`)
+    // in every month.
+    let frozen = model.params().frozen_temperature_k;
+    for month in &t.surface_k {
+        assert!(month.iter().all(|&v| v <= frozen));
+    }
+    if !cfg!(debug_assertions) {
+        let years = model.periodic_state_with(&insolation, false, PERIODIC_TOLERANCE_K, 1_000);
+        let difference = largest_change_k(&t.sea_level_k, &years.sea_level_k);
+        println!(
+            "without the step {} years; largest difference {difference:.2e} K",
+            years.years
+        );
+        assert!(years.converged && years.years > MAX_YEARS);
+        assert!(difference <= 1e-2, "{difference}");
+    }
+}
+
+#[test]
+fn a_planet_leaves_an_unstable_periodic_state() {
+    // Closed form (ticket M4-15): an all-ocean planet without the latitude
+    // term of the albedo under Q = 340 W/m² in every month and every cell,
+    // so that each cell obeys C dT/dt = Q (1 − α(T)) − A − B (T − T₀) and
+    // the diffusion does not act. It has three balances: warm,
+    // T₀ + (Q (1 − α_ocean) − A) / B = 296.059 K; cold,
+    // T₀ + (Q (1 − α_ice) − A) / B = 241.236 K; and in the ramp of the
+    // albedo [A − B T₀ − Q (1 − α_ocean) + g T_m] / (g − B) = 268.039 K,
+    // with g = Q (α_ice − α_ocean) / (T_m − T_f) = 11.458 W m⁻² K⁻¹ > B:
+    // unstable, the feedback stronger than the emission. Started 0.01 K
+    // above and below it, the periodic state (to 10⁻⁹ K) is the warm and
+    // the cold balance, and not the unstable one, which a root-finder of
+    // the year map would find from there: within 10⁻⁵ K, as the solves of
+    // the sub-steps stop at 10⁻¹⁰ of a right-hand side dominated by
+    // `a C T / Δt` (about 3 × 10⁻⁸ K a sub-step, which the ocean remembers
+    // for years; measured at most 1.35 × 10⁻⁶ K over every cell and month).
+    let grid = SphereGrid::fibonacci(1_000, 2).expect("grid");
+    let n = grid.len();
+    let params = EnergyBalanceParams {
+        albedo_p2: 0.0,
+        ..EnergyBalanceParams::earth()
+    };
+    let model = EnergyBalance::new(&params, &grid, &vec![-1000.0; n], 0.0, 3.155_76e7);
+    let insolation = every_month(vec![340.0; n]);
+    let (q, a, b) = (340.0, params.olr_at_freezing_w_m2, params.olr_slope_w_m2_k);
+    let (melting, frozen) = (params.melting_temperature_k, params.frozen_temperature_k);
+    let warm = ZERO_CELSIUS_K + (q * (1.0 - params.ocean_albedo) - a) / b;
+    let cold = ZERO_CELSIUS_K + (q * (1.0 - params.ice_albedo) - a) / b;
+    let g = q * (params.ice_albedo - params.ocean_albedo) / (melting - frozen);
+    let unstable =
+        (a - b * ZERO_CELSIUS_K - q * (1.0 - params.ocean_albedo) + g * melting) / (g - b);
+    assert_near(warm, 296.059, 1e-3, "the warm balance");
+    assert_near(cold, 241.236, 1e-3, "the cold balance");
+    assert_near(unstable, 268.039, 1e-3, "the unstable balance");
+    assert!(g > b && unstable > frozen && unstable < melting);
+    for (offset, expected) in [(0.01, warm), (-0.01, cold)] {
+        let (t, _) = periodic_run(
+            &model,
+            &insolation,
+            Some(vec![unstable + offset; n]),
+            true,
+            1e-9,
+            MAX_YEARS,
+        );
+        println!(
+            "from {offset:+} K: {} years, {:.6} K against {expected:.6} K",
+            t.years, t.sea_level_k[0][0]
+        );
+        assert!(
+            t.converged,
+            "{offset}: {} years, {:e} K",
+            t.years, t.change_k
+        );
+        for month in &t.sea_level_k {
+            for &v in month {
+                assert_near(v, expected, 1e-5, "the stable balance");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_step_weighs_the_drift_by_the_memory_of_the_year() {
+    // Closed form (ticket M4-15): a linear planet, all ocean or all land,
+    // under 400 W/m² everywhere in every month, started 10 K above its
+    // balance T* = T₀ + (Q (1 − α) − A) / B. Each sub-step of backward Euler
+    // keeps 1 / (1 + B Δt / C) of an error, a year E = (1 + B Δt / C)⁻⁴⁸,
+    // and the step adds (y − x) / (e^z − 1), z = B P / C, so a year and the
+    // step keep E − (1 − E) / (e^z − 1) of it: the monthly means of the
+    // second year lie that fraction as far from the periodic state as the
+    // first year's. Without the weight φ (the annual correction of ticket
+    // M4-02) the step would add (y − x) / z: −0.088 of the error for the
+    // ocean, −0.15 for land, which overshoots.
+    let grid = SphereGrid::fibonacci(500, 3).expect("grid");
+    let n = grid.len();
+    let params = EnergyBalanceParams {
+        lapse_rate_k_m: 0.0,
+        ..linear_params()
+    };
+    let year_s = 3.155_76e7;
+    let insolation = every_month(vec![400.0; n]);
+    assert_same(EnergyBalance::memory(700.0), 0.0, "φ beyond 700");
+    // A short year: φ(z) = 1 − z/2 + z²/12 − …, on both sides of the
+    // series' threshold of 10⁻⁴.
+    assert_same(EnergyBalance::memory(0.0), 1.0, "φ(0)");
+    for z in [1e-6, 0.999_999e-4, 1e-4, 1e-3] {
+        let series = 1.0 - 0.5 * z + z * z / 12.0;
+        assert_near(EnergyBalance::memory(z), series, 1e-11, "φ of a short year");
+    }
+    for (name, height, capacity, albedo) in [
+        (
+            "ocean",
+            -10.0,
+            params.ocean_heat_capacity_j_m2_k,
+            params.ocean_albedo,
+        ),
+        (
+            "land",
+            10.0,
+            params.land_heat_capacity_j_m2_k,
+            params.land_albedo,
+        ),
+    ] {
+        let model = EnergyBalance::new(&params, &grid, &vec![height; n], 0.0, year_s);
+        let (a, b) = (params.olr_at_freezing_w_m2, params.olr_slope_w_m2_k);
+        let balance = ZERO_CELSIUS_K + (400.0 * (1.0 - albedo) - a) / b;
+        let z = b * year_s / capacity;
+        let kept = 1.0 / (1.0 + b * model.substep_s() / capacity);
+        let mut year = 1.0;
+        for _ in 0..MONTHS * SUBSTEPS_PER_MONTH {
+            year *= kept;
+        }
+        let expected = year - (1.0 - year) / (z.exp() - 1.0);
+        let start = Some(vec![balance + 10.0; n]);
+        let (first, _) = periodic_run(&model, &insolation, start.clone(), true, 0.0, 1);
+        let (second, _) = periodic_run(&model, &insolation, start, true, 0.0, 2);
+        let ratio = (second.sea_level_k[0][0] - balance) / (first.sea_level_k[0][0] - balance);
+        println!(
+            "{name}: z = {z:.4}, φ = {:.4}, a year keeps {year:.5}, with the step {ratio:.6} \
+             against {expected:.6}",
+            EnergyBalance::memory(z)
+        );
+        assert_near(EnergyBalance::memory(z), z / (z.exp() - 1.0), 1e-12, "φ");
+        assert_near(ratio, expected, 1e-5, name);
+        assert!(ratio.abs() < 0.01, "{name}: {ratio}");
     }
 }
 
@@ -837,15 +1189,20 @@ fn an_unfinished_run_reports_its_last_year() {
     for month in cut.sea_level_k.iter().chain(&cut.surface_k) {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
     }
-    // The third year by hand: the same steps from the warm start.
+    // The third year by hand: the same steps from the warm start, each
+    // balance step with its damping.
+    let annual = model.annual_multigrid();
     let mut t = model.warm_start(&insolation);
+    let mut damping = StepDamping::new(t.len());
     let mut third = Vec::new();
     for year in 0..3 {
         let start = t.clone();
         let means: [Vec<f64>; MONTHS] =
             core::array::from_fn(|k| model.month(&mut t, &insolation[k]));
         if year < 2 {
-            model.correct(&start, &mut t, &means, &insolation);
+            let end = t.clone();
+            model.balance(&annual, &start, &mut t, &means, &insolation);
+            damping.apply(&start, &end, &mut t);
         } else {
             third = means.to_vec();
         }
@@ -1137,7 +1494,10 @@ fn golden_fingerprint_of_earth_temperature() {
     // M4-02, Result); recorded again when the solver became the multigrid,
     // after the other tests passed and the images of out/M4-09 were viewed
     // (ticket M4-09: the same years, every value within the solver's
-    // tolerance of the old one).
+    // tolerance of the old one); and again when the balance step replaced
+    // the annual correction, after the other tests passed and the images of
+    // out/M4-15 were viewed (ticket M4-15: 7 years instead of 10, every
+    // monthly mean within 6.5 × 10⁻⁴ K of the old one).
     let t = &earth_10k().temperature;
     let bytes: Vec<u8> = t
         .sea_level_k
@@ -1151,4 +1511,4 @@ fn golden_fingerprint_of_earth_temperature() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_temperature`.
-const GOLDEN_FINGERPRINT: u64 = 0xB43F_20A2_5237_116E;
+const GOLDEN_FINGERPRINT: u64 = 0xDD60_23AB_D811_DEC1;

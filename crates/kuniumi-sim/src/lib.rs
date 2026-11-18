@@ -562,18 +562,21 @@ mod tests {
     }
 
     /// The corners of [`bound_planets`] whose energy balance without
-    /// currents is not periodic after its 100 years on 1,000 cells (seed 3).
-    /// This and the next two lists were measured by the scratch tool of
-    /// ticket M4-16, which ran `stages::climate::climate` on the worlds of
-    /// the Crust stage and read each model's own flags (the counts of
-    /// ticket M4-07's measurement, 4, 2 and 11): independent of the code of
-    /// the warnings. Every other model of every planet of the bounds tests
-    /// settles, and every solve converges.
-    const UNSETTLED_ENERGY_BALANCE: [u32; 4] = [56, 57, 58, 59];
+    /// currents is not periodic after its 100 years on 1,000 cells (seed 3):
+    /// none since the balance step of ticket M4-15 (corners 56–59 before,
+    /// which alternated between two years under the annual correction of
+    /// ticket M4-02). This and the next two lists were measured by a
+    /// scratch tool, in ticket M4-16 and again in ticket M4-15, which ran
+    /// `stages::climate::climate` on the worlds of the Crust stage and read
+    /// each model's own flags: independent of the code of the warnings.
+    /// Every other model of every planet of the bounds tests settles, and
+    /// every solve converges.
+    const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
 
     /// The corners whose sea surface with currents and upwelling is not
-    /// periodic after its 100 years.
-    const UNSETTLED_SEA_SURFACE: [u32; 2] = [57, 59];
+    /// periodic after its 100 years: none since ticket M4-15 (corners 57
+    /// and 59 before).
+    const UNSETTLED_SEA_SURFACE: [u32; 0] = [];
 
     /// The corners whose moisture is not periodic after its 10 years: the
     /// planets without water (whose only ocean is the cells at the sea

@@ -73,12 +73,15 @@
 //! calibrations (ticket M4-07); ticket M4-17 looks for its periodic state.
 //!
 //! A model that does not reach its periodic state keeps the months of its
-//! last year, which may be those of a climate in transition (near an
-//! ice–albedo bifurcation, mid-way into a snowball; [`energy_balance`],
-//! "The periodic state"), and the stage reports it as a warning of the
+//! last year, which may be those of a climate in transition (an ice front
+//! still advancing on a planet with little heat transport;
+//! [`energy_balance`], "The periodic state"), and the stage reports it as a
+//! warning of the
 //! world (below, "Warnings"). Of the 128 corners of the v1 range on 1,000
-//! cells (seed 3), 4 energy balances and 2 sea surfaces are not periodic
-//! after 100 years and 11 moistures after 10 (tickets M4-07, M4-16). The
+//! cells (seed 3), every energy balance and sea surface is periodic within
+//! 10 years since the balance step of ticket M4-15 (4 and 2 were not after
+//! 100 years before it), and 11 moistures are not after their 10 (tickets
+//! M4-07, M4-16). The
 //! temperatures have no fixed bound at the corners (monthly means from
 //! about 95 K to about 11,600 K, ticket M4-02).
 //!
@@ -143,11 +146,12 @@
 //!
 //! # Cost
 //!
-//! About 6 s on 10,000 cells (release; 54 s in debug builds) and 11.4
-//! minutes on 650,000 (Earth, seed 1, release): the energy balance 241 s
-//! (11 years), the circulation and the currents 40 s, the sea surface
-//! 323 s (12 years), the moisture 82 s (3 years) (ticket M4-07; the models'
-//! own costs in tickets M4-09 and M4-14).
+//! About 5.6 s on 10,000 cells (release) and 9.0 minutes on 650,000 (Earth,
+//! seed 1, release): the energy balance 185 s (7 years), the circulation
+//! and the currents 38 s, the sea surface 233 s (7 years), the moisture
+//! 82 s (3 years) (tickets M4-07 and M4-15, 11.4 minutes before the
+//! balance step of M4-15; the models' own costs in tickets M4-09 and
+//! M4-14).
 //! [`climate`] reports the progress [`PROGRESS`] after each model.
 
 pub mod circulation;
@@ -391,7 +395,8 @@ fn periodic_temperature_warning(
         format!(
             "{model} did not reach its periodic state in {} years: a monthly-mean sea-level \
              temperature changed by {:.3} K in the last year, {kept}; they may be those of a \
-             climate in transition (near an ice-albedo bifurcation, mid-way into a snowball)",
+             climate in transition (an ice front still advancing on a planet with little heat \
+             transport, or a planet near an ice-albedo bifurcation)",
             temperature.years, temperature.change_k
         )
     })

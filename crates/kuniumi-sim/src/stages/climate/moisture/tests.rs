@@ -1445,7 +1445,9 @@ fn golden_fingerprint_of_earth_moisture() {
     // the potential became the multigrid (ticket M4-09), and when the
     // sub-steps became the downwind sweeps and solves (ticket M4-14, after
     // the tests above passed and the images of out/M4-14 were viewed; this
-    // periodic state within 1.1 × 10⁻⁹ kg/m² of the Jacobi solver's).
+    // periodic state within 1.1 × 10⁻⁹ kg/m² of the Jacobi solver's); and
+    // when the temperatures' periodic states came from the balance step
+    // (ticket M4-15).
     let run = earth_10k();
     let earth = earth_moisture_10k();
     let m = &earth.moisture;
@@ -1473,4 +1475,4 @@ fn golden_fingerprint_of_earth_moisture() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
-const GOLDEN_FINGERPRINT: u64 = 0x5B63_B12B_058C_535F;
+const GOLDEN_FINGERPRINT: u64 = 0x0763_CEDA_6D45_1441;

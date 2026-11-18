@@ -113,44 +113,121 @@
 //! which falls monotonically from it to the largest solution. A planet
 //! that can hold a warm climate keeps it: the feedback allows more than
 //! one periodic state, and a planet started cold may stay frozen. It then
-//! runs whole years. After each year the drift of the annual mean is
-//! removed: `δ` solves `(B' a + D L) δ = a C (T_end − T_start) / P` (`P`
-//! the year) and is added to the state, a Newton step for the slow mode
-//! set by the ocean's heat capacity, with `B'` the restoring slope of each
-//! cell less the ice–albedo feedback of the months it spends in the ramp
-//! (kept at least a tenth of `B`); a periodic state, where
-//! `T_end = T_start`, is left unchanged. The state is periodic when no
-//! monthly-mean sea-level temperature of any cell changes by more than
-//! [`PERIODIC_TOLERANCE_K`] from one year to the next; after [`MAX_YEARS`]
-//! years the result says that it did not converge.
+//! runs whole years, each followed by the balance step (ticket M4-15). The
+//! state is periodic when no monthly-mean sea-level temperature of any
+//! cell changes by more than [`PERIODIC_TOLERANCE_K`] from one year to the
+//! next; after [`MAX_YEARS`] years the result says that it did not
+//! converge.
 //!
-//! Earth on 40,000 cells is periodic after 12 years (20 with the ice-free
-//! start and a correction with `B`, and still 0.014 K after 40 years
-//! without any correction; ticket M4-02), and planets away from an
-//! ice–albedo bifurcation converge as fast: those of the tests with at
-//! least half Earth's `D`, at obliquities up to 90°, in 3 to 25 years.
-//! Two kinds of planets converge far more slowly, whatever the numerics:
+//! **The balance step.** After a year from the state `x` to `y` (K, sea
+//! level), with the monthly means `T_k` under the monthly insolation `Q_k`,
+//! the step finds the shift `δ` of the whole year, its seasonal cycle kept,
+//! that closes each cell's annual energy budget, and the next year starts
+//! from `y + δ`:
 //!
-//! - Planets with little heat transport and strong seasons. With a thin
-//!   atmosphere and a fast spin (`D` = `D⊕ / 91` at 0.1 bar and 8 h) the
-//!   cells are nearly independent and bistable, and ice spreads over the
-//!   oceans as a front that crosses about a cell a year: 50 to 270 years
-//!   on 10,000 cells at obliquities of 45° to 90°, up to 988 on 40,000;
-//!   12 h at 0.3 bar and 60° up to 153.
-//! - Planets close to an ice–albedo bifurcation, whatever their `D`: near
-//!   the edge of a snowball the state creeps past the ghost of the lost
-//!   warm state and then collapses. Earth at 1,296 W/m² (2,000 cells,
-//!   seed 2) creeps for 90 years and freezes over in year 113; Earth at
-//!   1,282 W/m² (10,000 cells, seed 1) takes 70 years, and 24 h at
-//!   0.5 atm with obliquity 90° (10,000 cells, seed 2) 64 and 59 years at
-//!   1,370 and 1,375 W/m² (ticket M4-02, review).
+//! ```text
+//! (B a + D L) δ − a [S(T + δ) − S(T)] = a C φ(z) (y − x) / P
+//! S_i(T) = (1/12) Σ_k Q_ik (1 − α_i(T_ik)),   φ(z) = z / (e^z − 1),   z_i = B P / C_i
+//! ```
 //!
-//! After [`MAX_YEARS`] such planets are returned unconverged, with the
-//! temperatures of their last year and its change, which may be those of
-//! a climate in transition (Earth at 1,296 W/m²: 11.5 K from the year
-//! before, mid-way into the snowball). Chosen with the owner in ticket
-//! M4-02: the Climate stage reports it as a warning (ticket M4-07), and
-//! ticket M4-15 looks for a solver of the periodic state itself.
+//! with `P` the year and `α` the albedo at each month's surface
+//! temperature. Over a year the storage `a C (y − x) / P` is the year's mean
+//! net heating; shifting the year by `δ` adds `B a δ` to the emission,
+//! `D L δ` to the diffusion and `a [S(T + δ) − S(T)]` to the absorbed
+//! sunlight, and `δ` cancels the net heating. `φ` weighs the drift by how
+//! much of its start a cell remembers through the year
+//! ([`EnergyBalance::memory`]): a cell alone, `C dT/dt = −B T + f(t)`,
+//! keeps the factor `e^{−z}` of an error of its start over the year, so
+//! its periodic state is `y + (y − x) / (e^z − 1)`, which is what the step
+//! gives it. `φ` tends to 1 where the year is short against `C / B` and to
+//! 0 where a cell forgets its start within the year: Earth's ocean
+//! remembers (`z` = 0.21, `φ` = 0.90), its land forgets within weeks (6.4,
+//! 0.011). Linearised in `δ`, without `φ` and with the restoring
+//! slope less the feedback floored at a tenth of `B`, the step is the
+//! annual correction of ticket M4-02, which could not carry a cell across
+//! the ramp of the albedo, so ice fronts and planets near a lost balance
+//! crept for decades, and which overshot where a long year makes the
+//! ocean forget its start: planets of 3,650-day years at 8 h, 0.1 bar and
+//! 2,500 W/m² alternated between two years by up to 15 K at the polar sea,
+//! though their own years have a stable periodic state (ticket M4-15).
+//!
+//! The step is solved by the iteration of the warm start,
+//! `δ ← (B a + D L)⁻¹ [a C φ (y − x) / P + a (S(T + δ) − S(T))]` from
+//! `δ = 0`, until no cell's shift changes by more than
+//! [`BALANCE_TOLERANCE_K`] or after [`BALANCE_ITERATIONS`] solves. `S`
+//! rises with the temperature and the inverse of the M-matrix `B a + D L`
+//! has no negative entry, so each iterate is an order-preserving function
+//! of the last, the monotone iteration of D. H.
+//! Sattinger (1972, "Monotone methods in nonlinear elliptic and parabolic
+//! boundary value problems", Indiana Univ. Math. J. 21, 979–1000). Where
+//! the year's drift has one sign everywhere, as on a planet cooling into
+//! a snowball or away from an unstable state, the iterates move in that
+//! direction and stop at the first balance in it, where the years would
+//! arrive: so the step carries a planet past the ghost of a lost balance
+//! and leaves an unstable periodic state the way the years do. Where some
+//! cells warm and others cool, the iterates stay between those of the two
+//! drifts taken one sign at a time, but need not settle within
+//! [`BALANCE_ITERATIONS`]; the step then uses its last iterate, which
+//! only the next year's drift corrects. A periodic state
+//! (`y = x`) gives `δ = 0` exactly: the periodic states are those of the
+//! model's own years, whatever the step's approximations (the monthly
+//! means for the sub-steps, the seasonal cycle kept across the shift).
+//!
+//! **Damping.** Where a cell's annual balance is nearly neutral, its
+//! ice–albedo feedback almost cancelling its emission and diffusion, while
+//! its seasons still restore it, the step overshoots, and a cell can swing
+//! between two years: a coastal sea in the ramp of the albedo on a thin,
+//! fast planet swung by 1.04 K (2,000 cells; ticket M4-15). So each cell's
+//! shift is scaled by a factor that halves whenever the cell's drift over a
+//! year turns against its drift of the year before and is at least as
+//! large, a swing that does not die down (at most
+//! [`STEP_DAMPING_HALVINGS`] times), and doubles back towards 1 while the
+//! drift keeps its sign: steps of each cell adapted to
+//! the sign of its drift, as the RPROP method of M. Riedmiller & H. Braun
+//! (1993, "A direct adaptive method for faster backpropagation learning:
+//! the RPROP algorithm", Proc. IEEE Int. Conf. on Neural Networks,
+//! 586–591) adapts its steps to the sign of the gradient. A cell whose
+//! factor is 1 is stepped as without damping, bit for bit, and a periodic
+//! state, whose shift is 0, is left alone.
+//!
+//! Measured (ticket M4-15, release): Earth periodic in 7 years on 10,000,
+//! 40,000, 160,000 and 650,000 cells (10, 12, 8 and 11 with the correction
+//! of ticket M4-02), on 10,000 and 40,000 cells within 10⁻⁴ K of its state
+//! converged to 10⁻⁷ K (the correction's 6.9 × 10⁻⁴ and 1.05 × 10⁻³ K).
+//! Planets with little heat transport and strong seasons, whose cells are
+//! nearly independent and bistable so that ice spreads as a front of a
+//! cell or so a year (8 h at 0.1 bar, `D` = `D⊕ / 91`, obliquity 45° to
+//! 90°; 12 h at 0.3 bar and 60°): 13 to 30 years on 10,000 cells (107 to
+//! 267 with the correction), 17 to 93 on 40,000 (53 to 988). Planets
+//! close to an ice–albedo bifurcation, whose state creeps past the ghost
+//! of the lost warm state and then collapses
+//! (Earth at 1,282 W/m², seed 1, and at 1,296 W/m², 2,000 cells, seed 2;
+//! 24 h at 0.5 atm with obliquity 90° at 1,370 and 1,375 W/m², seed 2):
+//! 11 to 16 years (59 to 113). Root-finders of the year map, Anderson
+//! acceleration and Newton–Krylov shooting, solve the same fixed point
+//! without following the climate: Anderson acceleration converged at
+//! 1,370 W/m² to an unstable periodic state 31.8 K from the climate's,
+//! stalled near the ghost at 1,282 and 1,296 W/m², and did not converge in
+//! 300 years for the thin, fast planets (ticket M4-15).
+//!
+//! Two limits remain (accepted with the owner in ticket M4-15):
+//!
+//! - Planets with little heat transport have several stable periodic
+//!   states, whose cells along the ice edge, nearly independent and
+//!   bistable, are frozen or open, and the step may stop at another one
+//!   than the years one after another would reach: on 10,000 cells for 5
+//!   of the 9 thin, fast planets of the measurement, each time with less
+//!   ice (a stretch of sea along the edge, an embayment or an inland sea of
+//!   8 to 81 cells' area open instead of frozen) and a global mean surface
+//!   temperature 0.04 to 0.41 K higher, the step having stopped at the
+//!   first balance where the years go on freezing cell after cell; each
+//!   state stable under 100 years without the step. On 40,000 cells the
+//!   same states in the four cases measured.
+//! - Their ice fronts still advance a few cells a year: 93 years at 60° on
+//!   40,000 cells. A finer grid may need more than [`MAX_YEARS`]; such a
+//!   planet is returned unconverged with the temperatures of its last year
+//!   and its change, which may be those of a climate in transition, and the
+//!   Climate stage reports it as a warning (tickets M4-07, M4-16).
 //!
 //! # Earth calibration
 //!
@@ -203,12 +280,16 @@
 //!   333 and 662 per solve on 10,000 to 650,000 cells; 277 s per model
 //!   year on 650,000; ticket M4-02). The multigrid's iterations hardly
 //!   depend on the grid: per model year 0.24 s on 10,000 cells, 0.96 s on
-//!   40,000, 4.8 s on 160,000 and 23 s on 650,000, Earth's periodic state
-//!   4.3 minutes on 650,000 cells (release; ticket M4-09).
+//!   40,000, 4.8 s on 160,000 and 23 s on 650,000 (release; ticket M4-09).
+//!   Earth's periodic state takes 3.1 minutes on 650,000 cells, 7 years and
+//!   their balance steps (4.0 minutes and 11 years with the annual
+//!   correction of ticket M4-02; ticket M4-15).
 //!
-//! Everything runs sequentially over the cells in index order;
-//! transcendental functions are not needed; there is no randomness.
+//! Everything runs sequentially over the cells in index order; the one
+//! transcendental function, the exponential of [`EnergyBalance::memory`],
+//! is [`kuniumi_math::det::exp`]; there is no randomness.
 
+use kuniumi_math::det;
 use kuniumi_math::units::ZERO_CELSIUS_K;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::PlanetParams;
@@ -237,15 +318,25 @@ pub const WARM_START_ITERATIONS: u32 = 200;
 /// 10⁻⁴ W/m²; ticket M4-02).
 pub const SOLVER_TOLERANCE: f64 = 1e-10;
 
-/// The relative residual of the annual correction's solve (module
-/// documentation, "The periodic state"): 10⁻⁶. The correction only speeds
-/// up the approach to the periodic state, whose fixed point does not
-/// depend on it.
-pub(crate) const CORRECTION_TOLERANCE: f64 = 1e-6;
+/// The largest change (K) of the balance step's shift of any cell between
+/// two of its iterations at which the step stops (module documentation,
+/// "The periodic state"): 10⁻⁴ K, a tenth of [`PERIODIC_TOLERANCE_K`].
+pub const BALANCE_TOLERANCE_K: f64 = 1e-4;
 
-/// The smallest restoring slope of the annual correction, as a fraction of
-/// `B`.
-const CORRECTION_SLOPE_FLOOR: f64 = 0.1;
+/// The most iterations of the balance step after a year: 200, as
+/// [`WARM_START_ITERATIONS`].
+pub const BALANCE_ITERATIONS: u32 = 200;
+
+/// The most halvings of the balance step of a cell whose drift swings from
+/// year to year (module documentation, "The periodic state"): 6, a shift
+/// of at least 1/64.
+pub const STEP_DAMPING_HALVINGS: u32 = 6;
+
+/// The relative residual of each solve of the balance step: 10⁻⁶, that of
+/// the annual correction of ticket M4-02. The step only speeds up the
+/// approach to the periodic state, whose fixed point does not depend on
+/// it.
+pub(crate) const BALANCE_SOLVER_TOLERANCE: f64 = 1e-6;
 
 /// The parameters of the energy balance, SI (module documentation, "The
 /// model", for the sources). [`EnergyBalanceParams::earth`] gives Earth's,
@@ -481,10 +572,11 @@ pub struct EnergyBalance {
     /// The multigrid of the sub-step's matrix `a (C/Δt + B) + D L`, which
     /// holds the matrix.
     step: Multigrid,
+    /// `a C φ(B P / C) / P` of each cell, the weight of a year's drift in
+    /// the balance step (module documentation, "The periodic state").
+    drift_weight: Vec<f64>,
     /// `Δt` (s).
     substep_s: f64,
-    /// The year `P` (s).
-    year_s: f64,
 }
 
 impl EnergyBalance {
@@ -550,6 +642,12 @@ impl EnergyBalance {
             .map(|i| areas_sr[i] * (heat_capacity_j_m2_k[i] / substep_s + b))
             .collect();
         let step = Multigrid::new(laplacian.matrix(&mass, params.diffusion_w_m2_k));
+        let drift_weight = (0..n)
+            .map(|i| {
+                let c = heat_capacity_j_m2_k[i];
+                areas_sr[i] * c * Self::memory(b * orbital_period_s / c) / orbital_period_s
+            })
+            .collect();
         Self {
             params: *params,
             laplacian,
@@ -559,8 +657,26 @@ impl EnergyBalance {
             sin_lat: grid.positions().iter().map(|p| p.z).collect(),
             elevation_m,
             step,
+            drift_weight,
             substep_s,
-            year_s: orbital_period_s,
+        }
+    }
+
+    /// `φ(z) = z / (e^z − 1)`, the weight of a year's drift in the balance
+    /// step for a cell whose year is `z` times its radiative time constant
+    /// `C / B`: the step then gives a cell alone its periodic state (module
+    /// documentation, "The periodic state"). 1 in the limit of a short
+    /// year, 0.90 for Earth's ocean (`z` = 0.21), 0.011 for its land
+    /// (`z` = 6.4); 0 from `z` = 700 on, where `e^z` nears the largest
+    /// double, and `1 − z/2 + z²/12` below `z` = 10⁻⁴, where `e^z − 1`
+    /// loses its digits (1 at `z` = 0). `z` must not be negative.
+    pub fn memory(z: f64) -> f64 {
+        if z >= 700.0 {
+            0.0
+        } else if z < 1e-4 {
+            1.0 - 0.5 * z + z * z / 12.0
+        } else {
+            z / (det::exp(z) - 1.0)
         }
     }
 
@@ -614,11 +730,19 @@ impl EnergyBalance {
         &self.step
     }
 
-    /// The multigrid of `mass + D L` (one mass per cell): the warm start's
-    /// and the annual correction's matrices, and the sea surface's
-    /// (ticket M4-05) for their prolongators.
+    /// The multigrid of `mass + D L` (one mass per cell), and the sea
+    /// surface's (ticket M4-05) for their prolongators.
     pub(crate) fn diffusion_multigrid(&self, mass: &[f64]) -> Multigrid {
         Multigrid::new(self.laplacian.matrix(mass, self.params.diffusion_w_m2_k))
+    }
+
+    /// The multigrid of the annual operator `B a + D L`: the warm start's
+    /// and the balance step's matrix (module documentation, "The periodic
+    /// state").
+    pub(crate) fn annual_multigrid(&self) -> Multigrid {
+        let b = self.params.olr_slope_w_m2_k;
+        let mass: Vec<f64> = self.areas_sr.iter().map(|a| a * b).collect();
+        self.diffusion_multigrid(&mass)
     }
 
     /// The surface temperature (K) of each cell for the sea-level
@@ -662,12 +786,21 @@ impl EnergyBalance {
     /// iterates fall towards the largest solution (module documentation,
     /// "The periodic state").
     pub fn warm_start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
+        self.warm_start_with(&self.annual_multigrid(), insolation_w_m2)
+    }
+
+    /// [`warm_start`](Self::warm_start) with the multigrid `warm` of
+    /// `B a + D L` ([`annual_multigrid`](Self::annual_multigrid)).
+    pub(crate) fn warm_start_with(
+        &self,
+        warm: &Multigrid,
+        insolation_w_m2: &[Vec<f64>; MONTHS],
+    ) -> Vec<f64> {
         self.check_months(insolation_w_m2);
         let p = &self.params;
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
         let n = self.len();
         let mut mean_w_m2 = Vec::with_capacity(n);
-        let mut mass = Vec::with_capacity(n);
         let mut rhs = Vec::with_capacity(n);
         let mut temperature_k = Vec::with_capacity(n);
         for i in 0..n {
@@ -678,15 +811,13 @@ impl EnergyBalance {
             let mean = sum / MONTHS as f64;
             let absorbed = mean * (1.0 - p.free_albedo(self.ocean[i], self.sin_lat[i]));
             mean_w_m2.push(mean);
-            mass.push(self.areas_sr[i] * b);
             rhs.push(self.areas_sr[i] * (absorbed - a + b * ZERO_CELSIUS_K));
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
-        let warm = self.diffusion_multigrid(&mass);
         let solve = |rhs: &[f64], values: &mut [f64]| {
             multigrid::conjugate_gradient(
                 warm.matrix(),
-                &warm,
+                warm,
                 rhs,
                 SOLVER_TOLERANCE,
                 SOLVER_MAX_ITERATIONS,
@@ -784,99 +915,88 @@ impl EnergyBalance {
 
     /// The periodic state under the monthly-mean insolation
     /// `insolation_w_m2` (W/m², one `Vec` per month, cells in index order),
-    /// from the [`warm_start`](Self::warm_start), with the annual
-    /// correction (module documentation, "The periodic state").
+    /// from the [`warm_start`](Self::warm_start), with the balance step
+    /// after each year (module documentation, "The periodic state").
     pub fn periodic_state(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Temperature {
         self.periodic_state_with(insolation_w_m2, true, PERIODIC_TOLERANCE_K, MAX_YEARS)
     }
 
-    /// [`periodic_state`](Self::periodic_state) with or without the annual
-    /// correction, to `tolerance_k` within `max_years`.
+    /// [`periodic_state`](Self::periodic_state) with or without the balance
+    /// step, to `tolerance_k` within `max_years`.
     pub(crate) fn periodic_state_with(
         &self,
         insolation_w_m2: &[Vec<f64>; MONTHS],
-        correct: bool,
+        step: bool,
         tolerance_k: f64,
         max_years: u32,
     ) -> Temperature {
-        periodic_state(self, insolation_w_m2, correct, tolerance_k, max_years)
+        periodic_run(self, insolation_w_m2, None, step, tolerance_k, max_years).0
     }
 
-    /// The annual correction: adds to `temperature_k` (the state at the
-    /// end of a year that started at `start`, whose monthly means were
-    /// `means` under `insolation_w_m2`) the `δ` that solves
-    /// `(B' a + D L) δ = a C (T_end − T_start) / P`, with `B'` the annual
-    /// mean of `B` less the ice–albedo feedback of each cell,
-    /// `B − (1/12) Σ_k Q_k |∂α/∂T|` over the months whose surface
-    /// temperature lies in the ramp, kept at least
-    /// [`CORRECTION_SLOPE_FLOOR`] times `B`.
-    fn correct(
+    /// The balance step after a year from `start` to `temperature_k`, in
+    /// place, whose monthly means were `means` under `insolation_w_m2`, with
+    /// the multigrid `annual` of `B a + D L`
+    /// ([`annual_multigrid`](Self::annual_multigrid)). Returns the solves
+    /// made.
+    pub(crate) fn balance(
         &self,
+        annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
         means: &[Vec<f64>; MONTHS],
         insolation_w_m2: &[Vec<f64>; MONTHS],
-    ) {
-        let n = self.len();
-        let mass = self.correction_mass(means, insolation_w_m2);
-        let rhs = self.correction_rhs(start, temperature_k);
-        if rhs.iter().all(|&r| r == 0.0) {
-            return;
-        }
-        let correction = self.diffusion_multigrid(&mass);
-        let mut delta = vec![0.0; n];
-        multigrid::conjugate_gradient(
-            correction.matrix(),
-            &correction,
-            &rhs,
-            CORRECTION_TOLERANCE,
-            SOLVER_MAX_ITERATIONS,
-            &mut delta,
-        );
-        for (t, d) in temperature_k.iter_mut().zip(delta) {
-            *t += d;
-        }
+    ) -> u32 {
+        balance_step(
+            self,
+            start,
+            temperature_k,
+            means,
+            insolation_w_m2,
+            |rhs: &[f64], values: &mut [f64]| {
+                multigrid::conjugate_gradient(
+                    annual.matrix(),
+                    annual,
+                    rhs,
+                    BALANCE_SOLVER_TOLERANCE,
+                    SOLVER_MAX_ITERATIONS,
+                    values,
+                );
+            },
+        )
     }
 
-    /// `a_i B'_i` of the annual correction ([`correct`](Self::correct)) for
-    /// the year whose monthly means were `means` under `insolation_w_m2`.
-    pub(crate) fn correction_mass(
+    /// `a_i C_i φ(z_i) (T_end − T_start) / P`, the weighted drift of the
+    /// year from `start` to `temperature_k` (module documentation, "The
+    /// periodic state").
+    pub(crate) fn drift(&self, start: &[f64], temperature_k: &[f64]) -> Vec<f64> {
+        (0..self.len())
+            .map(|i| self.drift_weight[i] * (temperature_k[i] - start[i]))
+            .collect()
+    }
+
+    /// `S_i(T + δ)` of the balance step: the mean over the months of
+    /// `Q_k (1 − α(T_k + δ))` (W/m²) of each cell, for the monthly
+    /// sea-level temperatures `means` shifted by `shift_k` and the monthly
+    /// insolation `insolation_w_m2`, in month order.
+    pub(crate) fn annual_absorbed_w_m2(
         &self,
         means: &[Vec<f64>; MONTHS],
+        shift_k: &[f64],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) -> Vec<f64> {
         let n = self.len();
-        let p = &self.params;
-        let b = p.olr_slope_w_m2_k;
-        let ramp_k = p.melting_temperature_k - p.frozen_temperature_k;
-        let mut feedback = vec![0.0; n];
+        let mut sum = vec![0.0; n];
+        let mut shifted = vec![0.0; n];
         for (month, insolation) in means.iter().zip(insolation_w_m2) {
-            let surface = self.surface_temperature_k(month);
             for i in 0..n {
-                if surface[i] > p.frozen_temperature_k && surface[i] < p.melting_temperature_k {
-                    let free = p.free_albedo(self.ocean[i], self.sin_lat[i]);
-                    feedback[i] += insolation[i] * (p.ice_albedo - free) / ramp_k;
-                }
+                shifted[i] = month[i] + shift_k[i];
+            }
+            let albedos = self.albedos(&shifted);
+            for i in 0..n {
+                sum[i] += insolation[i] * (1.0 - albedos[i]);
             }
         }
-        (0..n)
-            .map(|i| {
-                let slope = b - feedback[i] / MONTHS as f64;
-                let floor = CORRECTION_SLOPE_FLOOR * b;
-                self.areas_sr[i] * if slope > floor { slope } else { floor }
-            })
-            .collect()
-    }
-
-    /// `a_i C_i (T_end − T_start) / P` of the annual correction, the drift
-    /// of the year from `start` to `temperature_k`.
-    pub(crate) fn correction_rhs(&self, start: &[f64], temperature_k: &[f64]) -> Vec<f64> {
-        (0..self.len())
-            .map(|i| {
-                self.areas_sr[i] * self.heat_capacity_j_m2_k[i] * (temperature_k[i] - start[i])
-                    / self.year_s
-            })
-            .collect()
+        sum.iter().map(|s| s / MONTHS as f64).collect()
     }
 
     /// Checks that each month of `insolation_w_m2` has one value per cell.
@@ -892,13 +1012,64 @@ impl EnergyBalance {
     }
 }
 
-/// A model of the seasons that [`periodic_state`] runs to a periodic
-/// state: the energy balance, and the energy balance with the ocean's
-/// currents and upwelling ([`super::sea_surface::SeaSurfaceModel`], ticket
-/// M4-05).
+/// The balance step (module documentation, "The periodic state") of the
+/// energy balance `balance` after a year from `start` to `temperature_k`,
+/// in place, whose monthly sea-level means were `means` under
+/// `insolation_w_m2`: from `δ = 0`, `δ ← K⁻¹ [w (y − x) + a (S(T + δ) −
+/// S(T))]` with `solve(rhs, values)` solving `K values = rhs` from
+/// `values` (`K` the annual operator of the model, `B a + D L` for the
+/// energy balance), until no cell's `δ` changes by more than
+/// [`BALANCE_TOLERANCE_K`] or after [`BALANCE_ITERATIONS`] solves; then
+/// `temperature_k += δ`. Returns the solves made (0 where the year did not
+/// drift).
+pub(crate) fn balance_step(
+    balance: &EnergyBalance,
+    start: &[f64],
+    temperature_k: &mut [f64],
+    means: &[Vec<f64>; MONTHS],
+    insolation_w_m2: &[Vec<f64>; MONTHS],
+    mut solve: impl FnMut(&[f64], &mut [f64]),
+) -> u32 {
+    let n = balance.len();
+    let drift = balance.drift(start, temperature_k);
+    if drift.iter().all(|&r| r == 0.0) {
+        return 0;
+    }
+    let areas = balance.areas_sr();
+    let mut delta = vec![0.0; n];
+    let base = balance.annual_absorbed_w_m2(means, &delta, insolation_w_m2);
+    let mut rhs = drift.clone();
+    let mut solves = 0;
+    while solves < BALANCE_ITERATIONS {
+        if solves > 0 {
+            let absorbed = balance.annual_absorbed_w_m2(means, &delta, insolation_w_m2);
+            for i in 0..n {
+                rhs[i] = drift[i] + areas[i] * (absorbed[i] - base[i]);
+            }
+        }
+        let before = delta.clone();
+        solve(&rhs, &mut delta);
+        solves += 1;
+        if largest_difference_k(&before, &delta) <= BALANCE_TOLERANCE_K {
+            break;
+        }
+    }
+    for (t, d) in temperature_k.iter_mut().zip(&delta) {
+        *t += d;
+    }
+    debug_assert!(temperature_k.iter().all(|t| t.is_finite()));
+    solves
+}
+
+/// A model of the seasons that [`periodic_run`] runs to a periodic state:
+/// the energy balance, and the energy balance with the ocean's currents and
+/// upwelling ([`super::sea_surface::SeaSurfaceModel`], ticket M4-05).
 pub(crate) trait Seasons {
-    /// The warm start of the first year.
-    fn start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64>;
+    /// The model's annual operator, the warm start's and the balance
+    /// step's, as its multigrid: built once for a run.
+    fn annual(&self) -> Multigrid;
+    /// The warm start of the first year, with the annual operator `annual`.
+    fn start(&self, annual: &Multigrid, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64>;
     /// Month `month` (0 to 11) from `temperature_k`, in place; its mean.
     fn step_month(
         &self,
@@ -906,10 +1077,12 @@ pub(crate) trait Seasons {
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
     ) -> Vec<f64>;
-    /// The annual correction of the state `temperature_k` at the end of a
-    /// year that started at `start` with the monthly means `means`.
-    fn correct_year(
+    /// The balance step of the state `temperature_k` at the end of a year
+    /// that started at `start` with the monthly means `means`, with the
+    /// annual operator `annual`.
+    fn balance_year(
         &self,
+        annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
         means: &[Vec<f64>; MONTHS],
@@ -920,8 +1093,12 @@ pub(crate) trait Seasons {
 }
 
 impl Seasons for EnergyBalance {
-    fn start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
-        self.warm_start(insolation_w_m2)
+    fn annual(&self) -> Multigrid {
+        self.annual_multigrid()
+    }
+
+    fn start(&self, annual: &Multigrid, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
+        self.warm_start_with(annual, insolation_w_m2)
     }
 
     fn step_month(
@@ -933,14 +1110,15 @@ impl Seasons for EnergyBalance {
         self.month(temperature_k, insolation_w_m2)
     }
 
-    fn correct_year(
+    fn balance_year(
         &self,
+        annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
         means: &[Vec<f64>; MONTHS],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) {
-        self.correct(start, temperature_k, means, insolation_w_m2);
+        self.balance(annual, start, temperature_k, means, insolation_w_m2);
     }
 
     fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64> {
@@ -949,19 +1127,26 @@ impl Seasons for EnergyBalance {
 }
 
 /// The periodic state of `model` under the monthly-mean insolation
-/// `insolation_w_m2` (module documentation, "The periodic state"): from its
-/// warm start, whole years until no monthly mean changes by more than
-/// `tolerance_k` from the year before or `max_years` have run, with the
-/// annual correction after each year if `correct`.
-pub(crate) fn periodic_state<S: Seasons>(
+/// `insolation_w_m2` (module documentation, "The periodic state"): from
+/// `start_k`, or the model's warm start if none, whole years until no
+/// monthly mean changes by more than `tolerance_k` from the year before or
+/// `max_years` have run, with the balance step after each year if `step`.
+/// Returns the last year and the state (K, sea level) at its start.
+pub(crate) fn periodic_run<S: Seasons>(
     model: &S,
     insolation_w_m2: &[Vec<f64>; MONTHS],
-    correct: bool,
+    start_k: Option<Vec<f64>>,
+    step: bool,
     tolerance_k: f64,
     max_years: u32,
-) -> Temperature {
-    let mut temperature_k = model.start(insolation_w_m2);
+) -> (Temperature, Vec<f64>) {
+    let annual = model.annual();
+    let mut temperature_k = match start_k {
+        Some(t) => t,
+        None => model.start(&annual, insolation_w_m2),
+    };
     let mut previous: Option<[Vec<f64>; MONTHS]> = None;
+    let mut damping = StepDamping::new(temperature_k.len());
     let mut years = 0;
     loop {
         years += 1;
@@ -975,23 +1160,78 @@ pub(crate) fn periodic_state<S: Seasons>(
         let converged = change_k <= tolerance_k;
         if converged || years >= max_years {
             let surface_k = core::array::from_fn(|k| model.surface_k(&means[k]));
-            return Temperature {
+            let temperature = Temperature {
                 sea_level_k: means,
                 surface_k,
                 years,
                 change_k,
                 converged,
             };
+            return (temperature, start);
         }
-        if correct {
-            model.correct_year(&start, &mut temperature_k, &means, insolation_w_m2);
+        if step {
+            let end = temperature_k.clone();
+            model.balance_year(&annual, &start, &mut temperature_k, &means, insolation_w_m2);
+            damping.apply(&start, &end, &mut temperature_k);
         }
         previous = Some(means);
     }
 }
 
+/// The damping of the balance step of each cell (module documentation,
+/// "The periodic state"): a cell whose drift over a year turns against the
+/// drift of the year before and is at least as large has its shift halved
+/// from then on, at most [`STEP_DAMPING_HALVINGS`] times, and a cell whose
+/// drift keeps its sign has its factor doubled again, up to 1.
+struct StepDamping {
+    /// The factor of each cell's shift, 1 to `2^−STEP_DAMPING_HALVINGS`.
+    factor: Vec<f64>,
+    /// Each cell's drift of the year before (K), none before the first.
+    drift_k: Option<Vec<f64>>,
+}
+
+impl StepDamping {
+    fn new(n: usize) -> Self {
+        Self {
+            factor: vec![1.0; n],
+            drift_k: None,
+        }
+    }
+
+    /// Updates the factors with the drift of the year from `start` to
+    /// `end`, and scales the shift from `end` to `stepped` by them, in
+    /// place; a cell whose factor is 1 keeps its shift bit for bit.
+    fn apply(&mut self, start: &[f64], end: &[f64], stepped: &mut [f64]) {
+        let floor = 1.0 / f64::from(1_u32 << STEP_DAMPING_HALVINGS);
+        let drift: Vec<f64> = end.iter().zip(start).map(|(e, s)| e - s).collect();
+        if let Some(last) = &self.drift_k {
+            for (i, (&d, &l)) in drift.iter().zip(last).enumerate() {
+                if d * l < 0.0 && d.abs() >= l.abs() {
+                    self.factor[i] = if self.factor[i] > floor {
+                        0.5 * self.factor[i]
+                    } else {
+                        floor
+                    };
+                } else if d * l > 0.0 {
+                    self.factor[i] = if self.factor[i] < 0.5 {
+                        2.0 * self.factor[i]
+                    } else {
+                        1.0
+                    };
+                }
+            }
+        }
+        for (i, t) in stepped.iter_mut().enumerate() {
+            if self.factor[i] < 1.0 {
+                *t = end[i] + self.factor[i] * (*t - end[i]);
+            }
+        }
+        self.drift_k = Some(drift);
+    }
+}
+
 /// The largest `|b − a|` over every month and cell, in order.
-fn largest_change_k(a: &[Vec<f64>; MONTHS], b: &[Vec<f64>; MONTHS]) -> f64 {
+pub(crate) fn largest_change_k(a: &[Vec<f64>; MONTHS], b: &[Vec<f64>; MONTHS]) -> f64 {
     let mut largest = 0.0_f64;
     for (x, y) in a.iter().zip(b) {
         let d = largest_difference_k(x, y);
@@ -1017,11 +1257,11 @@ pub(crate) fn largest_difference_k(a: &[f64], b: &[f64]) -> f64 {
 /// The periodic monthly temperature of the surface `heights_m` (m, one per
 /// cell of `grid`, on the datum of `sea_level_m`) of the planet `params`
 /// (valid): the insolation of [`monthly_insolation`] and the parameters of
-/// [`EnergyBalanceParams::for_planet`]. About 12 s for Earth on 40,000
-/// cells (release; ticket M4-09). A planet with
-/// little heat transport or close to an ice–albedo bifurcation may come
-/// back unconverged after [`MAX_YEARS`] ([`Temperature::converged`];
-/// module documentation, "The periodic state").
+/// [`EnergyBalanceParams::for_planet`]. About 10 s for Earth on 40,000
+/// cells (7 years, release; ticket M4-15). A planet with little heat
+/// transport on a fine grid may still come back unconverged after
+/// [`MAX_YEARS`] ([`Temperature::converged`]; module documentation, "The
+/// periodic state").
 pub fn monthly_temperature(
     params: &PlanetParams,
     grid: &SphereGrid,

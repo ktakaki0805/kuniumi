@@ -1042,7 +1042,8 @@ fn golden_fingerprint_of_earth_circulation() {
     // that the same world has a different circulation. Recorded after the
     // other tests passed and the images of out/M4-03 were viewed (ticket
     // M4-03, Result); recorded again when the temperatures' solver became
-    // the multigrid (ticket M4-09).
+    // the multigrid (ticket M4-09) and when their periodic state came from
+    // the balance step (ticket M4-15).
     let run = earth_10k();
     let c = monthly_circulation(&PlanetParams::earth(), &run.world.grid, &run.temperature);
     let bytes: Vec<u8> = c
@@ -1063,4 +1064,4 @@ fn golden_fingerprint_of_earth_circulation() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_circulation`.
-const GOLDEN_FINGERPRINT: u64 = 0xD3B8_67CA_7631_CB7E;
+const GOLDEN_FINGERPRINT: u64 = 0xA63E_8ED9_C397_F5B8;

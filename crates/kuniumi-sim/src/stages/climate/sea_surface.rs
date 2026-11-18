@@ -128,10 +128,16 @@
 //! upwelling and its return, iterated with the ice–albedo feedback; whole
 //! years until no monthly mean changes by more than
 //! [`super::energy_balance::PERIODIC_TOLERANCE_K`], at most
-//! [`super::energy_balance::MAX_YEARS`]; and after each year the annual
-//! correction, here solved with the advection and the annual-mean upwelling
-//! in its operator, `B' a + D L + q + ū` (without the return, which only
-//! speeds up the approach and does not change the fixed point).
+//! [`super::energy_balance::MAX_YEARS`]; and after each year the balance
+//! step of [`super::energy_balance`] (ticket M4-15), here with the advection
+//! and the annual-mean upwelling in its operator, `B a + D L + q + ū`, the
+//! warm start's (without the return, which only speeds up the approach and
+//! does not change the fixed point), solved by BiCGSTAB with the warm
+//! start's multigrid. Earth's sea surface is periodic in 7 years on 10,000,
+//! 40,000 and 650,000 cells (9, 12 and 12 with the annual
+//! correction of ticket M4-02), within 3 × 10⁻⁴ K of its state converged to
+//! 10⁻⁷ K on 40,000 and 160,000 cells; that of Earth at 1,282 W/m² in 16
+//! years (75 before; ticket M4-15).
 //!
 //! # Calibration
 //!
@@ -186,8 +192,9 @@ use kuniumi_world::PlanetParams;
 
 use super::circulation::Circulation;
 use super::energy_balance::{
-    self, CORRECTION_TOLERANCE, EnergyBalance, EnergyBalanceParams, MAX_YEARS,
-    PERIODIC_TOLERANCE_K, Seasons, Temperature, WARM_START_ITERATIONS, largest_difference_k,
+    self, BALANCE_SOLVER_TOLERANCE, EnergyBalance, EnergyBalanceParams, MAX_YEARS,
+    PERIODIC_TOLERANCE_K, Seasons, Temperature, WARM_START_ITERATIONS, balance_step,
+    largest_difference_k,
 };
 use super::insolation::{MONTHS, monthly_insolation};
 use super::ocean::{OceanCurrents, OceanParams, WindStress, monthly_wind_stress};
@@ -916,6 +923,22 @@ impl SeaSurfaceModel {
     ///
     /// If a month of the insolation does not hold one value per cell.
     pub fn warm_start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
+        self.warm_start_with(&self.annual_multigrid(), insolation_w_m2)
+    }
+
+    /// The multigrid of the annual operator `B a + D L + q + ū`, with the
+    /// prolongators of the energy balance's `B a + D L`: the warm start's
+    /// and the balance step's matrix (module documentation, "The periodic
+    /// state").
+    fn annual_multigrid(&self) -> Multigrid {
+        let b = self.balance.params().olr_slope_w_m2_k;
+        let mass: Vec<f64> = self.balance.areas_sr().iter().map(|s| s * b).collect();
+        self.multigrid(&mass, &self.mean_upwelling_coupling)
+    }
+
+    /// [`warm_start`](Self::warm_start) with the multigrid `warm` of the
+    /// annual operator ([`annual_multigrid`](Self::annual_multigrid)).
+    fn warm_start_with(&self, warm: &Multigrid, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
         self.balance.check_months(insolation_w_m2);
         let p = self.balance.params();
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
@@ -926,9 +949,8 @@ impl SeaSurfaceModel {
         let u = &self.mean_upwelling_coupling;
         let t_fz = self.params.freezing_temperature_k;
         let mass: Vec<f64> = areas.iter().map(|s| s * b).collect();
-        let warm = self.multigrid(&mass, u);
         let matrix = warm.matrix();
-        let z = self.return_vector(matrix, &warm, u);
+        let z = self.return_vector(matrix, warm, u);
         let mut mean_w_m2 = Vec::with_capacity(n);
         let mut temperature_k = Vec::with_capacity(n);
         let mut rhs = Vec::with_capacity(n);
@@ -943,7 +965,7 @@ impl SeaSurfaceModel {
             rhs.push(areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz);
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
-        self.solve_with_return((matrix, &warm), &mass, u, &z, &mut rhs, &mut temperature_k);
+        self.solve_with_return((matrix, warm), &mass, u, &z, &mut rhs, &mut temperature_k);
         for _ in 0..WARM_START_ITERATIONS {
             let albedos = self.balance.albedos(&temperature_k);
             for i in 0..n {
@@ -951,7 +973,7 @@ impl SeaSurfaceModel {
                 rhs[i] = areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz;
             }
             let before = temperature_k.clone();
-            self.solve_with_return((matrix, &warm), &mass, u, &z, &mut rhs, &mut temperature_k);
+            self.solve_with_return((matrix, warm), &mass, u, &z, &mut rhs, &mut temperature_k);
             if largest_difference_k(&before, &temperature_k) <= PERIODIC_TOLERANCE_K {
                 break;
             }
@@ -960,42 +982,44 @@ impl SeaSurfaceModel {
         temperature_k
     }
 
-    /// The annual correction of the energy balance
+    /// The balance step of the energy balance
     /// ([`EnergyBalance::periodic_state`]) with the advection and the
-    /// annual-mean upwelling in its operator, `B' a + D L + q + ū`, solved
-    /// by [`crate::multigrid::bicgstab`] (module documentation, "The
+    /// annual-mean upwelling in its operator, `B a + D L + q + ū` (the
+    /// multigrid `annual`, [`annual_multigrid`](Self::annual_multigrid)),
+    /// solved by [`crate::multigrid::bicgstab`] (module documentation, "The
     /// periodic state").
-    fn correct(
+    fn balance_step(
         &self,
+        annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
         means: &[Vec<f64>; MONTHS],
         insolation_w_m2: &[Vec<f64>; MONTHS],
-    ) {
-        let mass = self.balance.correction_mass(means, insolation_w_m2);
-        let rhs = self.balance.correction_rhs(start, temperature_k);
-        if rhs.iter().all(|&r| r == 0.0) {
-            return;
-        }
-        let correction = self.multigrid(&mass, &self.mean_upwelling_coupling);
-        let mut delta = vec![0.0; self.len()];
-        multigrid::bicgstab(
-            correction.matrix(),
-            &correction,
-            &rhs,
-            CORRECTION_TOLERANCE,
-            SOLVER_MAX_ITERATIONS,
-            &mut delta,
-        );
-        for (t, d) in temperature_k.iter_mut().zip(delta) {
-            *t += d;
-        }
+    ) -> u32 {
+        balance_step(
+            &self.balance,
+            start,
+            temperature_k,
+            means,
+            insolation_w_m2,
+            |rhs: &[f64], values: &mut [f64]| {
+                multigrid::bicgstab(
+                    annual.matrix(),
+                    annual,
+                    rhs,
+                    BALANCE_SOLVER_TOLERANCE,
+                    SOLVER_MAX_ITERATIONS,
+                    values,
+                );
+            },
+        )
     }
 
     /// The periodic state under the monthly-mean insolation
     /// `insolation_w_m2` (W/m², one `Vec` per month, cells in index order):
     /// the energy balance's driver with the sea surface's warm start,
-    /// months and correction (module documentation, "The periodic state").
+    /// months and balance step (module documentation, "The periodic
+    /// state").
     /// The surface temperature of an ocean cell is its sea-surface
     /// temperature.
     ///
@@ -1014,13 +1038,17 @@ impl SeaSurfaceModel {
         tolerance_k: f64,
         max_years: u32,
     ) -> Temperature {
-        energy_balance::periodic_state(self, insolation_w_m2, true, tolerance_k, max_years)
+        energy_balance::periodic_run(self, insolation_w_m2, None, true, tolerance_k, max_years).0
     }
 }
 
 impl Seasons for SeaSurfaceModel {
-    fn start(&self, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
-        self.warm_start(insolation_w_m2)
+    fn annual(&self) -> Multigrid {
+        self.annual_multigrid()
+    }
+
+    fn start(&self, annual: &Multigrid, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64> {
+        self.warm_start_with(annual, insolation_w_m2)
     }
 
     fn step_month(
@@ -1032,14 +1060,15 @@ impl Seasons for SeaSurfaceModel {
         self.month(month, temperature_k, insolation_w_m2)
     }
 
-    fn correct_year(
+    fn balance_year(
         &self,
+        annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
         means: &[Vec<f64>; MONTHS],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) {
-        self.correct(start, temperature_k, means, insolation_w_m2);
+        self.balance_step(annual, start, temperature_k, means, insolation_w_m2);
     }
 
     fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64> {

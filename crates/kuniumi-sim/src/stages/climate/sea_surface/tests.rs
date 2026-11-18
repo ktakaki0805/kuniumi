@@ -17,6 +17,10 @@
 //!
 //! Ticket M4-09 (the multigrid): `a_substep_matches_the_jacobi_solver`.
 //!
+//! Ticket M4-15 (the balance step): criterion 1,
+//! `slow_sea_surfaces_reach_a_stable_periodic_state`; criterion 3,
+//! `earth_stays_within_the_tolerance_of_its_periodic_state`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1
 //! with its M4-02 temperatures, M4-03 winds and M4-04 currents: 40,000
 //! cells in release builds, the world of the calibration (about half a
@@ -812,6 +816,124 @@ fn earth_converges_to_a_periodic_state() {
 }
 
 #[test]
+fn earth_stays_within_the_tolerance_of_its_periodic_state() {
+    // Ticket M4-15, criterion 3 (as reworded with the owner): Earth's sea
+    // surface (the shared run: 40,000 cells in release builds, 10,000 in
+    // debug builds) within 3 × 10⁻⁴ K of the same model run to 10⁻⁷ K
+    // (measured 2.11 × 10⁻⁴ and 9.97 × 10⁻⁵ K; the annual correction of
+    // ticket M4-02 landed 8.9 × 10⁻⁴ and 3.0 × 10⁻⁴ K away).
+    let sea = earth_sea_reference();
+    let grid = &earth_reference().world.grid;
+    let insolation = monthly_insolation(&PlanetParams::earth(), grid);
+    let converged = sea.model.periodic_state_with(&insolation, 1e-7, 400);
+    let mut difference = 0.0_f64;
+    for (a, b) in sea
+        .temperature
+        .sea_level_k
+        .iter()
+        .zip(&converged.sea_level_k)
+    {
+        for (x, y) in a.iter().zip(b) {
+            difference = difference.max((x - y).abs());
+        }
+    }
+    println!(
+        "{} cells: {} years; to 10⁻⁷ K in {} years, {difference:.2e} K away",
+        grid.len(),
+        sea.temperature.years,
+        converged.years
+    );
+    assert!(converged.converged);
+    assert!(difference <= 3e-4, "{difference:e}");
+}
+
+#[test]
+fn slow_sea_surfaces_reach_a_stable_periodic_state() {
+    // Ticket M4-15, criterion 1: the sea surface of Earth at 1,282 W/m²
+    // (seed 1; 75 years with the annual correction of ticket M4-02) and of
+    // 8 h at 0.1 bar with obliquity 60° (seed 1; 18 years), with the winds
+    // and currents of their energy balances, on 10,000 cells in release
+    // builds and 2,000 in debug builds; and in both builds the latter on
+    // 2,000 cells, whose sea surface the balance step without its damping
+    // swung between two years by 1.04 K at an upwelling coast in the ramp
+    // of the albedo (the years without the step: periodic in 56 years).
+    // Each periodic within 40 years, and 30 more years without the step
+    // from the start of the last year move no monthly mean by more than
+    // 10⁻² K and end with a change of at most the periodic tolerance.
+    let cells = if cfg!(debug_assertions) {
+        2_000
+    } else {
+        10_000
+    };
+    let earth = PlanetParams::earth();
+    let thin = PlanetParams {
+        rotation_period_s: 28_800.0,
+        surface_pressure_pa: 1e4,
+        obliquity_rad: 60.0 * DEG,
+        ..earth.clone()
+    };
+    let mut planets = vec![
+        (
+            "Earth at 1,282 W/m²",
+            PlanetParams {
+                stellar_flux_w_m2: 1_282.0,
+                ..earth.clone()
+            },
+            cells,
+        ),
+        ("8 h, 0.1 bar, 60°", thin.clone(), cells),
+    ];
+    if cells != 2_000 {
+        planets.push(("8 h, 0.1 bar, 60°", thin, 2_000));
+    }
+    for (name, params, cells) in &planets {
+        let settings = Settings {
+            cells: *cells,
+            allow_partial: true,
+            ..Settings::default()
+        };
+        let world = crate::generate_through_crust(params, &settings, 1).expect("a partial world");
+        let grid = &world.grid;
+        let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
+        let temperature = monthly_temperature(params, grid, heights, world.sea_level_m);
+        assert!(temperature.converged, "{name}: the energy balance");
+        let model = sea_model(params, grid, heights, world.sea_level_m, &temperature);
+        let insolation = monthly_insolation(params, grid);
+        let (t, start) = energy_balance::periodic_run(
+            &model,
+            &insolation,
+            None,
+            true,
+            PERIODIC_TOLERANCE_K,
+            MAX_YEARS,
+        );
+        let (bare, _) =
+            energy_balance::periodic_run(&model, &insolation, Some(start), false, 0.0, 30);
+        let mut moved = 0.0_f64;
+        for (a, b) in t.sea_level_k.iter().zip(&bare.sea_level_k) {
+            for (x, y) in a.iter().zip(b) {
+                moved = moved.max((x - y).abs());
+            }
+        }
+        println!(
+            "{name} ({cells} cells): {} years, change {:.2e} K; 30 years without the step move \
+             it by {moved:.2e} K, the last by {:.2e} K",
+            t.years, t.change_k, bare.change_k
+        );
+        assert!(t.converged && t.years <= 40, "{name}: {} years", t.years);
+        for month in t.sea_level_k.iter().chain(&t.surface_k) {
+            assert!(month.iter().all(|v| v.is_finite() && *v > 0.0), "{name}");
+        }
+        assert!(moved <= 1e-2, "{name}: {moved:e}");
+        assert!(
+            bare.change_k <= PERIODIC_TOLERANCE_K,
+            "{name}: {:e}",
+            bare.change_k
+        );
+    }
+}
+
+#[test]
 fn extreme_planets_stay_finite() {
     // Planets at the corners of the v1 range on 2,000 cells, each with the
     // temperatures of its energy balance, its winds and its currents: 8 h
@@ -1104,7 +1226,10 @@ fn golden_fingerprint_of_earth_sea_surface() {
     // different sea surface. Recorded after the other tests passed and the
     // images of out/M4-05 were viewed (ticket M4-05, Result); recorded again
     // when the solver became the multigrid, after the other tests passed
-    // and the images of out/M4-09 were viewed (ticket M4-09).
+    // and the images of out/M4-09 were viewed (ticket M4-09); and when the
+    // balance step replaced the annual correction, after the other tests
+    // passed and the images of out/M4-15 were viewed (ticket M4-15: 7 years
+    // instead of 9, every monthly mean within 3.6 × 10⁻⁴ K of the old one).
     let run = earth_10k();
     let sea = earth_sea_10k();
     let t = &sea.temperature;
@@ -1146,4 +1271,4 @@ fn golden_fingerprint_of_earth_sea_surface() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
-const GOLDEN_FINGERPRINT: u64 = 0x8DAD_2930_A815_9B7D;
+const GOLDEN_FINGERPRINT: u64 = 0xDB9F_73DB_B780_2E2E;

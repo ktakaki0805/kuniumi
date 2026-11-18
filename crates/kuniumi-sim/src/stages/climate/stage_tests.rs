@@ -303,15 +303,16 @@ const UNSETTLED_MESSAGES: [&str; 6] = [
     "the energy balance without currents did not reach its periodic state in 100 years: a \
      monthly-mean sea-level temperature changed by 11.500 K in the last year, whose \
      temperatures are kept, with the winds and currents made from them; they may be those \
-     of a climate in transition (near an ice-albedo bifurcation, mid-way into a snowball)",
+     of a climate in transition (an ice front still advancing on a planet with little heat \
+     transport, or a planet near an ice-albedo bifurcation)",
     "the currents of 2 of the 3 ocean basins did not reach the solver's tolerance (the \
      largest relative residual 3.200e-9): those currents, and the sea surface and moisture \
      made with them, may be inaccurate",
     "the sea surface with currents and upwelling did not reach its periodic state in 100 \
      years: a monthly-mean sea-level temperature changed by 7.405 K in the last year, whose \
      temperatures are kept as the climate's, with the moisture made from them; they may be \
-     those of a climate in transition (near an ice-albedo bifurcation, mid-way into a \
-     snowball)",
+     those of a climate in transition (an ice front still advancing on a planet with little \
+     heat transport, or a planet near an ice-albedo bifurcation)",
     "the moisture did not reach its periodic state in 10 years: a monthly-mean column water \
      vapour changed by 2.006e-6 kg/m^2 in the last year, whose precipitation is kept as the \
      climate's; it may be that of an atmosphere still filling or drying",
@@ -414,8 +415,11 @@ fn golden_fingerprints_of_the_climate_stage() {
     // FNV-1a over the bits of each field's values (f64, little-endian). A
     // change means that the same world has another climate. Recorded by
     // ticket M4-07 after the other tests of this file passed and the maps
-    // of out/M4-07 were viewed; `kuniumi generate` writes the same values
-    // (the CLI's golden test). The temperatures are those of the sea
+    // of out/M4-07 were viewed, and again by ticket M4-15 (the balance step
+    // after each year: Earth's temperatures within the periodic tolerance
+    // of their periodic state, world-breaking) after the other tests passed
+    // and the maps of out/M4-15 were viewed; `kuniumi generate` writes the
+    // same values (the CLI's golden test). The temperatures are those of the sea
     // surface of `sea_surface::tests` and the precipitation that of
     // `moisture::tests` on this world (the moisture's golden value is of
     // the 40,000-cell world in release builds).
@@ -441,34 +445,34 @@ fn golden_fingerprints_of_the_climate_stage() {
 
 /// The fingerprints of `golden_fingerprints_of_the_climate_stage`.
 const GOLDEN_FINGERPRINTS: [(&str, u64); 30] = [
-    ("temperature_annual", 0xC407_97F4_3135_FAC7),
-    ("temperature_m01", 0xDBB8_C10D_9B3C_7290),
-    ("temperature_m02", 0xF3A2_BCB1_8EE1_74C4),
-    ("temperature_m03", 0x6E24_A363_2B50_E273),
-    ("temperature_m04", 0xDC60_8099_5E6E_7BB5),
-    ("temperature_m05", 0x407E_2A96_0221_04E2),
-    ("temperature_m06", 0x585A_0194_64DD_DA62),
-    ("temperature_m07", 0xB0BA_AD60_1CBF_D5EA),
-    ("temperature_m08", 0xEE50_B256_F1D3_E28A),
-    ("temperature_m09", 0x251E_78CF_53AD_A13C),
-    ("temperature_m10", 0x2405_E7FE_B65A_FEEB),
-    ("temperature_m11", 0x3185_0896_30BB_C7AB),
-    ("temperature_m12", 0xA61B_FA35_E6E2_A9C1),
-    ("precipitation_annual", 0x01C8_72A5_B904_0CA7),
-    ("precipitation_m01", 0x917D_3057_53FC_F635),
-    ("precipitation_m02", 0xE3FE_1030_C6B4_7808),
-    ("precipitation_m03", 0x3623_414E_DAAB_D80E),
-    ("precipitation_m04", 0xFFA0_2E79_EF9E_8875),
-    ("precipitation_m05", 0xFDF2_0AC3_3B4C_CAF8),
-    ("precipitation_m06", 0x8A53_322C_AF03_64AE),
-    ("precipitation_m07", 0x30C9_37DB_2480_612C),
-    ("precipitation_m08", 0x7BA9_82C4_DF89_7E8F),
-    ("precipitation_m09", 0xC363_C1C1_D562_71FA),
-    ("precipitation_m10", 0x593C_192A_65A9_ED6E),
-    ("precipitation_m11", 0x2ED7_3AB4_AC1A_825B),
-    ("precipitation_m12", 0x7F68_E14C_8C26_8EFF),
-    ("wind_east", 0x4D90_B326_2268_7B89),
-    ("wind_north", 0xCB8B_5433_0873_7596),
-    ("current_east", 0xFBFB_F83D_17B0_B180),
-    ("current_north", 0x694F_AFD7_6A66_31E1),
+    ("temperature_annual", 0xC59C_B8C0_2AA0_D239),
+    ("temperature_m01", 0x45B2_2CBF_57B9_4CF1),
+    ("temperature_m02", 0x9E59_E313_155E_2FAC),
+    ("temperature_m03", 0x71B1_6112_A62F_5FC1),
+    ("temperature_m04", 0x7E61_3042_75A1_BFC9),
+    ("temperature_m05", 0xE65E_1208_47FF_B36A),
+    ("temperature_m06", 0xA671_BC2E_A774_E238),
+    ("temperature_m07", 0xC664_CB12_670F_40FE),
+    ("temperature_m08", 0xCBB2_C620_D2CC_6353),
+    ("temperature_m09", 0x4FC0_74B6_F094_BBBD),
+    ("temperature_m10", 0x062D_A502_141A_8C1B),
+    ("temperature_m11", 0x463E_1382_4435_0D35),
+    ("temperature_m12", 0xC4A0_9D79_F89F_24F3),
+    ("precipitation_annual", 0x460E_3368_0004_267A),
+    ("precipitation_m01", 0x662A_BDDD_98D2_0A3E),
+    ("precipitation_m02", 0xA89B_38C1_90D0_4916),
+    ("precipitation_m03", 0xCCDE_5455_C709_5DEB),
+    ("precipitation_m04", 0xB862_8E7B_F712_AD1C),
+    ("precipitation_m05", 0x9FC3_9C4B_1C30_DCBB),
+    ("precipitation_m06", 0x88A8_0163_122F_3660),
+    ("precipitation_m07", 0xD40D_22F6_E0E2_5C51),
+    ("precipitation_m08", 0xC65B_1E3A_01C4_BD0C),
+    ("precipitation_m09", 0x6FB4_DB77_EE2E_62B0),
+    ("precipitation_m10", 0xD4EA_8609_23DB_A056),
+    ("precipitation_m11", 0x7673_2C6A_1E2B_9156),
+    ("precipitation_m12", 0x5538_219F_55A0_0315),
+    ("wind_east", 0xCC7E_7D2A_58C7_CC55),
+    ("wind_north", 0x1729_BF53_B825_70C7),
+    ("current_east", 0x7AA1_7F87_BE8E_6AAB),
+    ("current_north", 0x2CA6_FCC4_B1C6_44AF),
 ];

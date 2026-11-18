@@ -875,6 +875,34 @@ section: every change after which an existing seed produces a different world
   under `warnings` (after `stages`; `WarningJson`, an object of `stage`
   and `message` each); a world directory of version 4 is refused
   (`ReadError::Version`) and must be generated again (M4-16).
+- The periodic states of the energy balance and of the sea surface follow
+  each year by the balance step instead of the annual correction of M4-02:
+  the shift of the whole year, its seasonal cycle kept, that closes each
+  cell's annual energy budget with the ice–albedo feedback, solved by the
+  monotone iteration of the warm start (`B a + D L`, and for the sea
+  surface `+ q + ū`, whose multigrid is built once for the warm start and
+  every step), the year's drift weighted by the part of its start a cell
+  remembers, `φ(z) = z / (e^z − 1)` with `z = B P / C`
+  (`EnergyBalance::memory`), and each cell's shift halved while its drift
+  swings from year to year (`STEP_DAMPING_HALVINGS`, 6).
+  `energy_balance::BALANCE_TOLERANCE_K` (10⁻⁴ K) and `BALANCE_ITERATIONS`
+  (200). The criterion (10⁻³ K, at most
+  100 years) is unchanged. Earth is periodic in 7 years on 10,000 to
+  160,000 cells (8 to 12 before), its energy balance within 10⁻⁴ K and its
+  sea surface within 3 × 10⁻⁴ K of their states converged to 10⁻⁷ K on
+  40,000 and 160,000 cells (the correction's up to 1.05 × 10⁻³ K), and
+  faster on 650,000 cells. Planets with little heat transport (8 h,
+  0.1 bar; 12 h, 0.3 bar) are periodic in 13 to 30 years on 10,000 cells
+  (107 to 267 before) and 17 to 93 on 40,000 (53 to 988); planets near an
+  ice–albedo bifurcation in 11 to 16 years (59 to 113): Earth at
+  1,296 W/m² is periodic at its snowball in 16 years instead of being
+  reported mid-way into it. Thin, fast planets with several stable
+  periodic states may stop at another
+  one than the years one after another, with less ice (decided with the
+  owner); the slowest still need up to 93 years and may need more than
+  100 on finer grids. The warning of a model that did not settle now
+  names that case, an ice front still advancing on a planet with little
+  heat transport, before a planet near an ice–albedo bifurcation (M4-15).
 
 ### Removed
 
@@ -966,9 +994,26 @@ section: every change after which an existing seed produces a different world
   ×29.6); Earth keeps ×100. The window title shows the relief with at most
   two decimals, and the comment of `MAX_RELIEF` gives Earth's deepest point
   as about 11 km below the sea level instead of 7 km (MV-05).
+- The energy balance and the sea surface of the planets of 3,650-day years
+  at 8 h, 0.1 bar and 2,500 W/m² with the most water (corners 56–59 of the
+  bounds tests) no longer alternate between two years, by up to 14.6 K at
+  the polar sea: the annual correction of M4-02 overshot where the ocean
+  forgets its start within a long year, while the model's own years have a
+  stable periodic state, which the balance step reaches in 10 years. No
+  energy balance or sea surface of the 128 corners is reported unconverged
+  any more (M4-15).
 
 ### World-breaking
 
+- M4-15: every world's climate changes: the 30 fields of the Climate
+  stage, from the periodic states of the balance step (Earth, seed 1:
+  every monthly temperature within 6.4 × 10⁻⁴ K of the old one on 10,000
+  cells, 1.03 × 10⁻³ K on 40,000 and 4.1 × 10⁻⁴ K on 160,000, about the
+  old ones' own distance from the periodic state; the winds, currents and
+  precipitation with them), and more for planets that were slow, which
+  reach their periodic state, or that alternated between two years; the
+  golden values of M4-02 to M4-07 and the CLI's are recorded again. The
+  other fields and the sea level are unchanged.
 - M4-07: every world gains the Climate stage and its 30 fields (a world
   directory 60 files more); every field that existed before keeps its
   values bit for bit, as erosion keeps its uniform 1 m/yr.

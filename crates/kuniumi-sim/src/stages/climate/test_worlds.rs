@@ -4,9 +4,9 @@
 //! with currents and upwelling, each computed once per test process, so
 //! that the tests of the energy balance, the circulation, the sea surface
 //! and the moisture use the same runs. On 40,000 cells, the world of the
-//! calibration of ticket M4-02, in release builds (about 12 s for the
-//! energy balance, 14 s more for the sea surface; ticket M4-09); on 10,000
-//! cells in debug builds, where the world differs.
+//! calibration of ticket M4-02, in release builds (about 10 s for the
+//! energy balance, 11 s more for the sea surface, 7 years each; ticket
+//! M4-15); on 10,000 cells in debug builds, where the world differs.
 
 use std::sync::OnceLock;
 
