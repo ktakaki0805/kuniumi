@@ -709,8 +709,9 @@ pub struct Moisture {
     pub converged: bool,
     /// The sub-steps whose active set did not settle.
     pub unsettled_steps: u32,
-    /// The solves that did not reach their tolerance: of the months'
-    /// potentials and of the sub-steps.
+    /// The monthly potentials and the sub-steps that had a solve that did
+    /// not reach its tolerance (a sub-step with several such solves counts
+    /// once).
     pub failed_solves: u32,
 }
 

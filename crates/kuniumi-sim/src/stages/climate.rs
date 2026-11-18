@@ -75,11 +75,12 @@
 //! A model that does not reach its periodic state keeps the months of its
 //! last year, which may be those of a climate in transition (near an
 //! ice–albedo bifurcation, mid-way into a snowball; [`energy_balance`],
-//! "The periodic state"); ticket M4-16 reports it as a warning. Of the 128
-//! corners of the v1 range on 1,000 cells (seed 3), 4 energy balances and
-//! 2 sea surfaces are not periodic after 100 years and 11 moistures after
-//! 10 (ticket M4-07). The temperatures have no fixed bound at the corners
-//! (monthly means from about 95 K to about 11,600 K, ticket M4-02).
+//! "The periodic state"), and the stage reports it as a warning of the
+//! world (below, "Warnings"). Of the 128 corners of the v1 range on 1,000
+//! cells (seed 3), 4 energy balances and 2 sea surfaces are not periodic
+//! after 100 years and 11 moistures after 10 (tickets M4-07, M4-16). The
+//! temperatures have no fixed bound at the corners (monthly means from
+//! about 95 K to about 11,600 K, ticket M4-02).
 //!
 //! The climate is that of the relief of the Crust stage: the Erosion stage
 //! that follows changes the land but not the climate (the alternation of
@@ -113,6 +114,33 @@
 //! currents are annual by construction. At 650,000 cells the 30 fields take
 //! 156 MB.
 //!
+//! # Warnings
+//!
+//! [`Climate::warnings`] (ticket M4-16) gives a message for each of these,
+//! in the order the models ran, and [`run`] adds them to
+//! [`World::warnings`] in the stage's name (`climate`), so that they are
+//! kept in `world.json` and printed by `kuniumi generate`:
+//!
+//! 1. the energy balance without currents did not reach its periodic state
+//!    ([`Temperature::converged`]), with its years and last change;
+//! 2. the solve of the currents of a basin did not reach its tolerance
+//!    ([`OceanCurrents::solves`]), with the number of such basins and their
+//!    largest relative residual;
+//! 3. the sea surface did not reach its periodic state, as 1;
+//! 4. the moisture did not reach its periodic state
+//!    ([`Moisture::converged`]), with its years and last change;
+//! 5. sub-steps of the moisture did not settle their active set
+//!    ([`Moisture::unsettled_steps`]);
+//! 6. monthly potentials and sub-steps of the moisture had a solve that did
+//!    not reach its tolerance ([`Moisture::failed_solves`]).
+//!
+//! Each message is one line of ASCII: the change of a temperature in kelvin
+//! with 3 decimals (above the 10⁻³ K of
+//! [`energy_balance::PERIODIC_TOLERANCE_K`] where it applies), that of the
+//! vapour and a residual with 4 significant digits in exponent notation
+//! (the vapour's last change spans 10⁻⁶ to 55 kg/m² at the corners), in
+//! core's exact decimal formatting, so the same on every platform.
+//!
 //! # Cost
 //!
 //! About 6 s on 10,000 cells (release; 54 s in debug builds) and 11.4
@@ -130,16 +158,16 @@ pub mod ocean;
 pub mod sea_surface;
 
 use kuniumi_sphere::SphereGrid;
-use kuniumi_world::{FieldError, PlanetParams, World};
+use kuniumi_world::{FieldError, PlanetParams, Warning, World};
 
 use self::circulation::{Circulation, monthly_circulation};
-use self::energy_balance::{Temperature, monthly_temperature};
+use self::energy_balance::{SUBSTEPS_PER_MONTH, Temperature, monthly_temperature};
 use self::insolation::MONTHS;
-use self::moisture::{Moisture, monthly_moisture};
+use self::moisture::{MAX_ACTIVE_SET_ITERATIONS, Moisture, monthly_moisture};
 use self::ocean::{OceanCurrents, ocean_currents};
 use self::sea_surface::{SeaSurface, monthly_sea_surface_temperature};
-use crate::SimError;
 use crate::stages::crust::SURFACE_HEIGHT;
+use crate::{SimError, StageId};
 
 /// The field of the annual-mean surface temperature (K): the mean of the
 /// twelve [`TEMPERATURE_MONTHS`].
@@ -290,6 +318,29 @@ pub fn climate(
 }
 
 impl Climate {
+    /// The warnings of the climate (module documentation, "Warnings"): a
+    /// message for each model that did not reach its periodic state and for
+    /// each kind of solve that did not reach its tolerance, in the order the
+    /// models ran; none for a climate whose models all settled. The Climate
+    /// stage adds them to the world; the Earth calibration (ticket M4-08),
+    /// which runs [`climate`] outside the pipeline, can report them too.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        warnings.extend(periodic_temperature_warning(
+            "the energy balance without currents",
+            &self.energy_balance,
+            "whose temperatures are kept, with the winds and currents made from them",
+        ));
+        warnings.extend(currents_warning(&self.currents));
+        warnings.extend(periodic_temperature_warning(
+            "the sea surface with currents and upwelling",
+            &self.sea_surface.temperature,
+            "whose temperatures are kept as the climate's, with the moisture made from them",
+        ));
+        warnings.extend(moisture_warnings(&self.moisture));
+        warnings
+    }
+
     /// The fields of the Climate stage, in the order [`run`] adds them,
     /// with their units: [`TEMPERATURE_ANNUAL`], [`TEMPERATURE_MONTHS`],
     /// [`PRECIPITATION_ANNUAL`], [`PRECIPITATION_MONTHS`], [`WIND_EAST`],
@@ -326,6 +377,79 @@ impl Climate {
         fields.push((CURRENT_NORTH, "m/s", currents.current_north_m_s));
         fields
     }
+}
+
+/// The warning of the energy balance `model` (its name in the message)
+/// whose periodic state is `temperature`, if it did not converge; `kept`
+/// says what is kept of its last year.
+fn periodic_temperature_warning(
+    model: &str,
+    temperature: &Temperature,
+    kept: &str,
+) -> Option<String> {
+    (!temperature.converged).then(|| {
+        format!(
+            "{model} did not reach its periodic state in {} years: a monthly-mean sea-level \
+             temperature changed by {:.3} K in the last year, {kept}; they may be those of a \
+             climate in transition (near an ice-albedo bifurcation, mid-way into a snowball)",
+            temperature.years, temperature.change_k
+        )
+    })
+}
+
+/// The warning of `currents` if the solve of a basin did not converge: how
+/// many of the basins, and the largest relative residual among them.
+fn currents_warning(currents: &OceanCurrents) -> Option<String> {
+    let failed: Vec<f64> = currents
+        .solves
+        .iter()
+        .filter(|s| !s.converged())
+        .map(|s| s.relative_residual)
+        .collect();
+    let largest = failed.iter().fold(None, |max: Option<f64>, &r| match max {
+        Some(m) if m >= r => Some(m),
+        _ => Some(r),
+    })?;
+    Some(format!(
+        "the currents of {} of the {} ocean basins did not reach the solver's tolerance (the \
+         largest relative residual {largest:.3e}): those currents, and the sea surface and \
+         moisture made with them, may be inaccurate",
+        failed.len(),
+        currents.solves.len()
+    ))
+}
+
+/// The warnings of `moisture`: its periodic state, its sub-steps whose
+/// active set did not settle and its solves that did not converge, in this
+/// order, each if it applies.
+fn moisture_warnings(moisture: &Moisture) -> Vec<String> {
+    let mut warnings = Vec::new();
+    if !moisture.converged {
+        warnings.push(format!(
+            "the moisture did not reach its periodic state in {} years: a monthly-mean column \
+             water vapour changed by {:.3e} kg/m^2 in the last year, whose precipitation is kept \
+             as the climate's; it may be that of an atmosphere still filling or drying",
+            moisture.years, moisture.change_kg_m2
+        ));
+    }
+    if moisture.unsettled_steps > 0 {
+        // Every year runs `SUBSTEPS_PER_MONTH` sub-steps a month.
+        let substeps = u64::from(moisture.years) * (MONTHS * SUBSTEPS_PER_MONTH) as u64;
+        warnings.push(format!(
+            "{} of the moisture's {substeps} sub-steps did not settle the active set within \
+             {MAX_ACTIVE_SET_ITERATIONS} solves: each kept the set of its last solve, in which a \
+             cell below the threshold rains a negative excess",
+            moisture.unsettled_steps
+        ));
+    }
+    if moisture.failed_solves > 0 {
+        warnings.push(format!(
+            "{} of the moisture's monthly potentials and sub-steps had a solve that did not \
+             reach its tolerance: its precipitation may be inaccurate",
+            moisture.failed_solves
+        ));
+    }
+    warnings
 }
 
 /// The names of the fields of the Climate stage, in their order.
@@ -380,12 +504,13 @@ fn annual_mean(months: &[Vec<f64>; MONTHS]) -> Vec<f64> {
 
 /// Runs the Climate stage on `world` (a
 /// [`StageFn`](crate::pipeline::StageFn); module documentation, "The
-/// Climate stage").
+/// Climate stage"): adds its fields, then its warnings
+/// ([`Climate::warnings`]) in the stage's name.
 ///
 /// # Errors
 ///
 /// [`SimError::Field`] if the world already has one of the fields; the
-/// world is then unchanged and no progress is reported.
+/// world (its warnings too) is then unchanged and no progress is reported.
 ///
 /// # Panics
 ///
@@ -401,17 +526,23 @@ pub fn run(world: &mut World, progress: &mut dyn FnMut(f64)) -> Result<(), SimEr
         Some(field) => &field.values,
         None => panic!("the Climate stage needs the field `{SURFACE_HEIGHT}` of the Crust stage"),
     };
-    let fields = climate(
+    let climate = climate(
         &world.params,
         &world.grid,
         heights_m,
         world.sea_level_m,
         progress,
-    )
-    .fields();
-    for (name, unit, values) in fields {
+    );
+    let warnings = climate.warnings();
+    for (name, unit, values) in climate.fields() {
         world.add_field(name, unit, values)?;
     }
+    world
+        .warnings
+        .extend(warnings.into_iter().map(|message| Warning {
+            stage: StageId::Climate.name().into(),
+            message,
+        }));
     Ok(())
 }
 

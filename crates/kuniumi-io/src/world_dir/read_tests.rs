@@ -3,7 +3,7 @@
 //! - `reads_back_a_generated_world_bit_exactly` (20,000 cells, from
 //!   `kuniumi_sim::generate`) and `reads_back_worlds_of_every_shape`;
 //! - `rejects_other_format_versions` and `rejects_malformed_world_json`
-//!   (`world.json`);
+//!   (`world.json`, with its warnings since ticket M4-16);
 //! - `rejects_a_listed_reserved_name_even_with_its_file` (ticket M2-19);
 //! - `rejects_bad_kfield_files` and `rejects_bad_grid_files`;
 //! - `a_missing_directory_is_an_io_error` and `errors_name_their_file`;
@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use kuniumi_world::{ErosionSettings, Field, PlanetParams, Settings, World};
 
 use super::tests::{
-    HYPSOMETRY_RESERVED, RIVERS_RESERVED, awkward_world, octahedron_world, world, world_with_relief,
+    HYPSOMETRY_RESERVED, RIVERS_RESERVED, awkward_world, octahedron_world, world,
+    world_with_relief, world_with_warnings,
 };
 use super::*;
 
@@ -83,6 +84,7 @@ fn contents(world: &World) -> Vec<String> {
         format!("seed {}", world.seed),
         format!("sea level {:#x}", world.sea_level_m.to_bits()),
         format!("stages {:?}", world.stages),
+        format!("warnings {:?}", world.warnings),
     ];
     let grid = &world.grid;
     let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
@@ -176,6 +178,9 @@ fn reads_back_worlds_of_every_shape() {
         ("no_fields", no_fields),
         ("negative_zero", negative_zero),
         ("relief", world_with_relief()),
+        // Warnings of two stages, with every character to escape (ticket
+        // M4-16).
+        ("warnings", world_with_warnings()),
     ];
     for (name, world) in cases {
         let (dir, copy) = (scratch(name), scratch(&format!("{name}_copy")));
@@ -223,11 +228,11 @@ fn assert_error(what: &str, err: &ReadError, dir: &Path, file: &str, kind: &str,
 
 #[test]
 fn rejects_other_format_versions() {
-    for version in ["0", "1", "2", "3", "5", "18446744073709551615"] {
+    for version in ["0", "1", "2", "3", "4", "6", "18446744073709551615"] {
         let (dir, err) = read_spoiled("version", |dir| {
             edit_world_json(dir, |text| {
                 text.replace(
-                    "\"format_version\": 4,",
+                    "\"format_version\": 5,",
                     &format!("\"format_version\": {version},"),
                 )
             })
@@ -240,21 +245,41 @@ fn rejects_other_format_versions() {
             "version",
             &format!(
                 "world directory format version {version} is not supported: this build reads \
-                 only version 4 (generate the world again)"
+                 only version 5 (generate the world again)"
             ),
         );
         remove(&dir);
     }
+    // A version 4 directory as ticket M4-07 wrote it: without `warnings`
+    // (ticket M4-16 refuses it rather than read it as a world without
+    // warnings, which its generator never checked).
+    let (dir, err) = read_spoiled("version_4", |dir| {
+        edit_world_json(dir, |text| {
+            let text = without_warnings(&text);
+            text.replace("\"format_version\": 5,", "\"format_version\": 4,")
+        })
+    });
+    assert_error(
+        "version 4",
+        &err,
+        &dir,
+        "world.json",
+        "version",
+        "world directory format version 4 is not supported: this build reads only version 5 \
+         (generate the world again)",
+    );
+    remove(&dir);
     // A version 3 directory as ticket M3-07 wrote it: the planet without
     // `perihelion_longitude_rad` (ticket M4-01 refuses it rather than read
     // it with Earth's value, which its generator never had).
     let (dir, err) = read_spoiled("version_3", |dir| {
         edit_world_json(dir, |text| {
+            let text = without_warnings(&text);
             let start = text.find("\n    \"perihelion_longitude_rad\": ").unwrap();
             let end = start + 1 + text[start + 1..].find('\n').unwrap();
             let text = format!("{}{}", &text[..start], &text[end..]);
             assert!(!text.contains("perihelion"), "{text}");
-            text.replace("\"format_version\": 4,", "\"format_version\": 3,")
+            text.replace("\"format_version\": 5,", "\"format_version\": 3,")
         })
     });
     assert_error(
@@ -263,7 +288,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 3 is not supported: this build reads only version 4 \
+        "world directory format version 3 is not supported: this build reads only version 5 \
          (generate the world again)",
     );
     remove(&dir);
@@ -272,11 +297,12 @@ fn rejects_other_format_versions() {
     // default erosion settings, which its generator never had).
     let (dir, err) = read_spoiled("version_2", |dir| {
         edit_world_json(dir, |text| {
+            let text = without_warnings(&text);
             let start = text.find(",\n    \"erosion\": {").unwrap();
             let end = start + text[start..].find("\n    }").unwrap() + "\n    }".len();
             let text = format!("{}{}", &text[..start], &text[end..]);
             assert!(text.contains("\"allow_partial\": true\n  },"), "{text}");
-            text.replace("\"format_version\": 4,", "\"format_version\": 2,")
+            text.replace("\"format_version\": 5,", "\"format_version\": 2,")
         })
     });
     assert_error(
@@ -285,7 +311,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 2 is not supported: this build reads only version 4 \
+        "world directory format version 2 is not supported: this build reads only version 5 \
          (generate the world again)",
     );
     remove(&dir);
@@ -294,7 +320,7 @@ fn rejects_other_format_versions() {
     let (dir, err) = read_spoiled("version_first", |dir| {
         edit_world_json(dir, |text| {
             text.replace(
-                "\"format_version\": 4,",
+                "\"format_version\": 5,",
                 "\"format_version\": 1, \"old\": 0,",
             )
         })
@@ -305,7 +331,7 @@ fn rejects_other_format_versions() {
         &dir,
         "world.json",
         "version",
-        "world directory format version 1 is not supported: this build reads only version 4 \
+        "world directory format version 1 is not supported: this build reads only version 5 \
          (generate the world again)",
     );
     remove(&dir);
@@ -314,7 +340,7 @@ fn rejects_other_format_versions() {
     let (dir, err) = read_spoiled("version_layout", |dir| {
         edit_world_json(dir, |text| {
             let text = text
-                .replace("\"format_version\": 4,", "\"format_version\": 5,")
+                .replace("\"format_version\": 5,", "\"format_version\": 6,")
                 .replace("\"seed\": 1,", "")
                 .replace(
                     "\"rotation\": \"free\"",
@@ -336,12 +362,12 @@ fn rejects_other_format_versions() {
         })
     });
     assert_error(
-        "version 5, another layout",
+        "version 6, another layout",
         &err,
         &dir,
         "world.json",
         "version",
-        "world directory format version 5 is not supported: this build reads only version 4 \
+        "world directory format version 6 is not supported: this build reads only version 5 \
          (generate the world again)",
     );
     remove(&dir);
@@ -480,24 +506,86 @@ fn rejects_malformed_world_json() {
         ),
         (
             "no version",
-            Box::new(replace("\"format_version\": 4,", "")),
+            Box::new(replace("\"format_version\": 5,", "")),
             "missing field `format_version`",
         ),
         (
             "a version that is not a number",
             Box::new(replace(
-                "\"format_version\": 4,",
-                "\"format_version\": \"4\",",
+                "\"format_version\": 5,",
+                "\"format_version\": \"5\",",
             )),
-            "`format_version` is \"4\", not an unsigned integer",
+            "`format_version` is \"5\", not an unsigned integer",
         ),
         (
             "a fractional version",
             Box::new(replace(
-                "\"format_version\": 4,",
-                "\"format_version\": 4.0,",
+                "\"format_version\": 5,",
+                "\"format_version\": 5.0,",
             )),
-            "`format_version` is 4.0, not an unsigned integer",
+            "`format_version` is 5.0, not an unsigned integer",
+        ),
+        // The warnings (ticket M4-16): an array of objects of a stage and a
+        // message, both strings.
+        (
+            "no warnings",
+            Box::new(replace("\n  \"warnings\": [],", "")),
+            "missing field `warnings`",
+        ),
+        (
+            "warnings as an object",
+            Box::new(replace("\"warnings\": [],", "\"warnings\": {},")),
+            "invalid type: map, expected a sequence",
+        ),
+        (
+            "null for the warnings",
+            Box::new(replace("\"warnings\": [],", "\"warnings\": null,")),
+            "invalid type: null, expected a sequence",
+        ),
+        (
+            "a warning as an array",
+            Box::new(replace(
+                "\"warnings\": [],",
+                "\"warnings\": [{\"stage\": \"climate\", \"message\": \"\"}, [\"climate\", \"x\"]],",
+            )),
+            "entry 1 of `warnings` is not a JSON object",
+        ),
+        (
+            "a warning as a string",
+            Box::new(replace(
+                "\"warnings\": [],",
+                "\"warnings\": [\"climate: x\"],",
+            )),
+            "entry 0 of `warnings` is not a JSON object",
+        ),
+        (
+            "a warning that is null",
+            Box::new(replace("\"warnings\": [],", "\"warnings\": [null],")),
+            "entry 0 of `warnings` is not a JSON object",
+        ),
+        (
+            "a warning without its message",
+            Box::new(replace(
+                "\"warnings\": [],",
+                "\"warnings\": [{\"stage\": \"climate\"}],",
+            )),
+            "missing field `message`",
+        ),
+        (
+            "an unknown key of a warning",
+            Box::new(replace(
+                "\"warnings\": [],",
+                "\"warnings\": [{\"stage\": \"climate\", \"message\": \"x\", \"code\": 1}],",
+            )),
+            "unknown field `code`",
+        ),
+        (
+            "a stage that is not a string",
+            Box::new(replace(
+                "\"warnings\": [],",
+                "\"warnings\": [{\"stage\": 3, \"message\": \"x\"}],",
+            )),
+            "invalid type: integer `3`, expected a string",
         ),
         (
             "a missing key",
@@ -679,6 +767,14 @@ fn rejects_a_listed_reserved_name_even_with_its_file() {
         HYPSOMETRY_RESERVED,
     );
     remove(&dir);
+}
+
+/// `text`, the `world.json` of a world without warnings, without its key
+/// `warnings`: the layout of format version 4 and before.
+fn without_warnings(text: &str) -> String {
+    let line = "\n  \"warnings\": [],";
+    assert!(text.contains(line), "{text}");
+    text.replacen(line, "", 1)
 }
 
 /// The length of `bytes` without its final newline.
@@ -1081,7 +1177,7 @@ fn spoiled_files_read_from_memory_fail_as_from_disk() {
         "truncated" => put(dir, &file, &full[..full.len() - 3]),
         "trailing" => put(dir, &file, &[full.as_slice(), &[0]].concat()),
         "version" => edit_world_json(dir, |t| {
-            t.replace("\"format_version\": 4", "\"format_version\": 9")
+            t.replace("\"format_version\": 5", "\"format_version\": 9")
         }),
         "grid" => {
             let bytes = bytes_of(&dir.join(GRID_FILE));

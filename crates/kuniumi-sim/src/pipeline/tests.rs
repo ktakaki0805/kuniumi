@@ -10,9 +10,13 @@
 //! - `rejects_a_non_finite_stage_output`, `rejects_a_non_finite_sea_level`
 //!   and `rejects_a_class_value_that_is_not_a_class` (debug builds);
 //! - `rejects_progress_outside_0_1` (debug builds);
+//! - `keeps_the_warnings_of_the_stages_in_order`,
+//!   `rejects_a_warning_that_names_another_stage` and
+//!   `rejects_a_stage_that_drops_a_warning` (both debug builds; ticket
+//!   M4-16);
 //! - `the_real_table`.
 
-use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, World};
+use kuniumi_world::{FieldError, ParamError, PlanetParams, Settings, Warning, World};
 
 use super::{Implementation, StageFn, implementation, next_stage, run};
 use crate::{Progress, SimError, StageId, stages};
@@ -188,6 +192,7 @@ fn runs_every_stage_in_pipeline_order() {
         assert_eq!(next_stage(&world, &table(&|_| Entry::Fake)), None);
         assert_eq!(world.settings, settings(allow_partial));
         assert_eq!((world.seed, world.grid.len()), (1, CELLS as usize));
+        assert_eq!(world.warnings, []);
     }
 }
 
@@ -543,6 +548,107 @@ fn overshooting_tectonics(_: &mut World, progress: &mut dyn FnMut(f64)) -> Resul
 #[should_panic(expected = "stage `tectonics` reported progress 1.5")]
 fn rejects_progress_outside_0_1() {
     let lookup = |stage: StageId| only_tectonics(stage, overshooting_tectonics);
+    let _ = run(
+        &PlanetParams::earth(),
+        &settings(true),
+        1,
+        &lookup,
+        &mut |_| {},
+    );
+}
+
+/// The warning `message` of `stage`.
+fn warning(stage: StageId, message: &str) -> Warning {
+    Warning {
+        stage: stage.name().into(),
+        message: message.into(),
+    }
+}
+
+/// A Tectonics stage that raises two warnings.
+fn warning_tectonics(world: &mut World, _: &mut dyn FnMut(f64)) -> Result<(), SimError> {
+    world.warnings.push(warning(StageId::Tectonics, "first"));
+    world.warnings.push(warning(StageId::Tectonics, "second"));
+    Ok(())
+}
+
+/// A Crust stage that raises one warning after those of the stages before.
+fn warning_crust(world: &mut World, _: &mut dyn FnMut(f64)) -> Result<(), SimError> {
+    assert_eq!(world.warnings.len(), 2, "the Tectonics stage's warnings");
+    world.warnings.push(warning(StageId::Crust, "third"));
+    Ok(())
+}
+
+#[test]
+fn keeps_the_warnings_of_the_stages_in_order() {
+    let lookup = |stage: StageId| match stage {
+        StageId::Tectonics => Implementation::Stage(warning_tectonics),
+        StageId::Crust => Implementation::Stage(warning_crust),
+        _ => Implementation::Missing,
+    };
+    let world = run(
+        &PlanetParams::earth(),
+        &settings(true),
+        1,
+        &lookup,
+        &mut |_| {},
+    )
+    .expect("a partial world");
+    assert_eq!(world.stages, ["grid", "tectonics", "crust"]);
+    assert_eq!(
+        world.warnings,
+        [
+            warning(StageId::Tectonics, "first"),
+            warning(StageId::Tectonics, "second"),
+            warning(StageId::Crust, "third"),
+        ]
+    );
+}
+
+/// A Crust stage that raises a warning in the name of the Tectonics stage.
+#[cfg(debug_assertions)]
+fn misnamed_warning_crust(world: &mut World, _: &mut dyn FnMut(f64)) -> Result<(), SimError> {
+    world.warnings.push(warning(StageId::Tectonics, "not mine"));
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(
+    expected = "stage `crust` raised a warning of another stage: Warning { stage: \"tectonics\", \
+                message: \"not mine\" }"
+)]
+fn rejects_a_warning_that_names_another_stage() {
+    let lookup = |stage: StageId| match stage {
+        StageId::Tectonics => Implementation::Stage(warning_tectonics),
+        StageId::Crust => Implementation::Stage(misnamed_warning_crust),
+        _ => Implementation::Missing,
+    };
+    let _ = run(
+        &PlanetParams::earth(),
+        &settings(true),
+        1,
+        &lookup,
+        &mut |_| {},
+    );
+}
+
+/// A Crust stage that drops the last warning of the stages before it.
+#[cfg(debug_assertions)]
+fn dropping_crust(world: &mut World, _: &mut dyn FnMut(f64)) -> Result<(), SimError> {
+    world.warnings.pop();
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "stage `crust` changed the warnings of the stages before it")]
+fn rejects_a_stage_that_drops_a_warning() {
+    let lookup = |stage: StageId| match stage {
+        StageId::Tectonics => Implementation::Stage(warning_tectonics),
+        StageId::Crust => Implementation::Stage(dropping_crust),
+        _ => Implementation::Missing,
+    };
     let _ = run(
         &PlanetParams::earth(),
         &settings(true),

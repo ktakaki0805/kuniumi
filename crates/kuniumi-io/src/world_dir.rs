@@ -39,10 +39,11 @@
 //!
 //! and last `world.json` ([`METADATA_FILE`]), the metadata: format version,
 //! generator version, seed, settings (with the erosion settings), planet
-//! parameters, sea level, the stages that have run and the field list. An
-//! existing `world.json`, `metrics.txt`, `hypsometry.png` and `rivers.png`
-//! are removed before the grid is written, and the new `world.json` is
-//! written last, so a directory with a `world.json` holds every file it
+//! parameters, sea level, the stages that have run, the warnings they
+//! raised (ticket M4-16) and the field list. An existing `world.json`,
+//! `metrics.txt`, `hypsometry.png` and `rivers.png` are removed before the
+//! grid is written, and the new `world.json` is written last, so a
+//! directory with a `world.json` holds every file it
 //! lists, from the same world, even after a write that failed halfway, and
 //! no metrics or river map of another world. Other files in the directory
 //! are left alone.
@@ -101,7 +102,7 @@
 //!
 //! ```json
 //! {
-//!   "format_version": 4,
+//!   "format_version": 5,
 //!   "generator_version": "0.0.1",
 //!   "seed": 1,
 //!   "settings": {
@@ -135,6 +136,7 @@
 //!   "stages": [
 //!     "grid"
 //!   ],
+//!   "warnings": [],
 //!   "fields": [
 //!     {
 //!       "name": "cell_area",
@@ -149,6 +151,11 @@
 //!   ]
 //! }
 //! ```
+//!
+//! A warning is an object of its stage and its message (`{"stage":
+//! "climate", "message": "…"}`), in the world's order; serde_json escapes
+//! the quotation mark, the backslash and the control characters of a
+//! message and writes the rest as UTF-8.
 //!
 //! [`read()`] requires the layout that [`write()`] writes: an object for
 //! each struct and a string for each enum (serde would also accept an array
@@ -169,7 +176,7 @@ use kuniumi_sim::stages::erosion::{DISCHARGE, DRAINAGE_AREA};
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
     ErosionSettings, Field, FieldKind, GENERATOR_VERSION, PlanetParams, RotationRegime, Settings,
-    TectonicRegime, World,
+    TectonicRegime, Warning, World,
 };
 use serde::{Deserialize, Serialize};
 
@@ -180,13 +187,15 @@ use crate::{Rgb8, field_file, grid_file, png, render};
 /// The version of the layout of a world directory, the key
 /// `format_version` of `world.json`: 1 (ticket M2-01) had no grid file, 2
 /// (ticket MV-01) added [`GRID_FILE`], 3 (ticket M3-07) added the erosion
-/// settings, `settings.erosion` ([`ErosionJson`]), 4 (ticket M4-01) adds
-/// the longitude of perihelion, `planet.perihelion_longitude_rad`.
-/// [`read()`] reads only this version: a directory of an earlier one is
-/// generated again (a version-2 world read with the default erosion
-/// settings, or a version-3 world with Earth's longitude of perihelion,
-/// would record values that its generator never had).
-pub const FORMAT_VERSION: u32 = 4;
+/// settings, `settings.erosion` ([`ErosionJson`]), 4 (ticket M4-01) added
+/// the longitude of perihelion, `planet.perihelion_longitude_rad`, 5
+/// (ticket M4-16) adds the warnings of the stages, `warnings`
+/// ([`WarningJson`]). [`read()`] reads only this version: a directory of an
+/// earlier one is generated again (a version-2 world read with the default
+/// erosion settings, a version-3 world with Earth's longitude of
+/// perihelion, or a version-4 world without warnings, would record values
+/// that its generator never had or a climate that it never checked).
+pub const FORMAT_VERSION: u32 = 5;
 
 /// The name of the metadata file.
 pub const METADATA_FILE: &str = "world.json";
@@ -294,6 +303,8 @@ pub struct WorldJson {
     pub sea_level_m: f64,
     /// [`World::stages`].
     pub stages: Vec<String>,
+    /// [`World::warnings`], in their order (format version 5, ticket M4-16).
+    pub warnings: Vec<WarningJson>,
     /// The fields, in the world's order; each has the files `<name>.kfield`
     /// and `<name>.png`, neither of them one of [`FIXED_FILES`].
     pub fields: Vec<FieldJson>,
@@ -382,6 +393,16 @@ pub enum TectonicsJson {
     StagnantLid,
 }
 
+/// One warning of [`World::warnings`] in `world.json` (ticket M4-16).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WarningJson {
+    /// [`Warning::stage`].
+    pub stage: String,
+    /// [`Warning::message`].
+    pub message: String,
+}
+
 /// One entry of the field list of `world.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -416,6 +437,7 @@ impl WorldJson {
             planet: PlanetJson::of(&world.params),
             sea_level_m: world.sea_level_m,
             stages: world.stages.clone(),
+            warnings: world.warnings.iter().map(WarningJson::of).collect(),
             fields: world.fields.iter().map(FieldJson::of).collect(),
         }
     }
@@ -545,6 +567,24 @@ impl PlanetJson {
                 TectonicsJson::PlateTectonics => TectonicRegime::PlateTectonics,
                 TectonicsJson::StagnantLid => TectonicRegime::StagnantLid,
             },
+        }
+    }
+}
+
+impl WarningJson {
+    /// The mirror of `warning`.
+    pub fn of(warning: &Warning) -> Self {
+        Self {
+            stage: warning.stage.clone(),
+            message: warning.message.clone(),
+        }
+    }
+
+    /// The warning this mirrors, the inverse of [`of`](Self::of).
+    pub fn to_warning(&self) -> Warning {
+        Warning {
+            stage: self.stage.clone(),
+            message: self.message.clone(),
         }
     }
 }
@@ -1319,9 +1359,11 @@ impl std::error::Error for ReadError {
 ///
 /// The planet parameters and the settings are returned as stored, not
 /// validated ([`PlanetParams::validate`], [`Settings::validate`]), as
-/// [`write()`] does not validate them either; the generator version is not
-/// checked (the grid is stored, so a world reads back whatever generator
-/// wrote it, as long as the format versions are the ones this build reads).
+/// [`write()`] does not validate them either, and so are the stages and the
+/// warnings (a warning's stage is not checked against the stages); the
+/// generator version is not checked (the grid is stored, so a world reads
+/// back whatever generator wrote it, as long as the format versions are the
+/// ones this build reads).
 ///
 /// # Errors
 ///
@@ -1331,9 +1373,10 @@ impl std::error::Error for ReadError {
 ///   first (a directory that does not exist);
 /// - [`ReadError::Version`] if `format_version` in `world.json` is not
 ///   [`FORMAT_VERSION`] (it is checked before the rest of the file, which
-///   needs only to be JSON with an object at the top level), or a
-///   `.kfield` or `.kgrid` file has another version of its format
-///   ([`field_file::FORMAT_VERSION`], [`grid_file::FORMAT_VERSION`]);
+///   needs only to be JSON with an object at the top level; a directory of
+///   version 4, without warnings, among them), or a `.kfield` or `.kgrid`
+///   file has another version of its format ([`field_file::FORMAT_VERSION`],
+///   [`grid_file::FORMAT_VERSION`]);
 /// - [`ReadError::Invalid`] if `world.json` is not JSON in the layout of
 ///   [`WorldJson`] (a missing, unknown or ill-typed key, a number out of
 ///   range, text after the object: serde_json's message, with line and
@@ -1397,6 +1440,7 @@ pub fn read_with<R: Read>(
         grid,
         sea_level_m: json.sea_level_m,
         stages: json.stages,
+        warnings: json.warnings.iter().map(WarningJson::to_warning).collect(),
         fields,
     })
 }
@@ -1469,9 +1513,10 @@ fn parse_world_json(bytes: &[u8]) -> Result<WorldJson, Problem> {
 
 /// Checks that the values of the top-level object `top` of a `world.json`
 /// of this [`FORMAT_VERSION`] that hold a struct are JSON objects
-/// (`settings`, `erosion` of `settings`, `planet` and every entry of
-/// `fields`) and that those holding an enum are strings (`rotation` and
-/// `tectonics` of `planet`, `kind` of every field). serde's derive would
+/// (`settings`, `erosion` of `settings`, `planet`, every entry of
+/// `warnings` and every entry of `fields`) and that those holding an enum
+/// are strings (`rotation` and `tectonics` of `planet`, `kind` of every
+/// field). serde's derive would
 /// also accept a struct as an array of its values in their order, and a
 /// unit variant as an object (`{"free": null}`), neither of which
 /// [`write()`] writes. Missing keys are left to the typed parse, which
@@ -1495,6 +1540,11 @@ fn check_shapes(top: &serde_json::Map<String, serde_json::Value>) -> Result<(), 
             if planet.get(key).is_some_and(|v| !v.is_string()) {
                 return Err(not_string(&format!("`planet.{key}`")));
             }
+        }
+    }
+    if let Some(warnings) = top.get("warnings").and_then(Value::as_array) {
+        if let Some(k) = warnings.iter().position(|entry| !entry.is_object()) {
+            return Err(not_object(&format!("entry {k} of `warnings`")));
         }
     }
     if let Some(fields) = top.get("fields").and_then(Value::as_array) {

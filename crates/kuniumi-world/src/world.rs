@@ -126,6 +126,20 @@ impl fmt::Display for FieldError {
 
 impl std::error::Error for FieldError {}
 
+/// A warning of a stage (ticket M4-16): a result that the stage keeps
+/// although its model did not reach what it intends, such as a climate
+/// that did not reach its periodic state, which the world's user should
+/// know.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Warning {
+    /// The stage that raised it: its stable name
+    /// (`kuniumi_sim::StageId::name`), as in [`World::stages`].
+    pub stage: String,
+    /// What happened and what it means for the stage's outputs: English,
+    /// one line.
+    pub message: String,
+}
+
 /// A generated planet, or the part of it that the stages run so far have
 /// built.
 #[derive(Clone, Debug, PartialEq)]
@@ -144,6 +158,8 @@ pub struct World {
     /// stable names of `kuniumi_sim::StageId::name`). A world whose list
     /// stops before the last stage is partial.
     pub stages: Vec<String>,
+    /// The warnings of the stages, in the order raised (ticket M4-16).
+    pub warnings: Vec<Warning>,
     /// Per-cell fields, in a fixed order (insertion order, never hashed).
     pub fields: Vec<Field>,
 }

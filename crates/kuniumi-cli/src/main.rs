@@ -12,7 +12,7 @@ use kuniumi_io::colormap::{Colormap, Range};
 use kuniumi_io::{Rgb8, png, render, world_dir};
 use kuniumi_math::units::deg_to_rad;
 use kuniumi_sim::SimError;
-use kuniumi_world::{GENERATOR_VERSION, PlanetParams, Settings};
+use kuniumi_world::{GENERATOR_VERSION, PlanetParams, Settings, Warning};
 
 mod grid_report;
 
@@ -36,7 +36,9 @@ enum Command {
     /// SI keys), a template for `generate --planet`
     Params,
     /// Generate a world and write it to a directory (the stages that do not
-    /// exist yet are missing: writes what exists, then exits with code 2)
+    /// exist yet are missing: writes what exists, then exits with code 2);
+    /// the warnings of the stages, such as a climate that did not reach its
+    /// periodic state, are printed and kept in world.json
     Generate(GenerateArgs),
     /// Build the cell grid and write maps of its cells and statistics
     Grid(GridArgs),
@@ -148,7 +150,10 @@ fn run(command: Option<Command>) -> Result<(), String> {
 /// `--cells` replaces the file's `cells`. `allow_partial` is always set,
 /// whatever the file says, so that the stages that exist are written.
 /// Progress goes to the standard error, one line per stage and whole
-/// percent ([`progress_line`]).
+/// percent ([`progress_line`]); then, once the pipeline has returned and
+/// before the world is written (so that they show even if writing fails),
+/// the warnings of the stages, one line each in their order
+/// ([`warning_line`], ticket M4-16).
 fn generate(args: &GenerateArgs) -> Result<(), String> {
     let (params, mut settings) = match &args.planet {
         Some(path) => read_settings(path)?,
@@ -167,6 +172,9 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
         }
     })
     .map_err(|e| e.to_string())?;
+    for warning in &world.warnings {
+        eprintln!("{}", warning_line(warning));
+    }
     for path in world_dir::write(&args.out, &world).map_err(|e| e.to_string())? {
         println!("wrote {}", path.display());
     }
@@ -182,6 +190,12 @@ fn generate(args: &GenerateArgs) -> Result<(), String> {
 /// steps of the Erosion stage) prints at most 101 lines.
 fn progress_line(p: kuniumi_sim::Progress) -> String {
     format!("[{}] {:.0}%", p.stage.name(), p.fraction * 100.0)
+}
+
+/// The line that `generate` prints for a warning of a stage:
+/// `warning: <stage>: <message>`, as `world.json` keeps it.
+fn warning_line(warning: &Warning) -> String {
+    format!("warning: {}: {}", warning.stage, warning.message)
 }
 
 /// Reads the settings file at `path` with [`kuniumi_config::load`]; an
@@ -523,6 +537,18 @@ mod tests {
                 "--cells {cells}"
             );
         }
+    }
+
+    #[test]
+    fn warning_lines_name_the_stage() {
+        let warning = Warning {
+            stage: "climate".into(),
+            message: "the moisture did not reach its periodic state in 10 years".into(),
+        };
+        assert_eq!(
+            warning_line(&warning),
+            "warning: climate: the moisture did not reach its periodic state in 10 years"
+        );
     }
 
     #[test]

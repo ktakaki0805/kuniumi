@@ -672,6 +672,7 @@ fn the_stage_adds_surface_height_and_sets_the_sea_level() {
             grid: stages::grid::run(&settings, 5).expect("valid settings"),
             sea_level_m: 0.0,
             stages: Vec::new(),
+            warnings: Vec::new(),
             fields: Vec::new(),
         };
         stages::grid::add_fields(&mut world).expect("a new world");
@@ -900,6 +901,7 @@ fn the_stage_needs_the_crust_of_the_tectonics_stage() {
         grid: stages::grid::run(&settings, 1).expect("valid settings"),
         sea_level_m: 0.0,
         stages: Vec::new(),
+        warnings: Vec::new(),
         fields: Vec::new(),
     };
     let _ = run(&mut world, &mut |_| {});

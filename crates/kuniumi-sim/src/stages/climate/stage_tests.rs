@@ -9,6 +9,10 @@
 //!   and seasons;
 //! - `climate_reports_its_progress`, `existing_outputs_leave_the_world_unchanged`,
 //!   `the_stage_needs_the_heights`;
+//! - `a_climate_that_settles_has_no_warnings` and
+//!   `warnings_name_each_model_that_did_not_settle` (ticket M4-16; the
+//!   warnings of the planets that do not settle are checked by the bounds
+//!   tests of `lib.rs`);
 //! - `golden_fingerprints_of_the_climate_stage`.
 //!
 //! The stage runs once per test process on the Earth-parameter world of
@@ -242,22 +246,138 @@ fn small_world() -> World {
     crate::generate_through_crust(&PlanetParams::earth(), &settings, 1).expect("a partial world")
 }
 
+/// The climate of [`small_world`] and the progress that [`climate`]
+/// reported, computed once.
+fn small_climate() -> &'static (Climate, Vec<f64>) {
+    static CLIMATE: OnceLock<(Climate, Vec<f64>)> = OnceLock::new();
+    CLIMATE.get_or_init(|| {
+        let world = small_world();
+        let mut reports = Vec::new();
+        let result = climate(
+            &world.params,
+            &world.grid,
+            values(&world, SURFACE_HEIGHT),
+            world.sea_level_m,
+            &mut |f| reports.push(f),
+        );
+        (result, reports)
+    })
+}
+
 #[test]
 fn climate_reports_its_progress() {
-    let world = small_world();
-    let mut reports = Vec::new();
-    let result = climate(
-        &world.params,
-        &world.grid,
-        values(&world, SURFACE_HEIGHT),
-        world.sea_level_m,
-        &mut |f| reports.push(f),
-    );
-    assert_eq!(reports, PROGRESS);
+    let (result, reports) = small_climate();
+    assert_eq!(reports, &PROGRESS);
     assert!(result.energy_balance.converged && result.sea_surface.temperature.converged);
     // The stage passes them on.
     let (_, stage_reports) = stage_world();
     assert_eq!(stage_reports, &PROGRESS);
+}
+
+#[test]
+fn a_climate_that_settles_has_no_warnings() {
+    // Earth on 1,000 cells (seed 1): every model periodic, every solve
+    // converged (the scratch tool of ticket M4-16).
+    let (result, _) = small_climate();
+    assert!(result.energy_balance.converged);
+    assert!(result.sea_surface.temperature.converged);
+    assert!(result.moisture.converged);
+    assert_eq!(
+        (
+            result.moisture.unsettled_steps,
+            result.moisture.failed_solves
+        ),
+        (0, 0)
+    );
+    assert!(result.currents.solves.iter().all(|s| s.converged()));
+    assert_eq!(result.warnings(), Vec::<String>::new());
+    // Nor does the stage add any to the 10,000-cell Earth world.
+    let (world, _) = stage_world();
+    assert_eq!(world.warnings, []);
+}
+
+/// The six messages of [`Climate::warnings`] for the flags that
+/// `warnings_name_each_model_that_did_not_settle` sets, written out by hand
+/// from the ticket (M4-16, "The Climate stage's warnings"), in their order.
+const UNSETTLED_MESSAGES: [&str; 6] = [
+    "the energy balance without currents did not reach its periodic state in 100 years: a \
+     monthly-mean sea-level temperature changed by 11.500 K in the last year, whose \
+     temperatures are kept, with the winds and currents made from them; they may be those \
+     of a climate in transition (near an ice-albedo bifurcation, mid-way into a snowball)",
+    "the currents of 2 of the 3 ocean basins did not reach the solver's tolerance (the \
+     largest relative residual 3.200e-9): those currents, and the sea surface and moisture \
+     made with them, may be inaccurate",
+    "the sea surface with currents and upwelling did not reach its periodic state in 100 \
+     years: a monthly-mean sea-level temperature changed by 7.405 K in the last year, whose \
+     temperatures are kept as the climate's, with the moisture made from them; they may be \
+     those of a climate in transition (near an ice-albedo bifurcation, mid-way into a \
+     snowball)",
+    "the moisture did not reach its periodic state in 10 years: a monthly-mean column water \
+     vapour changed by 2.006e-6 kg/m^2 in the last year, whose precipitation is kept as the \
+     climate's; it may be that of an atmosphere still filling or drying",
+    "3 of the moisture's 480 sub-steps did not settle the active set within 50 solves: each \
+     kept the set of its last solve, in which a cell below the threshold rains a negative \
+     excess",
+    "2 of the moisture's monthly potentials and sub-steps had a solve that did not reach its \
+     tolerance: its precipitation may be inaccurate",
+];
+
+#[test]
+fn warnings_name_each_model_that_did_not_settle() {
+    use crate::operators::Solve;
+
+    let (settled, _) = small_climate();
+    // Each condition of the ticket, set by hand on the settled climate:
+    // the energy balance after 100 years (Earth at 1,296 W/m², ticket
+    // M4-02: 11.5 K), two of three basins at the solver's limit (the
+    // larger failing residual second, the converged basin's larger than
+    // both: the message takes the largest of the failing ones), the sea
+    // surface after 100 years (corner 57 of the bounds tests: 7.4052 K),
+    // the moisture after 10 years (corner 17: 2.006e-6 kg/m²), 3 sub-steps
+    // unsettled and 2 solves failed.
+    let edits: [fn(&mut Climate); 6] = [
+        |c| {
+            c.energy_balance.years = 100;
+            c.energy_balance.change_k = 11.5;
+            c.energy_balance.converged = false;
+        },
+        |c| {
+            c.currents.solves = vec![
+                Solve::new(12, 9e-9, true),
+                Solve::new(20_000, 1.5e-9, false),
+                Solve::new(20_000, 3.2e-9, false),
+            ];
+        },
+        |c| {
+            let t = &mut c.sea_surface.temperature;
+            t.years = 100;
+            t.change_k = 7.4052;
+            t.converged = false;
+        },
+        |c| {
+            c.moisture.years = 10;
+            c.moisture.change_kg_m2 = 2.006e-6;
+            c.moisture.converged = false;
+        },
+        |c| {
+            // Of 10 years, alone too: 480 sub-steps.
+            c.moisture.years = 10;
+            c.moisture.unsettled_steps = 3;
+        },
+        |c| c.moisture.failed_solves = 2,
+    ];
+    // Each alone gives its message alone.
+    for (edit, message) in edits.iter().zip(UNSETTLED_MESSAGES) {
+        let mut climate = settled.clone();
+        edit(&mut climate);
+        assert_eq!(climate.warnings(), [message]);
+    }
+    // All together, the six in the order the models ran.
+    let mut climate = settled.clone();
+    for edit in edits {
+        edit(&mut climate);
+    }
+    assert_eq!(climate.warnings(), UNSETTLED_MESSAGES);
 }
 
 #[test]
@@ -274,6 +394,7 @@ fn existing_outputs_leave_the_world_unchanged() {
             result,
             Err(SimError::Field(FieldError::Duplicate { name: name.into() }))
         );
+        // The fields, the stages and the warnings (none added).
         assert_eq!(world, before, "{name}");
         assert_eq!(reports, 0, "{name}");
     }

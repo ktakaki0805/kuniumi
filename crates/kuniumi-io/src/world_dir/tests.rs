@@ -6,6 +6,7 @@
 //!   decimals and hard cases);
 //! - `earth_world_json_has_the_documented_layout`;
 //! - `awkward_world_json_has_the_shortest_forms`;
+//! - `world_json_of_warnings_by_hand` (ticket M4-16);
 //! - `the_same_world_gives_the_same_bytes`;
 //! - `rejects_non_finite_metadata`;
 //! - `rejects_bad_fields_before_writing_anything`;
@@ -51,7 +52,7 @@ use kuniumi_math::rng::Rng;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{
     ErosionSettings, Field, FieldKind, PlanetParams, RotationRegime, Settings, TectonicRegime,
-    World,
+    Warning, World,
 };
 
 use kuniumi_sim::metrics::{DrainageMetrics, ElevationMetrics, Exceedance, HackFit, earth};
@@ -84,6 +85,7 @@ pub(super) fn world() -> World {
         grid,
         sea_level_m: 0.0,
         stages: vec!["grid".into()],
+        warnings: Vec::new(),
         fields: Vec::new(),
     };
     let z: Vec<f64> = world.grid.positions().iter().map(|p| p.z).collect();
@@ -91,6 +93,33 @@ pub(super) fn world() -> World {
     let classes = (0..n).map(|i| (i % 5) as f64).collect();
     world.add_class_field("zone", classes).unwrap();
     world
+}
+
+/// The message of [`world_with_warnings`] with every kind of character
+/// that `world.json` must escape or keep: a quotation mark, a backslash, a
+/// newline, a tab, a control character, and text beyond ASCII.
+pub(super) const AWKWARD_MESSAGE: &str = "quotes \" and \\ backslash, a\nnewline, a tab\t, a control \u{1}, and non-ASCII: \
+     1,296 W/m², −0 °C, 国生み";
+
+/// [`world`] with three warnings of two stages, in an order that is not
+/// that of the stages: a message of the Climate stage, [`AWKWARD_MESSAGE`]
+/// and an empty one (ticket M4-16).
+pub(super) fn world_with_warnings() -> World {
+    let warning = |stage: &str, message: &str| Warning {
+        stage: stage.into(),
+        message: message.into(),
+    };
+    World {
+        warnings: vec![
+            warning(
+                "climate",
+                "the moisture did not reach its periodic state in 10 years",
+            ),
+            warning("climate", AWKWARD_MESSAGE),
+            warning("erosion", ""),
+        ],
+        ..world()
+    }
 }
 
 /// A world whose metadata holds awkward numbers: subnormals, the extremes,
@@ -186,12 +215,12 @@ fn json_floats(json: &WorldJson) -> Vec<u64> {
 
 #[test]
 fn world_json_parses_back_bit_exactly() {
-    for world in [world(), awkward_world()] {
+    for world in [world(), awkward_world(), world_with_warnings()] {
         let bytes = world_json(&world).unwrap();
         let back: WorldJson = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back, WorldJson::of(&world));
         assert_eq!(json_floats(&back), world_floats(&world));
-        assert_eq!(back.format_version, 4);
+        assert_eq!(back.format_version, 5);
         assert_eq!(back.generator_version, kuniumi_world::GENERATOR_VERSION);
         assert_eq!(back.seed, world.seed);
         let s = &back.settings;
@@ -206,6 +235,8 @@ fn world_json_parses_back_bit_exactly() {
         );
         assert_eq!(s.to_settings(), world.settings);
         assert_eq!(back.stages, world.stages);
+        let warnings: Vec<Warning> = back.warnings.iter().map(WarningJson::to_warning).collect();
+        assert_eq!(warnings, world.warnings);
         let fields: Vec<_> = back
             .fields
             .iter()
@@ -292,7 +323,7 @@ fn serde_json_round_trips_every_finite_f64() {
 /// `repr(1e4 * 31557600.0)` print them. It is the example in the module
 /// documentation.
 const EARTH_JSON: &str = r#"{
-  "format_version": 4,
+  "format_version": 5,
   "generator_version": "0.0.1",
   "seed": 1,
   "settings": {
@@ -326,6 +357,7 @@ const EARTH_JSON: &str = r#"{
   "stages": [
     "grid"
   ],
+  "warnings": [],
   "fields": [
     {
       "name": "cell_area",
@@ -382,7 +414,7 @@ fn earth_world_json_has_the_documented_layout() {
 /// serde_json's float formatter, whose digit writers differ between
 /// targets, on subnormals, 17-digit values, the extremes and −0.
 const AWKWARD_JSON: &str = r#"{
-  "format_version": 4,
+  "format_version": 5,
   "generator_version": "0.0.1",
   "seed": 18446744073709551615,
   "settings": {
@@ -414,6 +446,7 @@ const AWKWARD_JSON: &str = r#"{
   },
   "sea_level_m": -1.5e-320,
   "stages": [],
+  "warnings": [],
   "fields": [
     {
       "name": "height",
@@ -435,9 +468,47 @@ fn awkward_world_json_has_the_shortest_forms() {
     assert_eq!(text, AWKWARD_JSON);
 }
 
+/// The lines of `world.json` of [`world_with_warnings`] from `stages` to
+/// `fields`, written by hand: each warning an object of its stage and
+/// message, in the world's order, and the escapes of RFC 8259 (section 7:
+/// the quotation mark, the backslash and the control characters U+0000 to
+/// U+001F escaped, the newline and the tab by their two-character forms,
+/// U+0001 as `\u0001`; other text as it is, in UTF-8).
+const WARNINGS_JSON: &str = r#"  "stages": [
+    "grid"
+  ],
+  "warnings": [
+    {
+      "stage": "climate",
+      "message": "the moisture did not reach its periodic state in 10 years"
+    },
+    {
+      "stage": "climate",
+      "message": "quotes \" and \\ backslash, a\nnewline, a tab\t, a control \u0001, and non-ASCII: 1,296 W/m², −0 °C, 国生み"
+    },
+    {
+      "stage": "erosion",
+      "message": ""
+    }
+  ],
+  "fields": [
+"#;
+
+#[test]
+fn world_json_of_warnings_by_hand() {
+    let text = String::from_utf8(world_json(&world_with_warnings()).unwrap()).unwrap();
+    let start = text.find("  \"stages\"").unwrap();
+    let end = text.find("  \"fields\": [\n").unwrap() + "  \"fields\": [\n".len();
+    assert_eq!(&text[start..end], WARNINGS_JSON);
+    // Everything else as without the warnings.
+    let without = String::from_utf8(world_json(&world()).unwrap()).unwrap();
+    let none = "  \"stages\": [\n    \"grid\"\n  ],\n  \"warnings\": [],\n  \"fields\": [\n";
+    assert_eq!(text.replacen(WARNINGS_JSON, none, 1), without);
+}
+
 #[test]
 fn the_same_world_gives_the_same_bytes() {
-    for world in [world(), awkward_world()] {
+    for world in [world(), awkward_world(), world_with_warnings()] {
         assert_eq!(
             world_json(&world).unwrap(),
             world_json(&world.clone()).unwrap()

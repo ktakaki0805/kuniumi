@@ -581,6 +581,20 @@ section: every change after which an existing seed produces a different world
   constants of their names and `PROGRESS`. Earth (seed 1, 10,000 cells):
   288.98 K and 0.93 m/yr; on 650,000 cells the stage takes about 11
   minutes. The Erosion stage keeps its uniform 1 m/yr until M4-19 (M4-07).
+- Warnings of the stages: `kuniumi_world::Warning` (the stage's stable
+  name and a one-line message) and `World::warnings`, in the order raised;
+  the pipeline starts a world without warnings and, in debug builds,
+  checks that a stage's warnings name it. The Climate stage adds one for
+  each model that did not settle (`Climate::warnings`): the energy balance
+  without currents or the sea surface not periodic after its 100 years
+  (with the last change, as a climate that may be in transition), a
+  basin's currents not solved to the tolerance, the moisture not periodic
+  after its 10 years, sub-steps of the moisture whose active set did not
+  settle, and solves of the moisture that failed. Of the planets of the
+  bounds tests (1,000 cells, seed 3), corners 56–59 warn of the energy
+  balance, 57 and 59 of the sea surface, 11 dry corners at 13,000 km of the
+  moisture; Earth has none. `kuniumi generate` prints each as
+  `warning: <stage>: <message>` on the standard error (M4-16).
 
 ### Changed
 
@@ -857,6 +871,10 @@ section: every change after which an existing seed produces a different world
   longer skipped: a world has the stages `grid`, `tectonics`, `crust`,
   `climate` and `erosion`, and stops at Hydrology; `next_stage` of a world
   without its climate is Climate (M4-07).
+- `world.json` has `format_version` 5, with the warnings of the stages
+  under `warnings` (after `stages`; `WarningJson`, an object of `stage`
+  and `message` each); a world directory of version 4 is refused
+  (`ReadError::Version`) and must be generated again (M4-16).
 
 ### Removed
 

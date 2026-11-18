@@ -5,9 +5,10 @@
 //! and adds its fields ([`stages::grid::add_fields`]). Every later stage is a
 //! [`StageFn`] that extends the world built so far: it adds its outputs as
 //! named fields ([`World::add_field`], [`World::add_class_field`]), updates
-//! fields of earlier stages ([`World::field_mut`]) or sets the sea level. A
-//! stage finds the planet parameters, the settings and the seed in the world
-//! itself.
+//! fields of earlier stages ([`World::field_mut`]) or sets the sea level,
+//! and appends its warnings to [`World::warnings`], each naming the stage
+//! ([`kuniumi_world::Warning`], ticket M4-16). A stage finds the planet
+//! parameters, the settings and the seed in the world itself.
 //!
 //! [`implementation`] is the table of the stages: those that exist, those
 //! that are skipped while they do not exist, and those that are missing.
@@ -25,7 +26,7 @@
 //! uniform placeholder precipitation
 //! ([`stages::erosion::PLACEHOLDER_PRECIPITATION_M_S`]) until ticket M4-19.
 
-use kuniumi_world::{Field, FieldKind, PlanetParams, Settings, World};
+use kuniumi_world::{Field, FieldKind, PlanetParams, Settings, Warning, World};
 
 use crate::{Progress, SimError, StageId, stages};
 
@@ -96,7 +97,9 @@ pub fn next_stage(
 /// After every stage a debug assertion checks that the sea level and every
 /// field value are finite (docs/conventions.md, Determinism, rule 9) and
 /// that class fields hold class ids, which [`World::field_mut`] could have
-/// broken.
+/// broken, and others that the stage kept the warnings of the stages
+/// before it and that those it added name it. The world starts with no
+/// warnings; the stages' warnings stay in the order raised.
 ///
 /// At the first stage that is [`Implementation::Missing`] the run stops:
 /// with [`Settings::allow_partial`] it returns the world built so far
@@ -133,10 +136,11 @@ pub fn run(
         grid,
         sea_level_m: 0.0,
         stages: Vec::new(),
+        warnings: Vec::new(),
         fields: Vec::new(),
     };
     stages::grid::add_fields(&mut world)?;
-    finish(&mut world, grid_stage, progress);
+    finish(&mut world, grid_stage, &[], progress);
 
     for &stage in &StageId::PIPELINE[1..] {
         let stage_fn = match implementation(stage) {
@@ -154,6 +158,8 @@ pub fn run(
             stage,
             fraction: 0.0,
         });
+        // A few warnings at most: the copy costs nothing next to a stage.
+        let earlier = world.warnings.clone();
         stage_fn(&mut world, &mut |fraction| {
             debug_assert!(
                 (0.0..=1.0).contains(&fraction),
@@ -162,19 +168,42 @@ pub fn run(
             );
             progress(Progress { stage, fraction });
         })?;
-        finish(&mut world, stage, progress);
+        finish(&mut world, stage, &earlier, progress);
     }
     Ok(world)
 }
 
-/// Ends `stage`: checks its outputs in debug builds, reports fraction 1 and
-/// records the stage in [`World::stages`].
-fn finish(world: &mut World, stage: StageId, progress: &mut dyn FnMut(Progress)) {
+/// Ends `stage`, which ran on a world whose warnings were `earlier`: checks
+/// its outputs in debug builds (its values; that the warnings begin with
+/// `earlier`, which a stage only appends to; that those after them name
+/// it), reports fraction 1 and records the stage in [`World::stages`].
+fn finish(
+    world: &mut World,
+    stage: StageId,
+    earlier: &[Warning],
+    progress: &mut dyn FnMut(Progress),
+) {
     debug_assert!(
         invalid_value(world).is_none(),
         "stage `{}` produced an invalid value: {:?}",
         stage.name(),
         invalid_value(world)
+    );
+    debug_assert!(
+        world.warnings.starts_with(earlier),
+        "stage `{}` changed the warnings of the stages before it: {earlier:?} became {:?}",
+        stage.name(),
+        world.warnings
+    );
+    let misnamed = world
+        .warnings
+        .get(earlier.len()..)
+        .and_then(|added| added.iter().find(|w| w.stage != stage.name()));
+    debug_assert!(
+        misnamed.is_none(),
+        "stage `{}` raised a warning of another stage: {:?}",
+        stage.name(),
+        misnamed.expect("a misnamed warning")
     );
     progress(Progress {
         stage,

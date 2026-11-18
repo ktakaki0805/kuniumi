@@ -168,7 +168,10 @@ impl From<FieldError> for SimError {
 /// `current_east`, `current_north`); and the Erosion stage
 /// ([`stages::erosion`]), which erodes `surface_height` with the world's
 /// [`Settings::erosion`] under a uniform placeholder precipitation (the
-/// climate's from ticket M4-19) and adds the rivers: `drainage_area`, `discharge` and `depression_depth`. With
+/// climate's from ticket M4-19) and adds the rivers: `drainage_area`,
+/// `discharge` and `depression_depth`. The Climate stage also records a
+/// warning ([`World::warnings`], ticket M4-16) for each of its models that
+/// did not settle ([`stages::climate::Climate::warnings`]). With
 /// [`Settings::allow_partial`] that world is returned when the next stage
 /// turns out to be missing ([`next_stage`] names it); otherwise it is
 /// dropped and the error names the stage.
@@ -558,9 +561,69 @@ mod tests {
         settings
     }
 
+    /// The corners of [`bound_planets`] whose energy balance without
+    /// currents is not periodic after its 100 years on 1,000 cells (seed 3).
+    /// This and the next two lists were measured by the scratch tool of
+    /// ticket M4-16, which ran `stages::climate::climate` on the worlds of
+    /// the Crust stage and read each model's own flags (the counts of
+    /// ticket M4-07's measurement, 4, 2 and 11): independent of the code of
+    /// the warnings. Every other model of every planet of the bounds tests
+    /// settles, and every solve converges.
+    const UNSETTLED_ENERGY_BALANCE: [u32; 4] = [56, 57, 58, 59];
+
+    /// The corners whose sea surface with currents and upwelling is not
+    /// periodic after its 100 years.
+    const UNSETTLED_SEA_SURFACE: [u32; 2] = [57, 59];
+
+    /// The corners whose moisture is not periodic after its 10 years: the
+    /// planets without water (whose only ocean is the cells at the sea
+    /// level) at the largest radius and the shortest orbit, but 1, 3, 19, 65
+    /// and 67.
+    const UNSETTLED_MOISTURE: [u32; 11] = [5, 7, 17, 21, 23, 69, 71, 81, 83, 85, 87];
+
+    /// Checks that the warnings of `world`, the planet `corner` of
+    /// [`bound_planets`] (Earth, or another planet of the bounds tests, for
+    /// `None`), are those of the Climate stage for the models that did not
+    /// settle (ticket M4-16): in the stage's name, the energy balance's if
+    /// the corner is in [`UNSETTLED_ENERGY_BALANCE`], then the sea
+    /// surface's and the moisture's likewise, and no other.
+    fn assert_warnings(corner: Option<u32>, world: &World) {
+        let unsettled = |corners: &[u32]| corner.is_some_and(|c| corners.contains(&c));
+        let expected: Vec<(&str, &str)> = [
+            (
+                unsettled(&UNSETTLED_ENERGY_BALANCE),
+                "the energy balance without currents",
+            ),
+            (
+                unsettled(&UNSETTLED_SEA_SURFACE),
+                "the sea surface with currents and upwelling",
+            ),
+            (unsettled(&UNSETTLED_MOISTURE), "the moisture"),
+        ]
+        .into_iter()
+        .filter(|&(warned, _)| warned)
+        .map(|(_, model)| ("climate", model))
+        .collect();
+        // The model a message names: its words before the verb; the whole
+        // message for any other warning, which then fails the comparison.
+        let warned: Vec<(&str, &str)> = world
+            .warnings
+            .iter()
+            .map(|w| {
+                let model = w
+                    .message
+                    .split(" did not reach its periodic state in ")
+                    .next();
+                (w.stage.as_str(), model.unwrap_or(&w.message))
+            })
+            .collect();
+        assert_eq!(warned, expected, "corner {corner:?}: {:#?}", world.warnings);
+    }
+
     /// Generates the planet `p` with `settings` (seed 3) and checks that the
-    /// world runs to Hydrology with a finite sea level and finite fields.
-    fn assert_finite_world(p: &PlanetParams, settings: &Settings) {
+    /// world runs to Hydrology with a finite sea level and finite fields;
+    /// returns the world.
+    fn assert_finite_world(p: &PlanetParams, settings: &Settings) -> World {
         let world = generate(p, settings, 3, &mut |_| {}).expect("a partial world");
         assert_eq!(
             world.stages,
@@ -577,13 +640,15 @@ mod tests {
                 field.name
             );
         }
+        world
     }
 
     /// Generates the planets of [`bound_planets`] that `keep` keeps
-    /// ([`assert_finite_world`]). Release builds run every corner kept;
-    /// debug builds, where the climate takes about 6 s a planet, the
-    /// corners whose index halved is a multiple of 8 (8 of each radius) and
-    /// Earth.
+    /// ([`assert_finite_world`]) and checks their warnings
+    /// ([`assert_warnings`]). Release builds run every corner kept; debug
+    /// builds, where the climate takes about 6 s a planet, the corners
+    /// whose index halved is a multiple of 8 (8 of each radius; of them 17
+    /// and 81 warn) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);
@@ -593,7 +658,8 @@ mod tests {
                 continue;
             }
             ran += 1;
-            assert_finite_world(&p, &settings);
+            let world = assert_finite_world(&p, &settings);
+            assert_warnings(corner, &world);
         }
         assert!(ran >= 8, "{ran} planets");
     }
@@ -647,7 +713,9 @@ mod tests {
         let settings = bounds_settings();
         for p in &planets {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
-            assert_finite_world(p, &settings);
+            // Each settles (the scratch tool of ticket M4-16): no warning.
+            let world = assert_finite_world(p, &settings);
+            assert_warnings(None, &world);
         }
     }
 

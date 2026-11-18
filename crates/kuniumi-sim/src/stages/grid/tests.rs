@@ -62,6 +62,7 @@ fn adds_the_cell_areas_and_neighbour_counts() {
             grid,
             sea_level_m: 0.0,
             stages: Vec::new(),
+            warnings: Vec::new(),
             fields: Vec::new(),
         };
         add_fields(&mut world).expect("an empty world takes the fields");

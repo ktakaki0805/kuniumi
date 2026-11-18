@@ -199,7 +199,7 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     // Python's repr prints them: repr(5e-3 / 31557600.0),
     // repr(1e4 * 31557600.0), repr(102.94 * (math.pi / 180)).
     for line in [
-        "  \"format_version\": 4,",
+        "  \"format_version\": 5,",
         "  \"seed\": 1,",
         "    \"cells\": 1000,",
         "    \"plate_count\": 12,",
@@ -217,6 +217,8 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
         "    \"crust\",",
         "    \"climate\",",
         "    \"erosion\"",
+        // Earth's climate settles: no warning (ticket M4-16).
+        "  \"warnings\": [],",
         "      \"name\": \"cell_area\",",
         "      \"unit\": \"sr\",",
         "      \"kind\": \"class\"",
@@ -649,6 +651,9 @@ fn generate_golden_fingerprints() {
     }
     assert_eq!(fingerprints, GOLDEN_FIELDS);
     assert_golden_sea_level(&dir);
+    // Its climate settles (ticket M4-16).
+    let json = std::fs::read_to_string(dir.join("world.json")).expect("world.json");
+    assert!(json.lines().any(|l| l == "  \"warnings\": [],"), "{json}");
 }
 
 #[test]
@@ -959,6 +964,102 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
         }
         assert!(sizes.iter().all(|&s| s > 0), "{sizes:?}");
     }
+}
+
+#[test]
+fn generate_prints_the_warnings_of_the_stages() {
+    // A dry planet whose moisture is not periodic after its 10 years on
+    // 1,000 cells (seed 3): 13,000 km, 11 m/s², 240 h, 90 days,
+    // 2,500 W/m², no water, 10 bar, as corner 85 of the bounds tests of
+    // kuniumi-sim but for the gravity; its vapour changed by 54.7 kg/m² in
+    // the last year, its other models settled (the scratch tool of ticket
+    // M4-16). One erosion step: the climate does not depend on erosion.
+    let planet = settings_file(
+        "generate_warnings_planet",
+        "[planet]\nradius_m = 13000000.0\nsurface_gravity_m_s2 = 11.0\n\
+         rotation_period_s = 864000.0\norbital_period_s = 7776000.0\n\
+         stellar_flux_w_m2 = 2500.0\nocean_volume_m3 = 0.0\n\
+         surface_pressure_pa = 1000000.0\n\
+         [generation.erosion]\nsteps = 1\n",
+    );
+    let dir = scratch("generate_warnings");
+    let out = dir.to_str().expect("UTF-8 path");
+    let planet = planet.to_str().expect("UTF-8 path");
+    let o = kuniumi(&[
+        "generate", "--seed", "3", "--cells", "1000", "--planet", planet, "--out", out,
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    // The progress lines, then the warning, then the missing stage.
+    let text = stderr(&o);
+    let lines: Vec<&str> = text.lines().collect();
+    let progress = [
+        "[grid] 0%",
+        "[grid] 100%",
+        "[tectonics] 0%",
+        "[tectonics] 100%",
+        "[crust] 0%",
+        "[crust] 100%",
+        "[climate] 0%",
+        "[climate] 35%",
+        "[climate] 41%",
+        "[climate] 88%",
+        "[climate] 100%",
+        "[erosion] 0%",
+        "[erosion] 100%",
+    ];
+    assert_eq!(lines.len(), progress.len() + 2, "{text}");
+    assert_eq!(lines[..progress.len()], progress, "{text}");
+    let warning = lines[progress.len()];
+    assert!(
+        warning.starts_with(
+            "warning: climate: the moisture did not reach its periodic state in 10 years: "
+        ),
+        "{text}"
+    );
+    assert_eq!(
+        lines[progress.len() + 1],
+        "error: stage `hydrology` is not implemented yet"
+    );
+    // The world directory keeps the same warning.
+    let world = kuniumi_io::world_dir::read(&dir).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(world.warnings.len(), 1, "{:?}", world.warnings);
+    let kept = &world.warnings[0];
+    assert_eq!(
+        format!("warning: {}: {}", kept.stage, kept.message),
+        warning
+    );
+
+    // The warnings come before the world is written (the owner's choice in
+    // ticket M4-16), so they show even if writing fails: here the output
+    // directory would lie under a regular file.
+    let blocked = scratch("generate_warnings_blocked");
+    std::fs::create_dir_all(&blocked).expect("a scratch directory");
+    let file = blocked.join("file");
+    std::fs::write(&file, "not a directory").expect("a regular file");
+    let out = file.join("world");
+    let o = kuniumi(&[
+        "generate",
+        "--seed",
+        "3",
+        "--cells",
+        "1000",
+        "--planet",
+        planet,
+        "--out",
+        out.to_str().expect("UTF-8 path"),
+    ]);
+    assert_eq!(o.status.code(), Some(2), "{o:?}");
+    let text = stderr(&o);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), progress.len() + 2, "{text}");
+    assert_eq!(lines[..progress.len()], progress, "{text}");
+    assert_eq!(lines[progress.len()], warning, "{text}");
+    let error = lines[progress.len() + 1];
+    assert!(
+        error.starts_with(&format!("error: {}", out.display())),
+        "{text}"
+    );
+    assert_eq!(stdout(&o), "", "nothing written");
 }
 
 #[test]

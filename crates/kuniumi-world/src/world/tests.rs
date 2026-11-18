@@ -1,4 +1,5 @@
-//! Tests of `World`'s field helpers and of `Field`'s name and class rules.
+//! Tests of `World`'s field helpers, of `Field`'s name and class rules, and
+//! of the warnings of the stages (ticket M4-16).
 
 use super::*;
 
@@ -11,6 +12,7 @@ fn world() -> World {
         grid: SphereGrid::octahedron(),
         sea_level_m: 0.0,
         stages: Vec::new(),
+        warnings: Vec::new(),
         fields: Vec::new(),
     }
 }
@@ -195,4 +197,29 @@ fn errors_display() {
     for (err, text) in cases {
         assert_eq!(err.to_string(), text);
     }
+}
+
+#[test]
+fn warnings_are_part_of_the_world() {
+    let w = world();
+    assert!(w.warnings.is_empty());
+    let warning = |stage: &str, message: &str| Warning {
+        stage: stage.into(),
+        message: message.into(),
+    };
+    let mut a = world();
+    a.warnings = vec![warning("climate", "one"), warning("climate", "two")];
+    assert_eq!(a.clone(), a);
+    assert_ne!(a, w);
+    // A world differs from another in a warning's stage, its message and
+    // the order of the warnings.
+    let mut b = a.clone();
+    b.warnings[0].stage = "erosion".into();
+    assert_ne!(a, b);
+    let mut b = a.clone();
+    b.warnings[1].message = "two ".into();
+    assert_ne!(a, b);
+    let mut b = a.clone();
+    b.warnings.reverse();
+    assert_ne!(a, b);
 }

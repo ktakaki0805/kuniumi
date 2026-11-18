@@ -453,6 +453,7 @@ fn the_stage_adds_its_fields() {
         grid,
         sea_level_m: 0.0,
         stages: Vec::new(),
+        warnings: Vec::new(),
         fields: Vec::new(),
     };
     let mut reports = Vec::new();
