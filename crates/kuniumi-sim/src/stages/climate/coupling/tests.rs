@@ -7,6 +7,12 @@
 //! - and `the_first_year_is_the_sea_surface_s_first_year`,
 //!   `the_loop_needs_one_temperature_per_cell`.
 //!
+//! The relaxation of the loop (ticket M4-20): `earth_s_loop_is_never_relaxed`,
+//! `an_oscillating_loop_settles_relaxed`,
+//! `the_trigger_needs_a_growth_and_a_reversal`,
+//! `the_reversal_is_weighted_by_the_cells_areas` and
+//! `golden_fingerprint_of_a_relaxed_loop`.
+//!
 //! The Earth tests use the shared runs of
 //! [`crate::stages::climate::test_worlds`]: 40,000 cells in release builds
 //! (the world of the calibrations of tickets M4-02, M4-05 and M4-06),
@@ -17,15 +23,20 @@
 //! 1.0 m/yr with about 25 kg/m² of precipitable water (ticket M4-06).
 #![allow(clippy::disallowed_methods)]
 
+use std::sync::OnceLock;
+
+use kuniumi_math::rng::fnv1a64;
 use kuniumi_math::units::{SECONDS_PER_YEAR, ZERO_CELSIUS_K};
+use kuniumi_world::{Settings, World};
 
 use super::*;
 use crate::stages::climate::circulation::monthly_circulation;
+use crate::stages::climate::energy_balance::monthly_temperature;
 use crate::stages::climate::moisture::monthly_moisture;
 use crate::stages::climate::ocean::{OceanParams, monthly_wind_stress, ocean_currents};
 use crate::stages::climate::sea_surface::{SeaSurfaceParams, coastal_upwelling_m3_s};
 use crate::stages::climate::test_worlds::{
-    Run, earth_10k, earth_coupled_reference, earth_reference, sea_model,
+    Run, earth_10k, earth_coupled_10k, earth_coupled_reference, earth_reference, sea_model,
 };
 use crate::stages::crust::SURFACE_HEIGHT;
 
@@ -151,11 +162,16 @@ fn the_coupled_state_is_within_the_tolerance_of_its_fixed_point() {
         heights(run),
         run.world.sea_level_m,
         &run.temperature,
-        1e-5,
-        MAX_YEARS,
+        Control {
+            tolerance_k: 1e-5,
+            max_years: MAX_YEARS,
+            relaxation: RELAXATION,
+        },
     );
     let t = &closer.sea_surface.temperature;
     assert!(t.converged);
+    // Not relaxed on to 10⁻⁵ K either: the loop of ticket M4-17.
+    assert_eq!(closer.relaxed_from_year, None);
     let difference = largest_change_k(&coupled.sea_surface.temperature.sea_level_k, &t.sea_level_k);
     let winds = largest_wind_difference(
         &coupled.circulation,
@@ -286,8 +302,11 @@ fn the_first_year_is_the_sea_surface_s_first_year() {
         h,
         z,
         &run.temperature,
-        PERIODIC_TOLERANCE_K,
-        1,
+        Control {
+            tolerance_k: PERIODIC_TOLERANCE_K,
+            max_years: 1,
+            relaxation: RELAXATION,
+        },
     );
     let circulation = monthly_circulation(&params, grid, &run.temperature);
     let currents = ocean_currents(&params, grid, h, z, &circulation, &run.temperature);
@@ -322,4 +341,231 @@ fn the_loop_needs_one_temperature_per_cell() {
         0.0,
         &start,
     );
+}
+
+#[test]
+fn earth_s_loop_is_never_relaxed() {
+    // Ticket M4-20: Earth's loop never oscillates, so it is the loop of
+    // ticket M4-17 bit for bit (the golden fingerprints of the stage and of
+    // the CLI's world, which are Earth's, did not change with the
+    // relaxation). Measured by the ticket's prototype: no relaxation on
+    // 1,000 cells (seeds 1, 2, 3), 1,200 (seed 5), 1,500 (seed 3), 10,000
+    // and 40,000 cells (seeds 1, 2, 3); the largest residual falls every
+    // year.
+    for coupled in [earth_coupled_10k(), earth_coupled_reference()] {
+        let t = &coupled.sea_surface.temperature;
+        println!(
+            "{} years, relaxed from {:?}",
+            t.years, coupled.relaxed_from_year
+        );
+        assert_eq!(coupled.relaxed_from_year, None);
+        assert!(t.converged);
+    }
+}
+
+/// Corner 72 of the bounds tests of `lib.rs`: the lower bounds of the
+/// v1 range but the longest orbit (10 years) and the densest atmosphere
+/// (10 bar), with the gravity moved just inside the bulk density range as
+/// there (1 m/s² at 1,500 km becomes 1.26 m/s², 3,000 kg/m³).
+fn corner_72() -> PlanetParams {
+    let mut p = PlanetParams {
+        radius_m: PlanetParams::MIN_RADIUS_M,
+        surface_gravity_m_s2: PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
+        rotation_period_s: PlanetParams::MIN_ROTATION_PERIOD_S,
+        orbital_period_s: PlanetParams::MAX_ORBITAL_PERIOD_S,
+        stellar_flux_w_m2: PlanetParams::MIN_STELLAR_FLUX_W_M2,
+        ocean_volume_m3: 0.0,
+        surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
+        ..PlanetParams::earth()
+    };
+    let density = p.bulk_density_kg_m3();
+    assert!(density < PlanetParams::MIN_BULK_DENSITY_KG_M3);
+    p.surface_gravity_m_s2 *= PlanetParams::MIN_BULK_DENSITY_KG_M3 / density * (1.0 + 1e-12);
+    assert_eq!(p.validate(), Ok(()));
+    p
+}
+
+/// Corner 72's world on the 1,000 cells of the bounds tests (seed 3)
+/// through the Crust stage, its energy balance and its coupled state.
+struct Corner72 {
+    params: PlanetParams,
+    world: World,
+    start: Temperature,
+    coupled: Coupled,
+}
+
+/// The run of [`Corner72`], once.
+fn corner_72_run() -> &'static Corner72 {
+    static RUN: OnceLock<Corner72> = OnceLock::new();
+    RUN.get_or_init(|| {
+        let params = corner_72();
+        let settings = Settings {
+            cells: 1_000,
+            allow_partial: true,
+            ..Settings::default()
+        };
+        let world = crate::generate_through_crust(&params, &settings, 3).expect("a partial world");
+        let h = &world.field(SURFACE_HEIGHT).expect("heights").values;
+        let start = monthly_temperature(&params, &world.grid, h, world.sea_level_m);
+        let coupled = coupled_sea_surface(&params, &world.grid, h, world.sea_level_m, &start);
+        Corner72 {
+            params,
+            world,
+            start,
+            coupled,
+        }
+    })
+}
+
+#[test]
+fn golden_fingerprint_of_a_relaxed_loop() {
+    // Ticket M4-20. Every other golden value is Earth's, whose loop is
+    // never relaxed: this one covers the relaxed loop. Corner 72 on the
+    // 1,000 cells of the bounds tests (seed 3), relaxed from year 5 and
+    // settled in 34 years: FNV-1a over the bits of the twelve monthly
+    // sea-level and surface temperatures, the twelve monthly winds towards
+    // the east and the north, the transports of the currents and the
+    // twelve monthly upwellings (f64, little-endian, cells and CSR entries
+    // in index order). A change means that the same planet has a different
+    // climate: a world-breaking change, stated in the commit's
+    // `World-breaking:` line. Recorded after the other tests passed and
+    // the maps of out/M4-20 were viewed (ticket M4-20, Result).
+    let c = &corner_72_run().coupled;
+    let t = &c.sea_surface.temperature;
+    let bytes: Vec<u8> = t
+        .sea_level_k
+        .iter()
+        .chain(&t.surface_k)
+        .chain(&c.circulation.wind_east_m_s)
+        .chain(&c.circulation.wind_north_m_s)
+        .chain(core::iter::once(&c.currents.transport_m3_s))
+        .chain(&c.sea_surface.upwelling_m3_s)
+        .flat_map(|m| m.iter().flat_map(|v| v.to_bits().to_le_bytes()))
+        .collect();
+    let fingerprint = fnv1a64(&bytes);
+    println!("fingerprint {fingerprint:#018X}, {} years", t.years);
+    assert_eq!(fingerprint, RELAXED_GOLDEN_FINGERPRINT);
+}
+
+/// The fingerprint of `golden_fingerprint_of_a_relaxed_loop`.
+const RELAXED_GOLDEN_FINGERPRINT: u64 = 0xC793_26CF_E725_5548;
+
+#[test]
+fn an_oscillating_loop_settles_relaxed() {
+    // Ticket M4-20. Corner 72 on the 1,000 cells of the bounds tests (seed
+    // 3): without the relaxation the loop swings between two years for
+    // its 100 years (the residual 57.5 K at a coastal cell 0.7° from the
+    // equator in both of its last years, the ticket's prototype); relaxed
+    // once it oscillates (from year 5) it settles (measured 34 years, as
+    // in the prototype), to a fixed point of the same loop: the loop run
+    // on to 10⁻⁵ K (48 years) stays within 10⁻³ K of it (measured
+    // 2.4 × 10⁻⁴ K), and the winds of the returned temperatures are near
+    // the returned winds, which are those of the drive within the
+    // tolerance of the returned temperatures.
+    let run = corner_72_run();
+    let (params, grid) = (&run.params, &run.world.grid);
+    let h = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
+    let z = run.world.sea_level_m;
+    let (start, coupled) = (&run.start, &run.coupled);
+    let t = &coupled.sea_surface.temperature;
+    println!(
+        "relaxed: {} years, relaxed from {:?}, last change {:e} K",
+        t.years, coupled.relaxed_from_year, t.change_k
+    );
+    assert!(t.converged);
+    assert!(t.change_k <= PERIODIC_TOLERANCE_K);
+    // The trigger fires at the end of year 4 (the residual grows from 38.6
+    // to 51.5 K and has reversed), so year 5 is the first relaxed one; the
+    // years and the first relaxed year are exact, as the loop is
+    // deterministic (the prototype gave the same).
+    assert_eq!(coupled.relaxed_from_year, Some(5));
+    assert_eq!(t.years, 34);
+    // The last change reported is the larger of the year's change from the
+    // year before (8.7 × 10⁻⁵ K) and its residual from the drive: the
+    // residual, exactly (review of ticket M4-20).
+    assert_eq!(t.change_k.to_bits(), 8.507919344822312e-4_f64.to_bits());
+    for month in t.sea_level_k.iter().chain(&t.surface_k) {
+        assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
+    }
+    let control = Control {
+        tolerance_k: 1e-5,
+        max_years: MAX_YEARS,
+        relaxation: RELAXATION,
+    };
+    let closer = coupled_run(params, grid, h, z, start, control);
+    let difference = largest_change_k(&t.sea_level_k, &closer.sea_surface.temperature.sea_level_k);
+    let winds =
+        largest_wind_difference(&coupled.circulation, &monthly_circulation(params, grid, t));
+    println!(
+        "10⁻⁵ K in {} years ({}): {difference:e} K away; the winds of the returned \
+         temperatures {winds:e} m/s from the returned winds",
+        closer.sea_surface.temperature.years, closer.sea_surface.temperature.converged
+    );
+    assert!(closer.sea_surface.temperature.converged);
+    assert_eq!(closer.relaxed_from_year, coupled.relaxed_from_year);
+    assert!(difference <= 1e-3);
+    assert!(winds <= WINDS_BOUND_M_S);
+    if !cfg!(debug_assertions) {
+        // The loop of ticket M4-17 (no relaxation): a cycle of two years.
+        let control = Control {
+            tolerance_k: PERIODIC_TOLERANCE_K,
+            max_years: MAX_YEARS,
+            relaxation: 1.0,
+        };
+        let plain = coupled_run(params, grid, h, z, start, control);
+        let p = &plain.sea_surface.temperature;
+        println!(
+            "not relaxed: {} years, last change {:e} K",
+            p.years, p.change_k
+        );
+        assert_eq!(plain.relaxed_from_year, None);
+        assert!(!p.converged);
+        assert_eq!(p.years, MAX_YEARS);
+        assert!(p.change_k > 10.0);
+    }
+}
+
+/// The bound of `an_oscillating_loop_settles_relaxed` on the winds of the
+/// returned temperatures (m/s): that of Earth's state in
+/// `the_coupled_state_is_within_the_tolerance_of_its_fixed_point`, 20 times
+/// the measured 9.5 × 10⁻⁵ m/s.
+const WINDS_BOUND_M_S: f64 = 2e-3;
+
+#[test]
+fn the_reversal_is_weighted_by_the_cells_areas() {
+    // Ticket M4-20: the residual of a year, `means − drive`, replaces the
+    // year before's, and their inner product is weighted by the cells'
+    // areas. Two cells of 1 and 3 sr, one month: the residual (1, −1)
+    // against the year before's (2, 1) gives 1·1·2 + 3·(−1)·1 = −1, a
+    // reversal, although the unweighted sum 2 − 1 = 1 is positive.
+    let areas = [1.0, 3.0];
+    let zeros = || core::array::from_fn::<Vec<f64>, MONTHS, _>(|_| vec![0.0; 2]);
+    let (mut means, mut drive, mut residual) = (zeros(), zeros(), zeros());
+    means[0] = vec![1.0, 1.0];
+    drive[0] = vec![0.0, 2.0];
+    residual[0] = vec![2.0, 1.0];
+    assert!(replace_residual(&areas, &means, &drive, &mut residual));
+    assert_eq!(residual[0], [1.0, -1.0]);
+    assert!(residual[1..].iter().all(|m| m == &[0.0, 0.0]));
+    // The same residual again: no reversal (1 + 3 = 4).
+    assert!(!replace_residual(&areas, &means, &drive, &mut residual));
+}
+
+#[test]
+fn the_trigger_needs_a_growth_and_a_reversal() {
+    // Ticket M4-20 (module documentation, "Relaxation"): a year oscillates
+    // when its largest residual exceeds the year before's and the residual
+    // reversed that year or the year before.
+    // A falling residual, reversed or not: the loop converges.
+    assert!(!oscillates(2.0, 1.0, true, true));
+    assert!(!oscillates(2.0, 1.0, false, false));
+    // A growth without a reversal: a monotone drift, which the relaxation
+    // would slow.
+    assert!(!oscillates(1.0, 1.5, false, false));
+    // A growth with a reversal this year, or the year before.
+    assert!(oscillates(1.0, 1.5, true, false));
+    assert!(oscillates(1.0, 1.5, false, true));
+    // An equal residual is not a growth; the first year's is infinite.
+    assert!(!oscillates(1.0, 1.0, true, true));
+    assert!(!oscillates(f64::INFINITY, 5.0, true, true));
 }

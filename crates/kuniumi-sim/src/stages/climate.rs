@@ -55,7 +55,12 @@
 //!    ([`circulation::CirculationModel::monthly`]) and the currents of their
 //!    annual-mean stress ([`ocean::OceanModel::currents`]) made again from
 //!    each year's temperatures, until no monthly mean changes by more than
-//!    the same tolerance from the year before (at most the same years);
+//!    the same tolerance from the year before, nor differs by more than it
+//!    from the temperatures that drove the year's winds (at most the same
+//!    years); once the loop oscillates, the temperatures that drive the
+//!    winds are relaxed towards each year's ([`coupling`], "Relaxation";
+//!    ticket M4-20), which Earth's loop never does, and until then the two
+//!    differences are the same;
 //! 3. the moisture of the coupled winds over the coupled sea surface's
 //!    surface temperatures, [`moisture::monthly_moisture`] (to
 //!    [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
@@ -79,10 +84,11 @@
 //! changing, and the stage reports it as a warning of the world (below,
 //! "Warnings"). Of the 128 corners of the v1 range on 1,000 cells (seed 3),
 //! every energy balance is periodic within 10 years since the balance step
-//! of ticket M4-15, the coupled sea surface of 23 is not after its 100
-//! years (mostly 10-bar atmospheres, 8-hour days and worlds without water;
-//! ticket M4-17, [`coupling`]), and 12 moistures are not after their 10
-//! (tickets M4-07, M4-16, M4-17). The temperatures have no fixed bound at the
+//! of ticket M4-15, the coupled sea surface of 8 is not after its 100
+//! years (10-bar atmospheres whose thermal equator jumps between two
+//! latitudes from one year to the next; tickets M4-17, M4-20,
+//! [`coupling`]), and 12 moistures are not after their 10 (tickets M4-07,
+//! M4-16, M4-17). The temperatures have no fixed bound at the
 //! corners (monthly means from about 95 K to about 11,600 K, ticket M4-02).
 //!
 //! The climate is that of the relief of the Crust stage: the Erosion stage
@@ -131,6 +137,10 @@
 //!    largest relative residual;
 //! 3. the sea surface coupled with its winds and currents did not reach
 //!    its periodic state, as 1 (also when the coupling does not settle);
+//!    its last change is the larger of the last year's change from the
+//!    year before and its difference from the temperatures that drove its
+//!    winds ([`coupling::Coupled::sea_surface`]), the same number unless
+//!    the loop was relaxed (ticket M4-20);
 //! 4. the moisture did not reach its periodic state
 //!    ([`Moisture::converged`]), with its years and last change;
 //! 5. sub-steps of the moisture did not settle their active set
@@ -253,7 +263,8 @@ pub struct Climate {
     pub energy_balance: Temperature,
     /// The monthly pressure and surface winds of the coupled state (tickets
     /// M4-03, M4-17): those of the last year of `sea_surface`, made from
-    /// the year before's temperatures.
+    /// the temperatures that drove it, the year before's or, once the loop
+    /// is relaxed, their relaxation (ticket M4-20).
     pub circulation: Circulation,
     /// The currents of the annual-mean wind stress of `circulation` (tickets
     /// M4-04, M4-17).
@@ -292,6 +303,7 @@ pub fn climate(
         circulation,
         currents,
         sea_surface,
+        ..
     } = coupled_sea_surface(params, grid, heights_m, sea_level_m, &energy_balance);
     progress(PROGRESS[1]);
     let moisture = monthly_moisture(

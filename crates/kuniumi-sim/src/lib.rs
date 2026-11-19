@@ -566,23 +566,30 @@ mod tests {
     /// none since the balance step of ticket M4-15 (corners 56–59 before,
     /// which alternated between two years under the annual correction of
     /// ticket M4-02). This and the next three lists were measured by a
-    /// scratch tool, in ticket M4-16 and again in tickets M4-15 and M4-17,
-    /// which ran `stages::climate::climate` on the worlds of the Crust stage
-    /// and read each model's own flags: independent of the code of the
-    /// warnings. Every other model of every planet of the bounds tests
+    /// scratch tool, in ticket M4-16 and again in tickets M4-15, M4-17 and
+    /// M4-20, which ran `stages::climate::climate` on the worlds of the
+    /// Crust stage and read each model's own flags: independent of the
+    /// code of the warnings. Every other model of every planet of the bounds tests
     /// settles, and every solve converges.
     const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
 
     /// The corners whose sea surface coupled with its winds and currents is
-    /// not periodic after its 100 years (ticket M4-17): mostly the 10-bar
-    /// atmospheres, the 8-hour days and the worlds without water, whose
-    /// stress and upwelling are many times Earth's (ticket M4-20). Before
-    /// ticket M4-17 the sea surface, with the winds and currents of the
-    /// energy balance alone, was periodic at every corner (since ticket
-    /// M4-15).
-    const UNSETTLED_SEA_SURFACE: [u32; 23] = [
-        17, 19, 25, 27, 48, 50, 64, 66, 68, 72, 73, 74, 75, 83, 84, 86, 89, 90, 91, 92, 94, 96, 112,
-    ];
+    /// not periodic after its 100 years (tickets M4-17, M4-20): planets
+    /// with 10 bar whose thermal equator jumps between two latitudes from
+    /// one year to the next: from one cap to the other in a month near an
+    /// equinox on the 240-hour days of 68, 84, 86, 92 and 94, whose poles
+    /// take turns as the warmest, and by 1–40° near the equator for 73, 75
+    /// and 91 (a continuous thermal equator is ticket M4-21). The loop of
+    /// all but 68 oscillates and is relaxed, but may have no fixed point to
+    /// settle to; that of 68 changes by the same 2.1 K every year without
+    /// its residual reversing, so it is never relaxed. Their last change is
+    /// 2.1 to 32 K. The 23 corners of ticket M4-17, mostly the
+    /// 10-bar atmospheres, the 8-hour days and the worlds without water,
+    /// whose loop swung from year to year, settle but these 8 since the
+    /// loop is relaxed once it oscillates (ticket M4-20). Before ticket
+    /// M4-17 the sea surface, with the winds and currents of the energy
+    /// balance alone, was periodic at every corner (since ticket M4-15).
+    const UNSETTLED_SEA_SURFACE: [u32; 8] = [68, 73, 75, 84, 86, 91, 92, 94];
 
     /// The corners whose moisture is not periodic after its 10 years: the
     /// planets without water (whose only ocean is the cells at the sea
@@ -592,9 +599,12 @@ mod tests {
 
     /// The planets of `the_orbits_at_their_bounds_generate_finite_worlds`
     /// (by their index there) whose coupled sea surface is not periodic
-    /// after its 100 years (ticket M4-17): the two at obliquity 90° and
-    /// e = 0.99, and Earth at e = 0.99; the others settle.
-    const UNSETTLED_ORBITS: [usize; 3] = [0, 1, 3];
+    /// after its 100 years (tickets M4-17, M4-20): the thick, slow one at
+    /// obliquity 90° and e = 0.99, whose thermal equator jumps from one cap
+    /// to the other (last change 0.12 K), and Earth at e = 0.99, whose
+    /// monthly winds reach 700 m/s (141 K); the others settle, the thin,
+    /// fast one at obliquity 90° since the relaxation of ticket M4-20.
+    const UNSETTLED_ORBITS: [usize; 2] = [1, 3];
 
     /// Checks that the warnings of `world`, the planet `corner` of
     /// [`bound_planets`] (Earth, or another planet of the bounds tests, for
@@ -675,10 +685,10 @@ mod tests {
     /// ([`assert_finite_world`]) and checks their warnings
     /// ([`assert_warnings`]). Release builds run every corner kept; debug
     /// builds, where the climate takes several seconds a planet (more for
-    /// one whose coupled sea surface runs its 100 years), the corners whose
-    /// index halved is a multiple of 8 (8 of each radius; of them 17, 48,
-    /// 64, 96 and 112 warn of the coupled sea surface and 17 and 81 of the
-    /// moisture) and Earth.
+    /// one whose coupled sea surface runs many years), the corners whose
+    /// index halved is a multiple of 8 (8 of each radius; none of them warns
+    /// of the coupled sea surface since ticket M4-20, which settles 17, 48,
+    /// 64, 96 and 112, relaxed; 17 and 81 warn of the moisture) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);
@@ -743,8 +753,8 @@ mod tests {
         let settings = bounds_settings();
         for (k, p) in planets.iter().enumerate() {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
-            // Each settles but the coupled sea surface of three (the scratch
-            // tools of tickets M4-16 and M4-17).
+            // Each settles but the coupled sea surface of two (the scratch
+            // tools of tickets M4-16, M4-17 and M4-20).
             let world = assert_finite_world(p, &settings);
             assert_warned(
                 &format!("orbit {k}"),

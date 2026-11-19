@@ -607,6 +607,9 @@ section: every change after which an existing seed produces a different world
 - `CirculationParams::smoothing_length_m` and `SMOOTHING_LENGTH_M`
   (1,000 km for every planet), `circulation::SMOOTHING_TOLERANCE` and
   `SMOOTHING_MAX_ITERATIONS` (M4-17).
+- `coupling::RELAXATION` (1/3) and `Coupled::relaxed_from_year`, the
+  first year of the coupled loop driven by relaxed temperatures, none
+  where the loop never oscillated, as on Earth (M4-20).
 
 ### Changed
 
@@ -940,6 +943,20 @@ section: every change after which an existing seed produces a different world
   that the cold spots of coastal upwelling at the scale of a cell do not
   drive the equatorial winds that move the upwelling. With `ℓ` = 0 the
   circulation is M4-03's bit for bit.
+- The coupled loop of the sea surface, the winds and the currents is
+  relaxed once it oscillates (`coupling`, "Relaxation"; M4-20): from the
+  year after the first year whose largest residual (the year's monthly
+  temperatures less those that drove its circulation) grows while the
+  residual reverses that year or the year before, the temperatures that
+  drive the circulation are `D + (T − D)/3` instead of the year's own,
+  which keeps the loop's fixed points and damps its swings from year to
+  year. The loop stops when both the change from the year before and the
+  residual are at most 10⁻³ K. Earth's loop never oscillates and is
+  M4-17's bit for bit. Of the planets of the bounds tests (1,000 cells,
+  seed 3) 16 more settle, none fewer: 8 corners still do not (10-bar
+  atmospheres whose thermal equator jumps between two latitudes from one
+  year to the next; follow-up M4-21), nor do two of the planets at the
+  bounds of the orbit instead of three.
 
 ### Removed
 
@@ -1041,6 +1058,12 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-20: the climate of a planet whose coupled loop oscillates changes:
+  its 30 fields of the Climate stage are those of the relaxed loop (in the
+  bounds tests 38 of the 135 planets at seed 3, among them the 16 that
+  now settle). Every planet whose loop does not oscillate keeps its world
+  bit for bit, Earth among them: no golden value changes.
 
 - M4-17: every world's climate changes: the 30 fields of the Climate
   stage are those of the coupled state of the sea surface, the winds and

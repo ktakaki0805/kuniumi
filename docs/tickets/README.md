@@ -138,6 +138,7 @@ parallel with later milestones.
 | [M4-15](M4-15-periodic-state-solver.md) | The periodic state of slowly converging planets | M4-09 |
 | [M4-17](M4-17-coupled-climate.md) | The coupled periodic state of temperature, winds and currents | M4-07 |
 | [M4-20](M4-20-extreme-coupled-climate.md) | The coupled climate of the extreme planets | M4-17 |
+| [M4-21](M4-21-continuous-thermal-equator.md) | A continuous thermal equator | M4-20 |
 | [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
 | [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-12](M4-12-mixed-layer.md) | Sea-surface fronts: a mixed layer under the atmosphere | M4-05 |
