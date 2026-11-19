@@ -26,6 +26,11 @@
 //! `a_calm_planet_keeps_its_land_dry`,
 //! `the_balance_step_leaves_a_periodic_state_alone`,
 //! `a_dry_planet_reaches_the_periodic_state_of_its_years`.
+//! Ticket M4-23 (the Newton–Krylov step):
+//! `the_newton_step_settles_a_seasonal_dry_planet`,
+//! `the_linearised_year_is_the_derivative_of_an_affine_year`, and the
+//! Newton–Krylov step of an unchanged year in
+//! `the_balance_step_leaves_a_periodic_state_alone`.
 //!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! the sea surface of ticket M4-05 (its temperatures) and the circulation of
@@ -1438,10 +1443,20 @@ fn the_balance_step_leaves_a_periodic_state_alone() {
         .iter()
         .map(|&a| u32::from(a) * SUBSTEPS_PER_MONTH as u32)
         .collect();
-    let delta = model.balance_step(&year, &raining, &x, &x).expect("a step");
+    let zero = vec![0.0; n];
+    let delta = model.balance_step(&year, &raining, &zero).expect("a step");
     assert!(delta.iter().all(|d| d.to_bits() == 0));
-    let y: Vec<f64> = x.iter().map(|w| w + 1e-3).collect();
-    let delta = model.balance_step(&year, &raining, &x, &y).expect("a step");
+    // The Newton–Krylov step (ticket M4-23) of the same year, with the set
+    // of that sub-step in each of the year's sub-steps: no change, nothing
+    // to solve, no iteration.
+    let set: Vec<bool> = raining.iter().map(|&r| r > 0).collect();
+    let sets = vec![set; MONTHS * SUBSTEPS_PER_MONTH];
+    let (correction, converged) = model.newton_step(&year, &earth.months, &sets, &raining, &zero);
+    let correction = correction.expect("a step");
+    assert!(converged && correction.len() == n);
+    assert!(correction.iter().all(|d| d.to_bits() == 0));
+    let gain = vec![1e-3; n];
+    let delta = model.balance_step(&year, &raining, &gain).expect("a step");
     let largest = delta.iter().fold(0.0_f64, |a, &d| a.max(d));
     let smallest = delta.iter().fold(f64::MAX, |a, &d| a.min(d));
     println!("a step of {smallest:e} to {largest:e} kg/m² after a gain of 10⁻³");
@@ -1449,18 +1464,251 @@ fn the_balance_step_leaves_a_periodic_state_alone() {
     assert_eq!(delta.len(), n);
 }
 
-/// Corner 93 of the bounds tests (`lib.rs`): 13,000 km, a 240-hour day, a
-/// 10-year orbit, 2,500 W/m², no water, 10 bar, its gravity raised to the
-/// smallest bulk density (3,000 kg/m³) as there.
-fn dry_corner() -> PlanetParams {
+/// The solution of the dense system `a x = b` by Gaussian elimination with
+/// partial pivoting.
+fn dense_solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Vec<f64> {
+    let n = b.len();
+    for k in 0..n {
+        let p = (k..n)
+            .max_by(|&i, &j| a[i][k].abs().total_cmp(&a[j][k].abs()))
+            .expect("a row");
+        a.swap(k, p);
+        b.swap(k, p);
+        let pivot = a[k].clone();
+        for i in k + 1..n {
+            let f = a[i][k] / pivot[k];
+            for (x, p) in a[i].iter_mut().zip(&pivot).skip(k) {
+                *x -= f * p;
+            }
+            b[i] -= f * b[k];
+        }
+    }
+    let mut x = vec![0.0; n];
+    for k in (0..n).rev() {
+        let sum: f64 = (k + 1..n).map(|j| a[k][j] * x[j]).sum();
+        x[k] = (b[k] - sum) / a[k][k];
+    }
+    x
+}
+
+#[test]
+fn gmres_solves_a_small_nonsymmetric_system() {
+    // Ticket M4-23 (review round 1). The GMRES of the Newton–Krylov step on
+    // a dense nonsymmetric system of 6 unknowns, `A = 6 I + B` with `B` the
+    // entries `sin((i + 1)(j + 2))`, in the inner product of the weights 1 to 6,
+    // from x₀ = 0, whose residual is b. After one iteration (P v = v) its
+    // solution is the minimum of ‖b − α A b‖ in that norm,
+    // α = ⟨A b, b⟩ / ⟨A b, A b⟩ (by hand); after six the Krylov space is
+    // the whole space and its solution the system's, by Gaussian
+    // elimination, also with a diagonal preconditioner P (the solution is
+    // `x₀ + Σ γ_j P v_j`); in between the residual as the rotations updated
+    // it is the true one and does not grow, and a positive target stops it
+    // at the first iteration within it. A start within the target makes no
+    // iteration and keeps its bits.
+    let n = 6;
+    let a: Vec<Vec<f64>> = (0..n)
+        .map(|i| {
+            (0..n)
+                .map(|j| {
+                    let diagonal = if i == j { 6.0 } else { 0.0 };
+                    diagonal + (((i + 1) * (j + 2)) as f64).sin()
+                })
+                .collect()
+        })
+        .collect();
+    let b: Vec<f64> = (0..n).map(|i| 1.0 + (i as f64).cos()).collect();
+    let weights: Vec<f64> = (1..=n).map(|w| w as f64).collect();
+    let times = |x: &[f64]| -> Vec<f64> {
+        a.iter()
+            .map(|row| row.iter().zip(x).map(|(r, v)| r * v).sum())
+            .collect()
+    };
+    let dot = |u: &[f64], v: &[f64]| -> f64 { (0..n).map(|i| weights[i] * u[i] * v[i]).sum() };
+    let norm = |v: &[f64]| dot(v, v).sqrt();
+    let solve_to = |target: f64, iterations: usize, diagonal: &[f64]| {
+        let mut product = |v: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> {
+            let pv: Vec<f64> = v.iter().zip(diagonal).map(|(x, d)| x * d).collect();
+            Some((times(&pv), pv))
+        };
+        let g = gmres(&weights, &b, vec![0.0; n], target, iterations, &mut product)
+            .expect("the products");
+        (g.correction, g.iterations, g.residual_norm)
+    };
+    let solve = |iterations: usize, diagonal: &[f64]| solve_to(0.0, iterations, diagonal);
+    let ones = vec![1.0; n];
+    let (x1, used, r1) = solve(1, &ones);
+    let ab = times(&b);
+    let alpha = dot(&ab, &b) / dot(&ab, &ab);
+    assert_eq!(used, 1);
+    for i in 0..n {
+        assert!(
+            (x1[i] - alpha * b[i]).abs() <= 1e-14,
+            "{} against {}",
+            x1[i],
+            alpha * b[i]
+        );
+    }
+    let mut last = norm(&b);
+    for iterations in 1..=n {
+        let (x, used, reported) = solve(iterations, &ones);
+        let ax = times(&x);
+        let residual: Vec<f64> = (0..n).map(|i| b[i] - ax[i]).collect();
+        let actual = norm(&residual);
+        println!("{iterations} iterations: residual {reported:e} (true {actual:e})");
+        assert_eq!(used, iterations);
+        assert!((reported - actual).abs() <= 1e-12 * norm(&b));
+        assert!(actual <= last + 1e-13 * norm(&b));
+        last = actual;
+    }
+    let exact = dense_solve(a.clone(), b.clone());
+    let (x6, _, r6) = solve(n, &ones);
+    let (xp, _, rp) = solve(n, &[0.5, 2.0, 1.0, 0.25, 3.0, 1.5]);
+    for i in 0..n {
+        assert!(
+            (x6[i] - exact[i]).abs() <= 1e-12,
+            "{} against {}",
+            x6[i],
+            exact[i]
+        );
+        assert!(
+            (xp[i] - exact[i]).abs() <= 1e-12,
+            "{} against {}",
+            xp[i],
+            exact[i]
+        );
+    }
+    assert!(r1 > 1e-3 && r6 <= 1e-12 * norm(&b) && rp <= 1e-12 * norm(&b));
+    // A positive target stops at the first iteration within it: between the
+    // residuals after 3 and 4 iterations (9.5 × 10⁻² and 2.4 × 10⁻²), the
+    // fourth (review round 2).
+    let (_, used, reported) = solve_to(0.05, n, &ones);
+    assert!(
+        used == 4 && reported <= 0.05,
+        "{used} iterations, {reported:e}"
+    );
+    let start = vec![-0.0, 1.0, 2.0, 3.0, 4.0, 5.0];
+    let mut never = |_: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> { None };
+    let g = gmres(&weights, &b, start.clone(), 2.0 * norm(&b), n, &mut never).expect("none");
+    assert_eq!(g.iterations, 0);
+    assert!(
+        g.correction
+            .iter()
+            .zip(&start)
+            .all(|(x, y)| x.to_bits() == y.to_bits())
+    );
+}
+
+#[test]
+fn the_linearised_year_is_the_derivative_of_an_affine_year() {
+    // Ticket M4-23. Where the sets of raining cells of a year's sub-steps do
+    // not change, the year is affine, F(x) = M x + c, and the linearised
+    // year of the Newton–Krylov step, M v, is the difference of two years of
+    // the model, F(x + v) − F(x), up to the solves (the model's to 10⁻¹²,
+    // the linearised year's to 10⁻⁶ of their right-hand sides). A planet at
+    // 288 K everywhere, no divergent part (δ = 1) and no recycling (β = 0),
+    // ocean south of 17.5° N and flat land of 1 m north of it, and a wind of
+    // 0.05 m/s cos(latitude) that blows east in the first six months and
+    // north in the other six (operators that do not commute); twice: with
+    // the threshold the saturated column itself (r_c = 1), which with β = 0
+    // no column exceeds (no cell rains its excess; v of up to 8 kg/m²), and
+    // with the model's threshold (r_c = 0.85), above which the ocean rains
+    // (298,105 cells' sub-steps in the sets of their last solves, the same
+    // for x and x + v; v of up to 4 × 10⁻⁴ kg/m², review round 1). Within
+    // 10⁻⁵ of the largest M v: measured 6.0 × 10⁻⁷ and 8.2 × 10⁻⁷.
+    let grid = grid_10k();
+    let n = grid.len();
+    let heights: Vec<f64> = (0..n as u32)
+        .map(|i| {
+            if grid.position(i).z > 0.3 {
+                1.0
+            } else {
+                -1_000.0
+            }
+        })
+        .collect();
+    let t = vec![288.0; n];
+    let x: Vec<f64> = (0..n).map(|i| 10.0 + (i % 7) as f64).collect();
+    let shape: Vec<f64> = (0..n)
+        .map(|i| {
+            let p = grid.position(i as u32);
+            (1.0 + p.x) * (1.0 + p.y * p.z)
+        })
+        .collect();
+    for (threshold, scale, rains) in [(1.0, 2.0, false), (0.85, 1e-4, true)] {
+        let params = MoistureParams {
+            precipitation_threshold: threshold,
+            divergent_fraction: 1.0,
+            recycling_fraction: 0.0,
+            ..MoistureParams::earth()
+        };
+        let model = MoistureModel::new(&params, grid, &heights, 0.0, YEAR_S);
+        let months: [MoistureMonth; MONTHS] = core::array::from_fn(|k| {
+            let (mut east, mut north) = (vec![0.0; n], vec![0.0; n]);
+            for i in 0..n {
+                let p = grid.position(i as u32);
+                let wind = 0.05 * (1.0 - p.z * p.z).sqrt();
+                if k < 6 {
+                    east[i] = wind;
+                } else {
+                    north[i] = wind;
+                }
+            }
+            model.month(&east, &north, &t)
+        });
+        // A year from `x`: its end and the sets of its sub-steps.
+        let year = |x: &[f64]| -> (Vec<f64>, Vec<Vec<bool>>) {
+            let mut w = x.to_vec();
+            let mut sets = Vec::new();
+            for month in &months {
+                for _ in 0..SUBSTEPS_PER_MONTH {
+                    sets.push(model.substep(month, &mut w).active);
+                }
+            }
+            (w, sets)
+        };
+        let v: Vec<f64> = shape.iter().map(|s| scale * s).collect();
+        let xv: Vec<f64> = x.iter().zip(&v).map(|(a, b)| a + b).collect();
+        let (y, sets) = year(&x);
+        let (yv, sets_v) = year(&xv);
+        let raining = sets.iter().flatten().filter(|&&a| a).count();
+        let changed = sets
+            .iter()
+            .flatten()
+            .zip(sets_v.iter().flatten())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            changed == 0 && (raining > 0) == rains,
+            "{raining} raining, {changed} changed"
+        );
+        let mv = model.linearised_year(&months, &sets, &v).expect("solves");
+        let (mut worst, mut largest): (f64, f64) = (0.0, 0.0);
+        for i in 0..n {
+            worst = worst.max(((yv[i] - y[i]) - mv[i]).abs());
+            largest = largest.max(mv[i].abs());
+        }
+        println!(
+            "r_c = {threshold}: {raining} cells' sub-steps raining, M v up to {largest:e} \
+             kg/m², against the two years within {worst:e}"
+        );
+        assert!(largest > 0.05 * scale && worst <= 1e-5 * largest);
+    }
+}
+
+/// A dry corner of the bounds tests (`lib.rs`): 13,000 km, a 240-hour
+/// day, 2,500 W/m², no water, the year `orbital_period_s` (s) and the
+/// surface pressure `surface_pressure_pa` (Pa), its gravity raised to the
+/// smallest bulk density (3,000 kg/m³) as there: corner 93 with a 10-year
+/// orbit and 10 bar, corner 21 with a 90-day orbit and 0.1 bar.
+fn dry_corner(orbital_period_s: f64, surface_pressure_pa: f64) -> PlanetParams {
     let mut p = PlanetParams {
         radius_m: PlanetParams::MAX_RADIUS_M,
         surface_gravity_m_s2: PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
         rotation_period_s: PlanetParams::MAX_ROTATION_PERIOD_S,
-        orbital_period_s: PlanetParams::MAX_ORBITAL_PERIOD_S,
+        orbital_period_s,
         stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
         ocean_volume_m3: 0.0,
-        surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
+        surface_pressure_pa,
         ..PlanetParams::earth()
     };
     p.surface_gravity_m_s2 *=
@@ -1469,33 +1717,23 @@ fn dry_corner() -> PlanetParams {
     p
 }
 
-#[test]
-fn a_dry_planet_reaches_the_periodic_state_of_its_years() {
-    // Corner 93 on 1,000 cells (seed 3), with the winds and the sea surface
-    // of its coupled climate: its polar air hardly moves (winds below
-    // 1 mm/s at −82°), and its vapour drains from there by 14 % a year, so
-    // the years alone need 153 years to the tolerance from no vapour (231
-    // from the threshold, ticket M4-22, prototype). With the balance step it
-    // is periodic within its 10 years (9), and its monthly vapour is within
-    // a tenth of the tolerance, 10⁻⁷ kg/m², of the state that the same
-    // model's years reach alone, run until no monthly mean changes by more
-    // than 10⁻⁹ kg/m² (243 years; as the vapour drains by 14 % a year, about
-    // 6 × 10⁻⁹ kg/m² from their periodic state): measured 1.3 × 10⁻⁸. The
-    // comparison runs in release builds only.
-    let p = dry_corner();
+/// The moisture of the planet `p` on 1,000 cells (seed 3) and its months,
+/// with the winds and the sea surface of its coupled climate, as the
+/// Climate stage makes them.
+fn coupled_moisture(p: &PlanetParams) -> (MoistureModel, [MoistureMonth; MONTHS]) {
     let settings = Settings {
         cells: 1_000,
         allow_partial: true,
         ..Settings::default()
     };
-    let world = crate::generate_through_crust(&p, &settings, 3).expect("a world");
+    let world = crate::generate_through_crust(p, &settings, 3).expect("a world");
     let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
     let grid = &world.grid;
-    let start = monthly_temperature(&p, grid, heights, world.sea_level_m);
-    let coupled = coupled_sea_surface(&p, grid, heights, world.sea_level_m, &start);
+    let start = monthly_temperature(p, grid, heights, world.sea_level_m);
+    let coupled = coupled_sea_surface(p, grid, heights, world.sea_level_m, &start);
     let surface = &coupled.sea_surface.temperature.surface_k;
     let model = MoistureModel::new(
-        &MoistureParams::for_planet(&p),
+        &MoistureParams::for_planet(p),
         grid,
         heights,
         world.sea_level_m,
@@ -1508,24 +1746,133 @@ fn a_dry_planet_reaches_the_periodic_state_of_its_years() {
             &surface[k],
         )
     });
+    (model, months)
+}
+
+/// The largest difference of two monthly vapours (kg/m²).
+fn largest_difference(a: &[Vec<f64>; MONTHS], b: &[Vec<f64>; MONTHS]) -> f64 {
+    let mut worst: f64 = 0.0;
+    for (a, b) in a.iter().zip(b) {
+        for (x, y) in a.iter().zip(b) {
+            worst = worst.max((x - y).abs());
+        }
+    }
+    worst
+}
+
+#[test]
+fn the_newton_step_settles_a_seasonal_dry_planet() {
+    // Ticket M4-23. Corner 21 on 1,000 cells (seed 3), with the winds and
+    // the sea surface of its coupled climate: 13,000 km, a 240-hour day, a
+    // 90-day year, 2,500 W/m², 0.1 bar, no water. Its slow modes drain
+    // under winds that turn with the seasons, which the balance step of
+    // ticket M4-22, built on the year's mean operator, misses: alone it
+    // reaches the tolerance in 10 years, its change falling by a factor of
+    // about 13 a year (18, 27 and 41 years on 10,000, 40,000 and 160,000
+    // cells). The Newton–Krylov step solves the year map's Newton step:
+    // 5 years (prototype). After the first year, from no vapour, its
+    // correction `d` leaves the true residual of the Newton step,
+    // ‖r − (I − M)(r + d)‖ (areas' norm, the products by the linearised year
+    // of that year's sets), within its tolerance of 10⁻³ ‖r‖ (measured
+    // 5.0 × 10⁻⁵), where the balance step alone
+    // (`d = δ`) leaves 3 × 10⁻² of it. Its state is the model's own: within
+    // 10⁻⁷ kg/m² of the monthly vapour that the same model's years reach
+    // alone, run until no monthly mean changes by more than 10⁻⁹ kg/m² (in
+    // release builds only).
+    let p = dry_corner(
+        PlanetParams::MIN_ORBITAL_PERIOD_S,
+        PlanetParams::MIN_SURFACE_PRESSURE_PA,
+    );
+    let (model, months) = coupled_moisture(&p);
+    let n = model.len();
+    let mut r = vec![0.0; n];
+    let mut sets = Vec::new();
+    let mut raining = vec![0_u32; n];
+    for month in &months {
+        for _ in 0..SUBSTEPS_PER_MONTH {
+            let step = model.substep(month, &mut r);
+            for (count, &active) in raining.iter_mut().zip(&step.active) {
+                *count += u32::from(active);
+            }
+            sets.push(step.active);
+        }
+    }
+    let year = model.year_operator(&months);
+    let (correction, converged) = model.newton_step(&year, &months, &sets, &raining, &r);
+    let correction = correction.expect("a step");
+    let delta = model.balance_step(&year, &raining, &r).expect("a step");
+    let norm = |v: &[f64]| {
+        (0..n)
+            .map(|i| model.areas_sr[i] * v[i] * v[i])
+            .sum::<f64>()
+            .sqrt()
+    };
+    let relative = |d: &[f64]| {
+        let e: Vec<f64> = (0..n).map(|i| r[i] + d[i]).collect();
+        let me = model.linearised_year(&months, &sets, &e).expect("solves");
+        let residual: Vec<f64> = (0..n).map(|i| r[i] - (e[i] - me[i])).collect();
+        norm(&residual) / norm(&r)
+    };
+    let (newton, mean) = (relative(&correction), relative(&delta));
+    println!(
+        "after the first year: the Newton step's residual {newton:e}, the balance step's {mean:e}"
+    );
+    assert!(converged && newton <= NEWTON_TOLERANCE && mean > 10.0 * NEWTON_TOLERANCE);
+    let stepped = model.periodic_state(&months);
+    let mean = model.run_years(&months, MAX_YEARS, PERIODIC_TOLERANCE_KG_M2, Step::Mean);
+    println!(
+        "with the Newton–Krylov step {} years (change {:e}), with the balance step alone {} \
+         (change {:e})",
+        stepped.years, stepped.change_kg_m2, mean.years, mean.change_kg_m2
+    );
+    assert!(stepped.converged && stepped.years == 5);
+    assert!(stepped.unsettled_steps == 0 && stepped.failed_solves == 0);
+    assert!(mean.converged && mean.years == 10);
+    if cfg!(debug_assertions) {
+        return;
+    }
+    let years = model.run_years(&months, 1_000, 1e-9, Step::None);
+    let worst = largest_difference(&stepped.vapour_kg_m2, &years.vapour_kg_m2);
+    println!(
+        "alone {} years (change {:e}); largest difference {worst:e} kg/m²",
+        years.years, years.change_kg_m2
+    );
+    assert!(years.converged && years.years > 20);
+    assert!(worst <= 0.1 * PERIODIC_TOLERANCE_KG_M2);
+}
+
+#[test]
+fn a_dry_planet_reaches_the_periodic_state_of_its_years() {
+    // Corner 93 on 1,000 cells (seed 3), with the winds and the sea surface
+    // of its coupled climate: its polar air hardly moves (winds below
+    // 1 mm/s at −82°), and its vapour drains from there by 14 % a year, so
+    // the years alone need 153 years to the tolerance from no vapour (231
+    // from the threshold, ticket M4-22, prototype). With the balance step it
+    // is periodic within its 10 years (9; 7 with the Newton–Krylov step of
+    // ticket M4-23, prototype), and its monthly vapour is within a tenth of
+    // the tolerance, 10⁻⁷ kg/m², of the state that the same model's years
+    // reach alone, run until no monthly mean changes by more than
+    // 10⁻⁹ kg/m² (243 years; as the vapour drains by 14 % a year, about
+    // 6 × 10⁻⁹ kg/m² from their periodic state): measured 1.3 × 10⁻⁸. The
+    // comparison runs in release builds only.
+    let p = dry_corner(
+        PlanetParams::MAX_ORBITAL_PERIOD_S,
+        PlanetParams::MAX_SURFACE_PRESSURE_PA,
+    );
+    let (model, months) = coupled_moisture(&p);
     let stepped = model.periodic_state(&months);
     println!(
         "with the step {} years (change {:e})",
         stepped.years, stepped.change_kg_m2
     );
-    assert!(stepped.converged && stepped.years <= MAX_YEARS);
+    assert!(stepped.converged && stepped.years <= 7);
     assert!(stepped.unsettled_steps == 0 && stepped.failed_solves == 0);
     if cfg!(debug_assertions) {
         // The years alone take about 40 s in debug builds.
         return;
     }
-    let years = model.run_years(&months, 1_000, 1e-9, false);
-    let mut worst: f64 = 0.0;
-    for (a, b) in stepped.vapour_kg_m2.iter().zip(&years.vapour_kg_m2) {
-        for (x, y) in a.iter().zip(b) {
-            worst = worst.max((x - y).abs());
-        }
-    }
+    let years = model.run_years(&months, 1_000, 1e-9, Step::None);
+    let worst = largest_difference(&stepped.vapour_kg_m2, &years.vapour_kg_m2);
     println!(
         "alone {} years (change {:e}); largest difference {worst:e} kg/m²",
         years.years, years.change_kg_m2

@@ -63,8 +63,9 @@
 //!    differences are the same;
 //! 3. the moisture of the coupled winds over the coupled sea surface's
 //!    surface temperatures, [`moisture::monthly_moisture`] (from no vapour,
-//!    each year followed by a balance step of its water budget, ticket
-//!    M4-22, to [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
+//!    each year followed by a Newton–Krylov step of the year map, ticket
+//!    M4-23, preconditioned by the balance step of its water budget of
+//!    ticket M4-22, to [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
 //!    [`moisture::MAX_YEARS`] years).
 //!
 //! So the climate's winds and currents follow its own temperatures. Ticket
@@ -88,8 +89,9 @@
 //! of ticket M4-15, every coupled sea surface within its 100 years since
 //! the thermal equator is continuous (tickets M4-17, M4-20, M4-21,
 //! [`coupling`]; of the 6 planets at the bounds of the orbit, Earth at
-//! e = 0.99 is not), and 16 moistures are not after their 10 (planets
-//! without water; tickets M4-07, M4-16, M4-17, M4-21). The temperatures
+//! e = 0.99 is not), and every moisture within 7 years (8 on 10,000 cells)
+//! since its Newton–Krylov step (ticket M4-23; 16 planets without water
+//! were not after their 10 years until ticket M4-22). The temperatures
 //! have no fixed bound at the corners (monthly means from about 95 K to
 //! about 11,600 K, ticket M4-02).
 //!
@@ -147,8 +149,11 @@
 //!    ([`Moisture::converged`]), with its years and last change;
 //! 5. sub-steps of the moisture did not settle their active set
 //!    ([`Moisture::unsettled_steps`]);
-//! 6. monthly potentials, sub-steps and balance steps of the moisture had a
-//!    solve that did not reach its tolerance ([`Moisture::failed_solves`]).
+//! 6. monthly potentials, sub-steps and steps after its years of the
+//!    moisture (the Newton–Krylov steps and the balance steps that
+//!    precondition them, ticket M4-23) had a solve that did not reach its
+//!    tolerance ([`Moisture::failed_solves`]); the message names them its
+//!    balance steps.
 //!
 //! Each message is one line of ASCII: the change of a temperature in kelvin
 //! with 3 decimals (above the 10⁻³ K of
@@ -166,7 +171,10 @@
 //! models composed once, tickets M4-07 and M4-15; the models' own costs in
 //! tickets M4-09 and M4-14). The moisture's two balance steps (ticket
 //! M4-22) add about 90 % to its periodic state on 160,000 cells (from 8.3
-//! to 15.7 s) and 74 % on 650,000 (from 61.5 to 106.8 s).
+//! to 15.7 s) and 74 % on 650,000 (from 61.5 to 106.8 s), and the
+//! Newton–Krylov steps they precondition (ticket M4-23) a linearised year
+//! each, 26 to 38 % more on 10,000 to 650,000 cells (on 650,000 from 103.5
+//! to 141.9 s).
 //! [`climate`] reports the progress [`PROGRESS`] after each model.
 
 pub mod circulation;

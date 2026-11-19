@@ -591,11 +591,14 @@ mod tests {
     /// M4-15).
     const UNSETTLED_SEA_SURFACE: [u32; 0] = [];
 
-    /// The corners whose moisture is not periodic after its 10 years: none
-    /// since its periodic state starts from no vapour and steps each year's
-    /// annual water budget (ticket M4-22; the slowest, 85, 87 and 93, settle
-    /// in 9 years and 21, 23, 83 and 95 in 10, corner 83 with a last change
-    /// of 9.7 × 10⁻⁷ kg/m², just within the tolerance). Before, 16 planets
+    /// The corners whose moisture is not periodic after its years (20 since
+    /// ticket M4-23, 10 before): none since its periodic state starts from no
+    /// vapour and steps each year's annual water budget (ticket M4-22, whose
+    /// slowest corners, 85, 87 and 93, settled in 9 years and 21, 23, 83 and
+    /// 95 in 10, corner 83 with a last change of 9.7 × 10⁻⁷ kg/m², just
+    /// within the tolerance), and since that step preconditions a
+    /// Newton–Krylov step of the year map (ticket M4-23) every one within 7
+    /// years (87 and 93; 81, 83, 85, 95, 113 and 115 in 6). Before, 16 planets
     /// without water (whose only ocean is the cells at the sea level) at the
     /// largest radius did not: 5, 7, 17, 19, 21, 23, 69, 71, 77, 79, 81, 83,
     /// 85, 87, 93 and 95, with last changes from 1.8 × 10⁻⁶ to 61 kg/m²,

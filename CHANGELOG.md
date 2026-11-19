@@ -1007,6 +1007,27 @@ section: every change after which an existing seed produces a different world
   `MoistureModel::initial_vapour_kg_m2` is
   renamed `threshold_kg_m2`, and the warning of the moisture's failed
   solves names its balance steps too.
+- After each year that is not periodic the moisture takes a Newton–Krylov
+  step of the year map (`moisture`, "The periodic state"; M4-23): GMRES on
+  the Newton step of the periodic state, `(I − M) e = y − x`, each product
+  a linearised year with the sets of raining cells of the year just run,
+  preconditioned by M4-22's balance step, whose step it is where GMRES
+  needs no iteration (Li & Primeau 2008; Khatiwala 2008). The balance step
+  alone, built on the year's mean operator, missed the modes of winds that
+  turn with the seasons, the slower the finer the grid (corner 21 of the
+  bounds tests: 10, 18, 27 and 41 years on 1,000 to 160,000 cells); with
+  the Newton–Krylov step every planet of the bounds tests is periodic
+  within 7 years on 1,000 cells (seeds 1–3) and 8 on 10,000 (seed 3; 6
+  were not after 10), the 64 dry ones within 7 on 40,000 cells, the
+  slowest corners within 10 on 160,000 and 7 on 650,000, and the 1,458 dry
+  planets of M4-22's search within 8 (32 were not). `moisture::MAX_YEARS`
+  is raised from 10 to 20, for the margin of the first years' changing
+  sets of raining cells (corners 85 and 93 settle in their tenth year on
+  160,000 cells). Earth's moisture is the same bit for bit (10,000 to
+  650,000 cells), and costs a linearised year more for each of its two
+  steps: 26 to 38 % more (on 650,000 cells from 103.5 to 141.9 s). The CLI's
+  test of the warnings takes Earth at e = 0.99, whose coupled sea surface
+  does not settle, as no dry planet measured on 1,000 cells warns any more.
 
 ### Removed
 
@@ -1108,6 +1129,17 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-23: the moisture and precipitation of the planets on which the
+  Newton–Krylov step iterates change: those that did not settle before
+  (on 10,000 cells, seed 3, corners 21, 23, 85, 87, 93 and 95, which kept
+  their tenth year: by up to 2.3 × 10⁻³ kg/m² of monthly vapour, at the
+  south polar cap of corners 21 and 23; more on finer grids) reach their
+  periodic state, and the others reach the same periodic state another
+  way (on 1,000 cells, seed 3, 28 of the 135 planets of the bounds tests,
+  within 5.3 × 10⁻⁸ kg/m², the other 107 the same bit for bit; on 10,000
+  cells 24 within 1.8 × 10⁻⁷, 105 the same). Earth's moisture and every
+  golden value are unchanged.
 
 - M4-22: the moisture and precipitation of a planet whose vapour does not
   forget its start within its first years change: they are those of its

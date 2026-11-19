@@ -978,24 +978,22 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
 
 #[test]
 fn generate_prints_the_warnings_of_the_stages() {
-    // A dry planet whose moisture is not periodic after its 10 years on
-    // 1,000 cells (seed 3): 13,000 km, 11 m/s², 240 h, 90 days, e = 0.5,
-    // obliquity 90°, 2,500 W/m², no water, 0.1 bar; its vapour changed by
-    // 4.698 × 10⁻³ kg/m² in the last year, its other models settled (the
-    // scratch tool of ticket M4-22). Until ticket M4-22 this test took the
-    // same planet with Earth's orbit and 10 bar (corner 85 of the bounds
-    // tests of kuniumi-sim but for the gravity), whose moisture now settles
-    // in 9 years; with the stronger seasons of this orbit the balance step
-    // of the moisture, built on the year's mean operator, is not enough
-    // (follow-up M4-23). One erosion step: the climate does not depend on
-    // erosion.
+    // Earth with an orbit of e = 0.99, obliquity 0 and the perihelion at
+    // 270° (the fourth planet of `the_orbits_at_their_bounds_generate_finite_worlds`
+    // in kuniumi-sim, whose monthly winds reach about 700 m/s): its sea
+    // surface coupled with its winds and currents is not periodic after its
+    // 100 years on 1,000 cells (seed 3), a monthly mean changing by about
+    // 201 K in the last year, while its energy balance and its moisture
+    // settle. The only planet of the bounds tests that warns since ticket
+    // M4-23, whose Newton–Krylov step settles the moisture of every dry
+    // planet measured on 1,000 cells, among them the one this test took
+    // before (13,000 km, 11 m/s², 240 h, 90 days, e = 0.5, obliquity 90°,
+    // 2,500 W/m², no water, 0.1 bar; tickets M4-22 and M4-23). One erosion
+    // step: the climate does not depend on erosion.
     let planet = settings_file(
         "generate_warnings_planet",
-        "[planet]\nradius_m = 13000000.0\nsurface_gravity_m_s2 = 11.0\n\
-         rotation_period_s = 864000.0\norbital_period_s = 7776000.0\n\
-         orbital_eccentricity = 0.5\nobliquity_rad = 1.5707963267948966\n\
-         stellar_flux_w_m2 = 2500.0\nocean_volume_m3 = 0.0\n\
-         surface_pressure_pa = 10000.0\n\
+        "[planet]\norbital_eccentricity = 0.99\nobliquity_rad = 0.0\n\
+         perihelion_longitude_rad = 4.71238898038469\n\
          [generation.erosion]\nsteps = 1\n",
     );
     let dir = scratch("generate_warnings");
@@ -1027,7 +1025,8 @@ fn generate_prints_the_warnings_of_the_stages() {
     let warning = lines[progress.len()];
     assert!(
         warning.starts_with(
-            "warning: climate: the moisture did not reach its periodic state in 10 years: "
+            "warning: climate: the sea surface coupled with its winds and currents did not \
+             reach its periodic state in 100 years: "
         ),
         "{text}"
     );

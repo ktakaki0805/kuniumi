@@ -226,11 +226,12 @@
 //! # The periodic state
 //!
 //! [`MoistureModel::periodic_state`] starts from no vapour and runs whole
-//! years, each followed by the balance step below (ticket M4-22), until no
+//! years, each followed by the Newton–Krylov step below (ticket M4-23),
+//! whose preconditioner is the balance step of ticket M4-22, until no
 //! monthly-mean vapour of any cell changes by more than
 //! [`PERIODIC_TOLERANCE_KG_M2`] from one year to the next, at most
-//! [`MAX_YEARS`]. It reports the water budget of its last year, which no
-//! step follows.
+//! [`MAX_YEARS`] (20; 10 until ticket M4-23). It reports the water budget
+//! of its last year, which no step follows.
 //!
 //! A wet planet forgets its start within weeks. A planet without water does
 //! not: where its air hardly moves and nothing rains, vapour leaves a cell
@@ -243,12 +244,12 @@
 //! over several years, changing the set of raining cells from year to year;
 //! from no vapour they start below it, in the set they end with.
 //!
-//! **The balance step.** After a year from the vapour `x` to `y` (kg/m²),
-//! with the matrices `A_s` of its sub-steps `s` without their storage `a/Δt`
-//! (the upwind advection, and on the diagonal `a keep` times the lift, the
-//! ocean's `a C_E U / H_w` and `a keep / τ_c` where the cell rained its
-//! excess in the sub-step's last solve), the year's operator `Y` gives the
-//! step `δ`, and the next year starts from `(y + δ)⁺`:
+//! **The balance step** (ticket M4-22). After a year from the vapour `x` to
+//! `y` (kg/m²), with the matrices `A_s` of its sub-steps `s` without their
+//! storage `a/Δt` (the upwind advection, and on the diagonal `a keep` times
+//! the lift, the ocean's `a C_E U / H_w` and `a keep / τ_c` where the cell
+//! rained its excess in the sub-step's last solve), the year's operator `Y`
+//! gives the shift `δ = K (y − x)`:
 //!
 //! ```text
 //! Y = Δt Σ_s A_s + μ a                                         (sr)
@@ -277,55 +278,109 @@
 //! the factor `g`, at most 0.021 in magnitude (at `z` = 2.3; 5.3 × 10⁻⁴ at
 //! the 0.155 of the polar cell above), against 0.075 with `φ` replaced by
 //! `1/(1 + z/2)` and 0.29 with the mean shift `u` alone
-//! (`tools/moisture_step_reference.py`).
+//! (`tools/moisture_step_reference.py`). The mass `μ` ([`BALANCE_MASS`], a
+//! decay of 10⁻⁹ a year) keeps `Y` non-singular where a cell has no outflow
+//! and no sink all year (calm land, whose vapour never changes). Both
+//! systems are M-matrices, solved by [`crate::sparse::bicgstab_gauss_seidel`]
+//! in the downwind order of `a + Y/48` without the excess (built once per
+//! periodic state) to a relative residual of 10⁻⁶, as the energy balance's
+//! step, each relaxing solve from the last `v`. Ticket M4-22 started the
+//! next year from `(y + δ)⁺`.
+//!
+//! **The year map.** Where the sets of raining cells of the year's 48
+//! sub-steps are fixed, the year is affine, `F(x) = M x + c`, with
+//! `M = Π_s S_s⁻¹ (a/Δt)` (`S_s` the matrix of sub-step `s` with the set of
+//! its last solve, `a/Δt` its storage) and `c` from the sources, and its
+//! periodic state `x* = F(x*)` follows from any year `x → y = F(x)` by the
+//! Newton step
+//!
+//! ```text
+//! (I − M) e = r,   r = y − x,   x* = x + e.
+//! ```
+//!
+//! The balance step takes `(I − M)⁻¹ ≈ I + K`: right for a cell alone (the
+//! factor `g` above), but not where the operators of the seasons do not
+//! commute, air whose wind turns with the seasons, and the finer the grid
+//! the slower the modes it misses. On corner 21 of the bounds tests
+//! (13,000 km, a 240-hour day, a 90-day year, 2,500 W/m², 0.1 bar, no water;
+//! seed 3) its change fell by a factor of about 13 a year on 1,000 cells,
+//! 3.2 on 10,000, 2.1 on 40,000 and 1.7 on 160,000, which took 10, 18, 27 and
+//! 41 years; the exact `(e^Z − I)⁻¹` of the year's mean operator, by a dense
+//! matrix exponential on 1,000 cells, did no better (ticket M4-22).
+//!
+//! **The Newton–Krylov step** (ticket M4-23) solves the Newton step by
+//! GMRES (Y. Saad & M. H. Schultz 1986, "GMRES: a generalized minimal
+//! residual algorithm for solving nonsymmetric linear systems", SIAM J. Sci.
+//! Stat. Comput. 7, 856–869) without forming `M`, preconditioned by the
+//! balance step, as the periodic states of seasonally varying ocean tracers
+//! are found with a preconditioner of the annual-mean transport (X. Li &
+//! F. W. Primeau 2008, "A fast Newton–Krylov solver for seasonally varying
+//! global ocean biogeochemistry models", Ocean Modelling 23, 13–20;
+//! S. Khatiwala 2008, "Fast spin up of ocean biogeochemical models using
+//! matrix-free Newton–Krylov", Ocean Modelling 23, 121–129):
+//!
+//! ```text
+//! (I − M) P z = r,   P = I + K,   z_0 = r        (GMRES in ⟨u, v⟩ = Σ_i a_i u_i v_i)
+//! d = δ + Σ_j γ_j P v_j,                        the next year from (y + d)⁺
+//! ```
+//!
+//! right-preconditioned, with modified Gram–Schmidt and Givens rotations,
+//! the vectors `P v_j` of its basis `v_j` kept. Each product `M u` is a
+//! linearised year: in turn each sub-step's system with its set and without
+//! sources, `S_s u' = (a/Δt) u`, solved by
+//! [`crate::sparse::bicgstab_gauss_seidel`] in the month's downwind order to
+//! a relative residual of 10⁻⁶ from `u`. GMRES stops when its residual
+//! reaches 10⁻³ of `‖r‖` (10⁻² left the 64 dry planets of the bounds tests on
+//! 10,000 cells 10 more years summed, 10⁻⁴ and 10⁻⁶ saved 2 and 9 for more
+//! solves), after at most 5 iterations or where its Krylov space is
+//! exhausted. From `z_0 = r` it starts at `P z_0 = r + δ`, the balance
+//! step's: where that residual is already within the tolerance, as on
+//! Earth (10⁻¹¹ to 10⁻⁷ of `‖r‖`), it makes no iteration, `d = δ`, and the
+//! year is the balance step's bit for bit. As the columns of a dry planet
+//! fill, the sets of raining cells change for a few years, and the step,
+//! built on the sets of the year just run, is then a semismooth Newton step
+//! of the year map: the years follow the sets (corner 85 on 10,000 cells:
+//! 21,253, 2,721, 133, 4 and 4 of its cells' sub-steps change set in years
+//! 2 to 6, its largest change 1,740, 487, 546, 55 and 8.5 kg/m², then none
+//! and 3.6 × 10⁻⁴ and 1.8 × 10⁻⁹ kg/m²).
 //!
 //! The positive part keeps the vapour non-negative, as the sub-steps do (an
-//! M-matrix with a non-negative right-hand side). The mass `μ`
-//! ([`BALANCE_MASS`], a decay of 10⁻⁹ a year) keeps `Y` non-singular where a
-//! cell has no outflow and no sink all year (calm land, whose vapour never
-//! changes). Both systems are M-matrices, solved by
-//! [`crate::sparse::bicgstab_gauss_seidel`] in the downwind order of
-//! `a + Y/48` without the excess (built once per periodic state) to a
-//! relative residual of 10⁻⁶, as the energy balance's step, each relaxing
-//! solve from the last `v`; where a solve does not reach its tolerance the
-//! year's step is skipped and counted in [`Moisture::failed_solves`]. A
-//! periodic state (`y = x`) gives `u = δ = 0` exactly: the periodic states
-//! are those of the model's own years, whatever the step's approximations.
+//! M-matrix with a non-negative right-hand side). Where a solve of the
+//! balance step does not reach its tolerance the year has no step, where
+//! one of the Newton–Krylov iterations does the step is the balance step's,
+//! and either counts in [`Moisture::failed_solves`]. A periodic state
+//! (`y = x`) gives `r = δ = 0`, no iteration and `d = 0` exactly: the
+//! periodic states are those of the model's own years, whatever the steps'
+//! approximations.
 //!
-//! Measured (ticket M4-22, release): on the 135 planets of the bounds tests
-//! (1,000 cells, seed 3) every moisture is periodic within 10 years (16 were
-//! not before), the slowest in 9 (corners 85, 87 and 93) and 10 (21, 23, 83
-//! and 95; corner 83 with a last change of 9.7 × 10⁻⁷ kg/m², just within
-//! the tolerance), where the years alone take 57 to more than 300; at seed
-//! 2 every one, at seed 1 all but corners 21 and 23 (1.6 and
-//! 1.9 × 10⁻⁶ kg/m² in their tenth year, periodic in their eleventh).
-//! Earth's moisture (seed 1) is periodic in 3 years as before, within
-//! 2 × 10⁻⁹ kg/m² of the state that the start at the threshold gave (the
-//! same bit for bit on 40,000 cells, 1.1 × 10⁻¹³ on 160,000, 1.7 × 10⁻⁹ on
-//! 650,000): its vapour forgets the start and the steps within the year,
-//! though on 650,000 cells its last change rises from 7.3 × 10⁻¹⁰ to
-//! 3.3 × 10⁻⁷ kg/m², a third of the tolerance. After their first years
-//! the change of the slow planets falls by a factor 10 to 80 a year, the
-//! limit of a step built on the year's mean operator: the operator varies
-//! with the seasons, which no such step captures (the exact `(e^Z − I)⁻¹`,
-//! by a dense matrix exponential on 1,000 cells, did no better).
-//!
-//! Over 1,458 planets without water (1,000 cells, seed 3: radii of 1,500,
-//! 6,371 and 13,000 km, days of 8, 24 and 240 hours, years of 90 days, 1
-//! and 10 years, eccentricities 0.0167, 0.5 and 0.99, obliquities 23.4° and
-//! 90°, 0.1, 1 and 10 bar, 400, 1,361 and 2,500 W/m²) 31 are not periodic
-//! after 10 years, against 146 without the step, their last change at most
-//! 10⁻² kg/m² instead of 1,140; every one of them changes less than without
-//! the step, but 2 that the years alone settled in their tenth year are
-//! left by 1.1 × 10⁻⁶ and 2.5 × 10⁻⁵ kg/m². The ones left have slow modes
-//! under strong seasons: 26 of the 31 have 240-hour days and 90-day years,
-//! 22 a radius of 13,000 km, and all but 2 are eccentric or tilted 90°.
-//! Finer grids resolve slower modes too: on 10,000 cells (seed 3) 6 dry
-//! planets of the bounds tests are not periodic after 10 years (corners 21
-//! and 23 by 9 × 10⁻³ kg/m², 85, 87, 93 and 95 by 1.5 to 6.4 × 10⁻⁵; with
-//! more years they settle in 18 and 12), against 20 without the step. Such
-//! a planet keeps its last year, which the Climate stage reports as a
-//! warning (ticket M4-16); follow-up ticket M4-23.
+//! Measured (tickets M4-22 and M4-23, release, the winds and sea surface of
+//! the coupled climate): on the 135 planets of the bounds tests every
+//! moisture is periodic within 7 years on 1,000 cells at seeds 1 to 3 (with
+//! the balance step alone 10, and at seed 1 corners 21 and 23 in 11; the
+//! years alone take 57 to more than 300) and within 8 on 10,000 cells (seed
+//! 3; with the balance step alone 18, corners 21 and 23, and 6 planets
+//! beyond 10 years); the 64 dry ones within 7 on 40,000 cells (the balance
+//! step alone up to 28); corners 21, 23, 85 and 93 within 10 on 160,000
+//! cells (6, 6, 10 and 10; the balance step alone 41, 44, 16 and 15) and
+//! corners 21, 85, 87 and 93 within 7 on 650,000 (5, 7, 7 and 4; corner 85
+//! with the balance step alone 17). Over 1,458 planets without water (1,000
+//! cells, seed 3: radii of 1,500, 6,371 and 13,000 km, days of 8, 24 and
+//! 240 hours, years of 90 days, 1 and 10 years, eccentricities 0.0167, 0.5
+//! and 0.99, obliquities 23.4° and 90°, 0.1, 1 and 10 bar, 400, 1,361 and
+//! 2,500 W/m²) every one within 8 years, where the balance step alone left
+//! 32 beyond 10 (most with 240-hour days and 90-day years, the slow modes
+//! under strong seasons) and the years alone 146 (ticket M4-22). No planet takes more
+//! years than with the balance step alone but 2 of the 1,458 and corner 71
+//! on 40,000 cells, by one. Earth's moisture (seed 1) is periodic in 3 years
+//! and the same bit for bit as with the balance step alone on 10,000,
+//! 40,000, 160,000 and 650,000 cells; its last change on 650,000 cells is
+//! 3.3 × 10⁻⁷ kg/m², a third of the tolerance (7.3 × 10⁻¹⁰ before the
+//! balance step). The sets' transient leaves corners 85 and 93 on 160,000
+//! cells periodic only in their tenth year (corner 93's ninth change
+//! 1.02 × 10⁻⁶ kg/m²), so [`MAX_YEARS`] was raised to 20 for the margin
+//! (chosen with the owner in ticket M4-23); a planet that does not settle
+//! keeps its last year, which the Climate stage reports as a warning
+//! (ticket M4-16).
 //!
 //! # Cost
 //!
@@ -337,11 +392,23 @@
 //! 3.0, 26.6 and 303 s and 40 minutes on 650,000 cells. With the winds and
 //! sea surface of the coupled state the periodic state took 0.35, 1.69 and
 //! 8.3 s on 10,000, 40,000 and 160,000 cells, and with its two balance
-//! steps (after the first and the second year) it takes 0.46, 2.44 and
-//! 15.7 s (ticket M4-22), and on 650,000 cells 61.5 and 106.8 s: each
-//! step costs about two thirds of a year on 40,000 cells and 1.3 years on
-//! 160,000 and 650,000, mostly its 24 relaxing solves, whose iterations
-//! grow with the grid (about 11 each on 40,000 cells and 24 on 160,000).
+//! steps (after the first and the second year) 0.46, 2.44 and 15.7 s (ticket
+//! M4-22), and on 650,000 cells 61.5 and 106.8 s: each step costs about two
+//! thirds of a year on 40,000 cells and 1.3 years on 160,000 and 650,000,
+//! mostly its 24 relaxing solves, whose iterations grow with the grid (about
+//! 11 each on 40,000 cells and 24 on 160,000). The Newton–Krylov step adds a
+//! linearised year to each of them, about as long as a model year, to find
+//! that it needs no iteration (ticket M4-23, the same machine idle): 0.47,
+//! 2.31, 15.6 and 103.5 s become 0.59, 3.10, 21.5 and 141.9 s on 10,000 to
+//! 650,000 cells, 26 to 38 % more, against a Climate stage of about 20
+//! minutes on 650,000 cells. On a dry planet each iteration costs a
+//! linearised year and a balance step, and saves years: with the balance
+//! step alone and with the Newton–Krylov step corner 21 takes 14.6 s (27
+//! years) and 5.8 s (5) on 40,000 cells and 113 s (41) and 43 s (6) on
+//! 160,000, and 205 s (5) on 650,000; corner 85 7.0 s (14) and 5.2 s (7) on
+//! 40,000 and 181 s (17) and 133 s (7) on 650,000; corner 83 on 40,000 cells
+//! 9.4 s (13) and 12.6 s (7), corner 93 on 160,000 38.6 s (15) and 42.6 s
+//! (10).
 //!
 //! # Calibration
 //!
@@ -459,8 +526,10 @@ pub const MAX_ACTIVE_SET_ITERATIONS: u32 = 50;
 /// the next at which the state is periodic: 10⁻⁶ kg/m².
 pub const PERIODIC_TOLERANCE_KG_M2: f64 = 1e-6;
 
-/// The most years of [`MoistureModel::periodic_state`]: 10.
-pub const MAX_YEARS: u32 = 10;
+/// The most years of [`MoistureModel::periodic_state`]: 20 (10 until ticket
+/// M4-23, raised with the owner for the margin of the dry planets on fine
+/// grids; module documentation, "The periodic state").
+pub const MAX_YEARS: u32 = 20;
 
 /// `μ`, the mass of the year's operator of the balance step, per unit of a
 /// cell's area (module documentation, "The periodic state"): 10⁻⁹, a decay
@@ -475,6 +544,17 @@ pub const BALANCE_MASS: f64 = 1e-9;
 /// against 10⁻¹², and takes 1,241 iterations instead of 2,335; ticket
 /// M4-22).
 const BALANCE_SOLVER_TOLERANCE: f64 = 1e-6;
+
+/// The most GMRES iterations of the Newton–Krylov step (module
+/// documentation, "The periodic state"): 5 (ticket M4-23; the prototype's
+/// steps took 0 to 5, mostly 1 to 3).
+const NEWTON_ITERATIONS: usize = 5;
+
+/// The residual of the Newton–Krylov step's GMRES, relative to the year's
+/// change, at which it stops: 10⁻³ (ticket M4-23: 10⁻² left the dry planets
+/// of the bounds tests on 10,000 cells 10 more years summed, 10⁻⁴ and 10⁻⁶
+/// saved 2 and 9 years for more iterations).
+const NEWTON_TOLERANCE: f64 = 1e-3;
 
 /// The sub-steps of the year's mean operator by which the balance step
 /// carries the year's mean shift to the year's end: half a year's, 24.
@@ -834,9 +914,10 @@ pub struct Moisture {
     pub converged: bool,
     /// The sub-steps whose active set did not settle.
     pub unsettled_steps: u32,
-    /// The monthly potentials, the sub-steps and the balance steps that
-    /// had a solve that did not reach its tolerance (one with several such
-    /// solves counts once).
+    /// The monthly potentials, the sub-steps and the steps after the years
+    /// (the Newton–Krylov steps with their balance steps) that had a solve
+    /// that did not reach its tolerance (one with several such solves
+    /// counts once).
     pub failed_solves: u32,
 }
 
@@ -1424,35 +1505,35 @@ impl MoistureModel {
 
     /// The periodic state of the months `months` (module documentation,
     /// "The periodic state"): from no vapour, whole years of
-    /// [`substep`](Self::substep)s, each followed by the balance step, until
-    /// no monthly-mean vapour changes by more than
-    /// [`PERIODIC_TOLERANCE_KG_M2`], at most [`MAX_YEARS`].
+    /// [`substep`](Self::substep)s, each followed by the Newton–Krylov step
+    /// preconditioned by the balance step, until no monthly-mean vapour
+    /// changes by more than [`PERIODIC_TOLERANCE_KG_M2`], at most
+    /// [`MAX_YEARS`].
     ///
     /// # Panics
     ///
     /// If a month is not of this model's grid.
     pub fn periodic_state(&self, months: &[MoistureMonth; MONTHS]) -> Moisture {
-        self.run_years(months, MAX_YEARS, PERIODIC_TOLERANCE_KG_M2, true)
+        self.run_years(months, MAX_YEARS, PERIODIC_TOLERANCE_KG_M2, Step::Newton)
     }
 
     /// The years of [`periodic_state`](Self::periodic_state) until no
     /// monthly-mean vapour changes by more than `tolerance_kg_m2`, at most
-    /// `max_years`, with the balance step after each year that is not
-    /// periodic where `balance` (without it, the model's years alone, for
-    /// the tests).
+    /// `max_years`, with the step `kind` after each year that is not
+    /// periodic (the others than [`Step::Newton`] for the tests).
     fn run_years(
         &self,
         months: &[MoistureMonth; MONTHS],
         max_years: u32,
         tolerance_kg_m2: f64,
-        balance: bool,
+        kind: Step,
     ) -> Moisture {
         let n = self.len();
         let r2 = self.params.radius_m * self.params.radius_m;
         let dt = self.substep_s;
         let per_step = 1.0 / SUBSTEPS_PER_MONTH as f64;
         let total = |w: &[f64]| (0..n).map(|i| self.areas_sr[i] * w[i]).sum::<f64>();
-        let operator = balance.then(|| self.year_operator(months));
+        let operator = (kind != Step::None).then(|| self.year_operator(months));
         let mut w = vec![0.0; n];
         let mut previous: Option<[Vec<f64>; MONTHS]> = None;
         let mut unsettled_steps = 0;
@@ -1466,6 +1547,11 @@ impl MoistureModel {
             let begin = w.clone();
             let start = total(&w);
             let mut raining = vec![0_u32; n];
+            let mut sets = Vec::with_capacity(if kind == Step::Newton {
+                MONTHS * SUBSTEPS_PER_MONTH
+            } else {
+                0
+            });
             let (mut e_sum, mut p_sum) = (0.0, 0.0);
             let mut precipitation: [Vec<f64>; MONTHS] = core::array::from_fn(|_| vec![0.0; n]);
             let mut evaporation: [Vec<f64>; MONTHS] = core::array::from_fn(|_| vec![0.0; n]);
@@ -1482,6 +1568,9 @@ impl MoistureModel {
                         evaporation[m][i] += step.evaporation_kg_m2_s[i];
                         vapour[m][i] += w[i];
                         raining[i] += u32::from(step.active[i]);
+                    }
+                    if kind == Step::Newton {
+                        sets.push(step.active);
                     }
                 }
                 for i in 0..n {
@@ -1520,13 +1609,19 @@ impl MoistureModel {
             }
             previous = Some(vapour);
             if let Some(operator) = &operator {
-                match self.balance_step(operator, &raining, &begin, &w) {
-                    Some(delta) => {
-                        for (v, d) in w.iter_mut().zip(&delta) {
-                            *v = positive(*v + d);
-                        }
+                let change: Vec<f64> = (0..n).map(|i| w[i] - begin[i]).collect();
+                let (correction, converged) = if kind == Step::Newton {
+                    self.newton_step(operator, months, &sets, &raining, &change)
+                } else {
+                    let delta = self.balance_step(operator, &raining, &change);
+                    let converged = delta.is_some();
+                    (delta, converged)
+                };
+                failed_solves += u32::from(!converged);
+                if let Some(delta) = correction {
+                    for (v, d) in w.iter_mut().zip(&delta) {
+                        *v = positive(*v + d);
                     }
-                    None => failed_solves += 1,
                 }
             }
         }
@@ -1599,17 +1694,19 @@ impl MoistureModel {
         }
     }
 
-    /// The balance step after a year from the vapour `start` to `end`
-    /// (kg/m², by cell), whose sub-steps had each cell `raining[i]` times in
-    /// the set of their last solve (module documentation, "The periodic
-    /// state"): the shift `δ` (kg/m², by cell) of the next year's start
-    /// from `end`; `None` where a solve did not reach its tolerance.
+    /// The balance step `δ = K r` of a year whose vapour changed by
+    /// `change` (`r = y − x`, kg/m², by cell), whose sub-steps had each cell
+    /// `raining[i]` times in the set of their last solve (module
+    /// documentation, "The periodic state"): the shift (kg/m², by cell) of
+    /// the next year's start from the year's end that ticket M4-22 took, and
+    /// the preconditioner `K` of the Newton–Krylov step
+    /// ([`newton_step`](Self::newton_step)), linear in `change`; `None`
+    /// where a solve did not reach its tolerance.
     fn balance_step(
         &self,
         operator: &YearOperator,
         raining: &[u32],
-        start: &[f64],
-        end: &[f64],
+        change: &[f64],
     ) -> Option<Vec<f64>> {
         let n = self.len();
         let year = (MONTHS * SUBSTEPS_PER_MONTH) as f64;
@@ -1626,12 +1723,7 @@ impl MoistureModel {
             .with_diagonal((0..n).map(|q| a[q] + diagonal[q] / year).collect());
         let system = operator.year.with_diagonal(diagonal);
         // The mean shift: Y u = a (y − x).
-        let rhs: Vec<f64> = (0..n)
-            .map(|q| {
-                let i = order[q] as usize;
-                a[q] * (end[i] - start[i])
-            })
-            .collect();
+        let rhs: Vec<f64> = (0..n).map(|q| a[q] * change[order[q] as usize]).collect();
         let mut v = vec![0.0; n];
         let solve = bicgstab_gauss_seidel(
             &system,
@@ -1663,6 +1755,250 @@ impl MoistureModel {
         }
         Some(delta)
     }
+
+    /// The Newton–Krylov step after a year whose change of vapour is
+    /// `change` (kg/m², by cell: `r = y − x`), whose sub-steps' sets were
+    /// `sets` (one per sub-step, by cell) and in which each cell was
+    /// `raining[i]` times in the set of a sub-step's last solve (module
+    /// documentation, "The periodic state"): the correction `d` (kg/m², by
+    /// cell) of the next year's start from the year's end, and whether every
+    /// solve reached its tolerance. GMRES on `(I − M) P z = r`, `P = I + K`
+    /// with `K` the balance step ([`balance_step`](Self::balance_step)),
+    /// from `z₀ = r`, in the inner product of the cells' areas; `d = δ +
+    /// Σ_j γ_j P v_j` with `δ = K r`, which is `d` where no iteration is
+    /// needed. Where a solve of `δ` fails there is no step; where one of
+    /// the iterations fails the step is `δ`.
+    fn newton_step(
+        &self,
+        operator: &YearOperator,
+        months: &[MoistureMonth; MONTHS],
+        sets: &[Vec<bool>],
+        raining: &[u32],
+        change: &[f64],
+    ) -> (Option<Vec<f64>>, bool) {
+        let n = self.len();
+        let Some(delta) = self.balance_step(operator, raining, change) else {
+            return (None, false);
+        };
+        let areas = &self.areas_sr;
+        let dot = |u: &[f64], v: &[f64]| (0..n).map(|i| areas[i] * u[i] * v[i]).sum::<f64>();
+        // `(I − M) u` of a preconditioned vector `u = P z`.
+        let apply = |u: &[f64]| -> Option<Vec<f64>> {
+            let m = self.linearised_year(months, sets, u)?;
+            Some((0..n).map(|i| u[i] - m[i]).collect())
+        };
+        let start: Vec<f64> = (0..n).map(|i| change[i] + delta[i]).collect();
+        let Some(applied) = apply(&start) else {
+            return (Some(delta), false);
+        };
+        let residual: Vec<f64> = (0..n).map(|i| change[i] - applied[i]).collect();
+        let target = NEWTON_TOLERANCE * dot(change, change).sqrt();
+        let mut product = |v: &[f64]| -> Option<(Vec<f64>, Vec<f64>)> {
+            let shift = self.balance_step(operator, raining, v)?;
+            let pv: Vec<f64> = (0..n).map(|i| v[i] + shift[i]).collect();
+            Some((apply(&pv)?, pv))
+        };
+        // The correction from `y` starts at `δ`: `x + P z₀ = y + δ`.
+        let solution = gmres(
+            areas,
+            &residual,
+            delta.clone(),
+            target,
+            NEWTON_ITERATIONS,
+            &mut product,
+        );
+        match solution {
+            Some(solution) if solution.correction.iter().all(|d| d.is_finite()) => {
+                (Some(solution.correction), true)
+            }
+            _ => (Some(delta), false),
+        }
+    }
+
+    /// The linearised year `M v` of the sets `sets` (one per sub-step, by
+    /// cell) for the vapour `v` (kg/m², by cell; module documentation, "The
+    /// periodic state"): each sub-step's system with the diagonal of its
+    /// set and no sources, `S_s v' = (a/Δt) v`, solved in turn in the
+    /// month's downwind order to [`BALANCE_SOLVER_TOLERANCE`] from `v`;
+    /// `None` where a solve did not reach it.
+    fn linearised_year(
+        &self,
+        months: &[MoistureMonth; MONTHS],
+        sets: &[Vec<bool>],
+        v: &[f64],
+    ) -> Option<Vec<f64>> {
+        let n = self.len();
+        let dt = self.substep_s;
+        let zero = vec![0.0; n];
+        let mut w = v.to_vec();
+        let mut sets = sets.iter();
+        for month in months {
+            let rows = self.rows(month, &zero);
+            for _ in 0..SUBSTEPS_PER_MONTH {
+                let set = sets.next().expect("a set for every sub-step");
+                let diagonal = month
+                    .order
+                    .iter()
+                    .enumerate()
+                    .map(|(q, &i)| {
+                        if set[i as usize] {
+                            rows.wet_diagonal[q]
+                        } else {
+                            rows.dry_diagonal[q]
+                        }
+                    })
+                    .collect();
+                let system = month.advection.with_diagonal(diagonal);
+                let rhs: Vec<f64> = month
+                    .order
+                    .iter()
+                    .map(|&i| self.areas_sr[i as usize] * w[i as usize] / dt)
+                    .collect();
+                let mut x: Vec<f64> = month.order.iter().map(|&i| w[i as usize]).collect();
+                let solve = bicgstab_gauss_seidel(
+                    &system,
+                    &rhs,
+                    BALANCE_SOLVER_TOLERANCE,
+                    SOLVER_MAX_ITERATIONS,
+                    &mut x,
+                );
+                if !solve.converged() {
+                    return None;
+                }
+                for (q, &i) in month.order.iter().enumerate() {
+                    w[i as usize] = x[q];
+                }
+            }
+        }
+        Some(w)
+    }
+}
+
+/// What [`gmres`] found: the solution, its iterations and the norm of its
+/// residual as the method updated it.
+struct Gmres {
+    /// The start's `x₀` plus `Σ_j γ_j P v_j` (`x₀` itself, bit for bit,
+    /// where it made no iteration).
+    correction: Vec<f64>,
+    /// The iterations, at most the limit.
+    iterations: usize,
+    /// The norm of the residual in the weighted inner product, as the
+    /// rotations updated it.
+    residual_norm: f64,
+}
+
+/// A product of [`gmres`]: `(A P v, P v)` of a basis vector `v`, or `None`.
+type Product<'a> = dyn FnMut(&[f64]) -> Option<(Vec<f64>, Vec<f64>)> + 'a;
+
+/// GMRES (Y. Saad & M. H. Schultz 1986, "GMRES: a generalized minimal
+/// residual algorithm for solving nonsymmetric linear systems", SIAM J. Sci.
+/// Stat. Comput. 7, 856–869), right-preconditioned, from the start `start`
+/// (`x₀`) whose residual `b − A x₀` is `residual`, in the inner product
+/// `⟨u, v⟩ = Σ_i weights_i u_i v_i`: the Arnoldi basis `v_j` by modified
+/// Gram–Schmidt, the least squares by Givens rotations, until the residual's
+/// norm is at most `target`, after at most `max_iterations` iterations or
+/// where the Krylov space is exhausted. `product(v)` gives `(A P v, P v)`
+/// for the preconditioner `P`; the solution is `x₀ + Σ_j γ_j P v_j`, so the
+/// vectors `P v_j` are kept (as flexible GMRES does). `None` where
+/// `product` returns `None`. A start whose residual is within `target`
+/// makes no iteration.
+fn gmres(
+    weights: &[f64],
+    residual: &[f64],
+    start: Vec<f64>,
+    target: f64,
+    max_iterations: usize,
+    product: &mut Product<'_>,
+) -> Option<Gmres> {
+    let n = residual.len();
+    let dot = |u: &[f64], v: &[f64]| (0..n).map(|i| weights[i] * u[i] * v[i]).sum::<f64>();
+    let beta = dot(residual, residual).sqrt();
+    let mut solution = Gmres {
+        correction: start,
+        iterations: 0,
+        residual_norm: beta,
+    };
+    // A residual of 0 against a target of 0 stops too.
+    if beta <= target {
+        return Some(solution);
+    }
+    let k = max_iterations;
+    let mut basis: Vec<Vec<f64>> = vec![residual.iter().map(|r| r / beta).collect()];
+    let mut preconditioned: Vec<Vec<f64>> = Vec::with_capacity(k);
+    // The Hessenberg matrix by columns, rotated to triangular as it grows.
+    let mut hessenberg: Vec<Vec<f64>> = Vec::with_capacity(k);
+    let (mut cosines, mut sines) = (Vec::with_capacity(k), Vec::with_capacity(k));
+    let mut rhs = vec![beta];
+    for j in 0..k {
+        let (mut w, pv) = product(&basis[j])?;
+        // Modified Gram–Schmidt.
+        let mut column = Vec::with_capacity(j + 2);
+        for v in &basis {
+            let c = dot(&w, v);
+            for (x, y) in w.iter_mut().zip(v) {
+                *x -= c * y;
+            }
+            column.push(c);
+        }
+        let norm = dot(&w, &w).sqrt();
+        // The rotations of the earlier columns, then this column's own.
+        for l in 0..j {
+            let (c, s) = (cosines[l], sines[l]);
+            let (a, b) = (column[l], column[l + 1]);
+            column[l] = c * a + s * b;
+            column[l + 1] = c * b - s * a;
+        }
+        let rho = (column[j] * column[j] + norm * norm).sqrt();
+        if !(rho > 0.0 && rho.is_finite()) {
+            break;
+        }
+        let (c, s) = (column[j] / rho, norm / rho);
+        column[j] = rho;
+        cosines.push(c);
+        sines.push(s);
+        let g = rhs[j];
+        rhs[j] = c * g;
+        rhs.push(-s * g);
+        hessenberg.push(column);
+        preconditioned.push(pv);
+        if rhs[j + 1].abs() <= target || norm == 0.0 || j + 1 == k {
+            break;
+        }
+        basis.push(w.iter().map(|x| x / norm).collect());
+    }
+    // The triangular system of the least squares, by back substitution.
+    let used = hessenberg.len();
+    let mut y = vec![0.0; used];
+    for j in (0..used).rev() {
+        let mut sum = rhs[j];
+        for l in j + 1..used {
+            sum -= hessenberg[l][j] * y[l];
+        }
+        y[j] = sum / hessenberg[j][j];
+    }
+    for (yj, pv) in y.iter().zip(&preconditioned) {
+        for (d, p) in solution.correction.iter_mut().zip(pv) {
+            *d += yj * p;
+        }
+    }
+    solution.iterations = used;
+    solution.residual_norm = rhs[used].abs();
+    Some(solution)
+}
+
+/// The step after a year that is not periodic
+/// ([`MoistureModel::run_years`]; module documentation, "The periodic
+/// state").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Step {
+    /// No step: the model's years alone.
+    None,
+    /// The balance step of ticket M4-22 alone (for the tests).
+    #[cfg(test)]
+    Mean,
+    /// The Newton–Krylov step, preconditioned by the balance step (ticket
+    /// M4-23).
+    Newton,
 }
 
 /// The year's operator of the balance step
