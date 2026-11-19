@@ -290,7 +290,8 @@ fn a_climate_that_settles_has_no_warnings() {
 /// The six messages of [`Climate::warnings`] for the flags that
 /// `warnings_name_each_model_that_did_not_settle` sets, written out by hand
 /// from the ticket (M4-16, "The Climate stage's warnings"; the energy
-/// balance's and the sea surface's as ticket M4-17 renamed them), in their
+/// balance's and the sea surface's as ticket M4-17 renamed them, the
+/// moisture's solves with the balance steps of ticket M4-22), in their
 /// order.
 const UNSETTLED_MESSAGES: [&str; 6] = [
     "the energy balance without currents did not reach its periodic state in 100 years: a \
@@ -313,8 +314,8 @@ const UNSETTLED_MESSAGES: [&str; 6] = [
     "3 of the moisture's 480 sub-steps did not settle the active set within 50 solves: each \
      kept the set of its last solve, in which a cell below the threshold rains a negative \
      excess",
-    "2 of the moisture's monthly potentials and sub-steps had a solve that did not reach its \
-     tolerance: its precipitation may be inaccurate",
+    "2 of the moisture's monthly potentials, sub-steps and balance steps had a solve that did \
+     not reach its tolerance: its precipitation may be inaccurate",
 ];
 
 #[test]

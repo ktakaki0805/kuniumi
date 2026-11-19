@@ -614,6 +614,9 @@ section: every change after which an existing seed produces a different world
   (2 K), the thermal equator as the warm centre of a month's zonal-mean
   temperature, and `tools/thermal_equator_reference.py`, its mpmath
   reference values (M4-21).
+- `moisture::BALANCE_MASS` (10⁻⁹), the mass of the year's operator of the
+  moisture's balance step, and `tools/moisture_step_reference.py`, the
+  mpmath reference values of the step on a cell alone (M4-22).
 
 ### Changed
 
@@ -981,6 +984,29 @@ section: every change after which an existing seed produces a different world
   cap. The moisture of 4 more dry corners of the bounds tests (77, 79, 93
   and 95) is not periodic after its 10 years, of 16 in all (follow-up
   M4-22).
+- The moisture's periodic state starts from no vapour instead of the
+  threshold `r_c W_s`, and each year that is not periodic is followed by a
+  balance step of the water budget (`moisture`, "The periodic state";
+  M4-22): the shift of the whole year that closes each cell's annual
+  budget under the year's operator, carried forward by half a year by the
+  same operator, from which the next year starts. The periodic states are
+  the model's own (a periodic year gives no step). Of the planets of the
+  bounds tests (1,000 cells, seed 3) every moisture is periodic within its
+  10 years instead of 119 of 135 (`UNSETTLED_MOISTURE` empty): the dry
+  planets, whose vapour drained from its start for decades where the air
+  hardly moves, settle in at most 10 years, where the years alone took up
+  to 231 and more than 300. On 10,000 cells 6 dry planets are left
+  instead of 20, and of 1,458 dry planets across the parameter range on
+  1,000 cells 31 instead of 146, most of them with 240-hour days, 90-day
+  years and eccentric or tilted orbits (follow-up M4-23); the CLI's test of
+  the warnings takes such a planet instead of corner 85. Earth's moisture
+  is periodic in the same 3 years and within 2 × 10⁻⁹ kg/m² of its
+  periodic state before (seed 1, 10,000 to 650,000 cells); its cost rises
+  from 1.7 to 2.4 s on 40,000 cells, from 8.3 to 15.7 s on 160,000 and
+  from 61.5 to 106.8 s on 650,000 (two steps).
+  `MoistureModel::initial_vapour_kg_m2` is
+  renamed `threshold_kg_m2`, and the warning of the moisture's failed
+  solves names its balance steps too.
 
 ### Removed
 
@@ -1082,6 +1108,16 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-22: the moisture and precipitation of a planet whose vapour does not
+  forget its start within its first years change: they are those of its
+  periodic state instead of its tenth year (in the bounds tests the 16
+  corners of `UNSETTLED_MOISTURE`, by up to 1,264 kg/m² of monthly
+  vapour), or of the same periodic state reached another way (the other
+  planets of the bounds tests that settled before, within
+  2.7 × 10⁻⁷ kg/m²). Earth's moisture moves by at most 2 × 10⁻⁹ kg/m²
+  (seed 1: 0 on 40,000 cells, 1.1 × 10⁻¹³ on 160,000, 1.7 × 10⁻⁹ on
+  650,000) and no golden value changes.
 
 - M4-21: every world's climate changes: the thermal equator of every
   month, and with it the pressure, the winds, the currents, the sea

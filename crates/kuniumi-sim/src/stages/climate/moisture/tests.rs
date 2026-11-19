@@ -20,6 +20,12 @@
 //! Ticket M4-09 (the multigrid): `the_potential_matches_the_jacobi_solver`.
 //! Ticket M4-14 (the downwind sweeps and solves):
 //! `the_sweeps_solve_a_cell_exactly`, `a_substep_matches_the_jacobi_solver`.
+//! Ticket M4-22 (the start and the balance step of the periodic state):
+//! `a_slow_ocean_reaches_its_periodic_state_with_the_balance_step` (reference
+//! values from `tools/moisture_step_reference.py`),
+//! `a_calm_planet_keeps_its_land_dry`,
+//! `the_balance_step_leaves_a_periodic_state_alone`,
+//! `a_dry_planet_reaches_the_periodic_state_of_its_years`.
 //!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! the sea surface of ticket M4-05 (its temperatures) and the circulation of
@@ -40,6 +46,7 @@ use kuniumi_world::{PlanetParams, Settings};
 
 use super::*;
 use crate::stages::climate::circulation::{Circulation, monthly_circulation};
+use crate::stages::climate::coupling::coupled_sea_surface;
 use crate::stages::climate::energy_balance::{EnergyBalanceParams, monthly_temperature};
 use crate::stages::climate::test_worlds::{
     EarthSea, Run, earth_10k, earth_reference, earth_sea_10k, earth_sea_reference,
@@ -513,7 +520,7 @@ fn land_recycles_its_share_and_lift_rains() {
         &earth_sea_10k().temperature.surface_k[6],
     );
     let month = model.month(ue, vn, t);
-    let mut w = model.initial_vapour_kg_m2(&month);
+    let mut w = model.threshold_kg_m2(&month);
     let mut step = model.substep(&month, &mut w);
     for _ in 0..3 {
         step = model.substep(&month, &mut w);
@@ -696,7 +703,8 @@ fn substep_by_jacobi(
 #[test]
 fn a_substep_matches_the_jacobi_solver() {
     // Ticket M4-14: Earth's world on 10,000 cells, the sub-steps of a
-    // month from the start of the periodic state, then each sub-step of
+    // month from the threshold (the start of the periodic state of ticket
+    // M4-06; from no vapour since ticket M4-22), then each sub-step of
     // the next month solved both ways from the same vapour: by the sweeps
     // and the downwind Gauss–Seidel solves of `substep`, and by the active
     // set method of ticket M4-06 with the Jacobi solver (started, as its
@@ -705,7 +713,7 @@ fn a_substep_matches_the_jacobi_solver() {
     // vapour within 10⁻⁹ of the largest; the sweeps leave fewer solves.
     let earth = earth_moisture_10k();
     let model = &earth.model;
-    let mut w = model.initial_vapour_kg_m2(&earth.months[0]);
+    let mut w = model.threshold_kg_m2(&earth.months[0]);
     let mut step = model.substep(&earth.months[0], &mut w);
     for _ in 1..4 {
         step = model.substep(&earth.months[0], &mut w);
@@ -795,13 +803,14 @@ fn earth_moisture_reference() -> &'static EarthMoisture {
 #[test]
 fn the_budget_closes_in_every_substep() {
     // Criterion 1: Earth on 10,000 cells, a year of sub-steps from the
-    // start of the periodic state: the fluxes of the transport cancel, so
+    // threshold (the start of the periodic state of ticket M4-06; from no
+    // vapour since ticket M4-22): the fluxes of the transport cancel, so
     // the global storage equals evaporation less precipitation in every
     // sub-step within 10⁻⁹ of the precipitation; no cell rains a negative
     // amount, and every active set settles.
     let earth = earth_moisture_10k();
     let model = &earth.model;
-    let mut w = model.initial_vapour_kg_m2(&earth.months[0]);
+    let mut w = model.threshold_kg_m2(&earth.months[0]);
     let mut worst: f64 = 0.0;
     let mut iterations = 0;
     for month in &earth.months {
@@ -1298,6 +1307,231 @@ fn the_saturation_stops_at_the_boiling_point() {
         }
         println!("{pressure} Pa: boiling at {tb:.2} K, saturated column {expected:.1} kg/m²");
     }
+}
+
+// ---------------------------------------------------------------------------
+// The start and the balance step of the periodic state (ticket M4-22).
+
+/// The monthly means of the last year of
+/// `a_slow_ocean_reaches_its_periodic_state_with_the_balance_step`, from
+/// `tools/moisture_step_reference.py` (kg/m², the nearest doubles).
+const SLOW_OCEAN_MONTHS_KG_M2: [f64; MONTHS] = [
+    31.809_449_927_004_447,
+    31.809_449_927_004_458,
+    31.809_449_927_004_47,
+    31.809_449_927_004_476,
+    31.809_449_927_004_486,
+    31.809_449_927_004_497,
+    31.809_449_927_004_508,
+    31.809_449_927_004_515,
+    31.809_449_927_004_525,
+    31.809_449_927_004_536,
+    31.809_449_927_004_543,
+    31.809_449_927_004_554,
+];
+
+#[test]
+fn a_slow_ocean_reaches_its_periodic_state_with_the_balance_step() {
+    // A still ocean planet at 288 K whose threshold is the saturated column
+    // itself (r_c = 1), so that a cell below it never rains: each cell is
+    // alone and linear, dW/dt = k (W_s − W) with k = C_E U_g / H_w, under a
+    // year of 200,000 s (kP = 0.193). From no vapour the years alone need
+    // 83 years to the tolerance and leave 1.18 kg/m² of change after 10;
+    // with the balance step the periodic state takes 5 years, its last
+    // change 1.7362703873399047 × 10⁻⁹ kg/m² and its monthly vapour within
+    // 6.7 × 10⁻¹³ kg/m² of W_s = 31.809449927005107 kg/m²
+    // (tools/moisture_step_reference.py: the recurrence of the sub-steps and
+    // the step of a cell alone, at 50 digits, with the closed forms of the
+    // saturation). The model's W_s, from `det::exp` and its products in
+    // `f64`, lies about 7 × 10⁻¹³ kg/m² from the script's, so its vapour is
+    // compared within 10⁻¹¹ kg/m² (3 × 10⁻¹³ of it), and its last change, a
+    // difference of nearly equal monthly means, within 10⁻³ of itself.
+    let grid = grid_10k();
+    let n = grid.len();
+    let params = MoistureParams {
+        precipitation_threshold: 1.0,
+        ..MoistureParams::earth()
+    };
+    let model = MoistureModel::new(&params, grid, &vec![-1_000.0; n], 0.0, 200_000.0);
+    let zero = vec![0.0; n];
+    let month = model.month(&zero, &zero, &vec![288.0; n]);
+    let m = model.periodic_state(&months_of(&month));
+    println!(
+        "{} years, last change {:e} kg/m², month 1 {:.17} kg/m²",
+        m.years, m.change_kg_m2, m.vapour_kg_m2[0][0]
+    );
+    assert!(m.converged && m.unsettled_steps == 0 && m.failed_solves == 0);
+    assert_eq!(m.years, 5);
+    assert!((m.change_kg_m2 / 1.736_270_387_339_904_7e-9 - 1.0).abs() <= 1e-3);
+    for (month, expected) in m.vapour_kg_m2.iter().zip(SLOW_OCEAN_MONTHS_KG_M2) {
+        for &w in month {
+            assert!((w - expected).abs() <= 1e-11, "{w} against {expected}");
+        }
+    }
+}
+
+#[test]
+fn a_calm_planet_keeps_its_land_dry() {
+    // Half land (north of the equator, 500 m), half ocean, no wind, 288 K
+    // at the sea level: nothing moves and nothing lifts, so a land cell has
+    // no outflow and no sink all year (its rows of the year's operator hold
+    // only the mass of the balance step) and from no vapour it keeps none,
+    // bit for bit; every ocean cell reaches the balance of
+    // `a_still_ocean_relaxes_to_its_balance` (by hand, from the closed forms
+    // of the saturation).
+    let grid = grid_10k();
+    let n = grid.len();
+    let heights: Vec<f64> = (0..n as u32)
+        .map(|i| {
+            if grid.position(i).z > 0.0 {
+                500.0
+            } else {
+                -1_000.0
+            }
+        })
+        .collect();
+    let model = MoistureModel::new(&MoistureParams::earth(), grid, &heights, 0.0, YEAR_S);
+    let zero = vec![0.0; n];
+    let month = model.month(&zero, &zero, &surface_of(&heights, 288.0));
+    let m = model.periodic_state(&months_of(&month));
+    let e = 611.657 * ((2.501e6_f64 / 461.5) * (1.0 / 273.16 - 1.0 / 288.0)).exp();
+    let rho = e / (461.5 * 288.0);
+    let h = 461.5 * 288.0 * 288.0 / (6.5e-3 * (2.501e6 - 461.5 * 288.0));
+    let (ce, tau, rc) = (1.2e-3 * 2.0, 14_400.0, 0.85);
+    let w = (ce * rho + rc * rho * h / tau) / (ce / h + 1.0 / tau);
+    println!("{} years, the ocean's balance {w:.6} kg/m²", m.years);
+    let (mut land, mut ocean) = (0, 0);
+    for k in 0..MONTHS {
+        for i in 0..n {
+            if model.ocean()[i] {
+                ocean += 1;
+                assert!((m.vapour_kg_m2[k][i] / w - 1.0).abs() <= 1e-9);
+            } else {
+                land += 1;
+                assert_eq!(m.vapour_kg_m2[k][i].to_bits(), 0, "cell {i}");
+                assert_eq!(m.precipitation_m_s[k][i].to_bits(), 0, "cell {i}");
+            }
+        }
+    }
+    assert!(land > 50_000 && ocean > 50_000);
+    assert!(m.converged && m.unsettled_steps == 0 && m.failed_solves == 0);
+}
+
+#[test]
+fn the_balance_step_leaves_a_periodic_state_alone() {
+    // A year that ends where it started has nothing to correct: the step is
+    // zero, bit for bit, so the periodic states are those of the model's
+    // own years. A year that gained vapour everywhere is stepped onwards
+    // everywhere: the year's operator and the half year's are M-matrices,
+    // whose inverses have no negative entry (up to the solver's tolerance).
+    // Earth on 10,000 cells, its periodic vapour of December and the set of
+    // raining cells of its first sub-step of January.
+    let earth = earth_moisture_10k();
+    let model = &earth.model;
+    let n = model.len();
+    let year = model.year_operator(&earth.months);
+    let x = earth.moisture.vapour_kg_m2[11].clone();
+    let mut w = x.clone();
+    let raining: Vec<u32> = model
+        .substep(&earth.months[0], &mut w)
+        .active
+        .iter()
+        .map(|&a| u32::from(a) * SUBSTEPS_PER_MONTH as u32)
+        .collect();
+    let delta = model.balance_step(&year, &raining, &x, &x).expect("a step");
+    assert!(delta.iter().all(|d| d.to_bits() == 0));
+    let y: Vec<f64> = x.iter().map(|w| w + 1e-3).collect();
+    let delta = model.balance_step(&year, &raining, &x, &y).expect("a step");
+    let largest = delta.iter().fold(0.0_f64, |a, &d| a.max(d));
+    let smallest = delta.iter().fold(f64::MAX, |a, &d| a.min(d));
+    println!("a step of {smallest:e} to {largest:e} kg/m² after a gain of 10⁻³");
+    assert!(largest > 0.0 && smallest >= -1e-9 * largest);
+    assert_eq!(delta.len(), n);
+}
+
+/// Corner 93 of the bounds tests (`lib.rs`): 13,000 km, a 240-hour day, a
+/// 10-year orbit, 2,500 W/m², no water, 10 bar, its gravity raised to the
+/// smallest bulk density (3,000 kg/m³) as there.
+fn dry_corner() -> PlanetParams {
+    let mut p = PlanetParams {
+        radius_m: PlanetParams::MAX_RADIUS_M,
+        surface_gravity_m_s2: PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
+        rotation_period_s: PlanetParams::MAX_ROTATION_PERIOD_S,
+        orbital_period_s: PlanetParams::MAX_ORBITAL_PERIOD_S,
+        stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
+        ocean_volume_m3: 0.0,
+        surface_pressure_pa: PlanetParams::MAX_SURFACE_PRESSURE_PA,
+        ..PlanetParams::earth()
+    };
+    p.surface_gravity_m_s2 *=
+        PlanetParams::MIN_BULK_DENSITY_KG_M3 / p.bulk_density_kg_m3() * (1.0 + 1e-12);
+    assert_eq!(p.validate(), Ok(()));
+    p
+}
+
+#[test]
+fn a_dry_planet_reaches_the_periodic_state_of_its_years() {
+    // Corner 93 on 1,000 cells (seed 3), with the winds and the sea surface
+    // of its coupled climate: its polar air hardly moves (winds below
+    // 1 mm/s at −82°), and its vapour drains from there by 14 % a year, so
+    // the years alone need 153 years to the tolerance from no vapour (231
+    // from the threshold, ticket M4-22, prototype). With the balance step it
+    // is periodic within its 10 years (9), and its monthly vapour is within
+    // a tenth of the tolerance, 10⁻⁷ kg/m², of the state that the same
+    // model's years reach alone, run until no monthly mean changes by more
+    // than 10⁻⁹ kg/m² (243 years; as the vapour drains by 14 % a year, about
+    // 6 × 10⁻⁹ kg/m² from their periodic state): measured 1.3 × 10⁻⁸. The
+    // comparison runs in release builds only.
+    let p = dry_corner();
+    let settings = Settings {
+        cells: 1_000,
+        allow_partial: true,
+        ..Settings::default()
+    };
+    let world = crate::generate_through_crust(&p, &settings, 3).expect("a world");
+    let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
+    let grid = &world.grid;
+    let start = monthly_temperature(&p, grid, heights, world.sea_level_m);
+    let coupled = coupled_sea_surface(&p, grid, heights, world.sea_level_m, &start);
+    let surface = &coupled.sea_surface.temperature.surface_k;
+    let model = MoistureModel::new(
+        &MoistureParams::for_planet(&p),
+        grid,
+        heights,
+        world.sea_level_m,
+        p.orbital_period_s,
+    );
+    let months: [MoistureMonth; MONTHS] = core::array::from_fn(|k| {
+        model.month(
+            &coupled.circulation.wind_east_m_s[k],
+            &coupled.circulation.wind_north_m_s[k],
+            &surface[k],
+        )
+    });
+    let stepped = model.periodic_state(&months);
+    println!(
+        "with the step {} years (change {:e})",
+        stepped.years, stepped.change_kg_m2
+    );
+    assert!(stepped.converged && stepped.years <= MAX_YEARS);
+    assert!(stepped.unsettled_steps == 0 && stepped.failed_solves == 0);
+    if cfg!(debug_assertions) {
+        // The years alone take about 40 s in debug builds.
+        return;
+    }
+    let years = model.run_years(&months, 1_000, 1e-9, false);
+    let mut worst: f64 = 0.0;
+    for (a, b) in stepped.vapour_kg_m2.iter().zip(&years.vapour_kg_m2) {
+        for (x, y) in a.iter().zip(b) {
+            worst = worst.max((x - y).abs());
+        }
+    }
+    println!(
+        "alone {} years (change {:e}); largest difference {worst:e} kg/m²",
+        years.years, years.change_kg_m2
+    );
+    assert!(years.converged && years.years > 100);
+    assert!(worst <= 0.1 * PERIODIC_TOLERANCE_KG_M2);
 }
 
 // ---------------------------------------------------------------------------

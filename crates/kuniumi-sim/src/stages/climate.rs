@@ -62,8 +62,9 @@
 //!    ticket M4-20), which Earth's loop never does, and until then the two
 //!    differences are the same;
 //! 3. the moisture of the coupled winds over the coupled sea surface's
-//!    surface temperatures, [`moisture::monthly_moisture`] (to
-//!    [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
+//!    surface temperatures, [`moisture::monthly_moisture`] (from no vapour,
+//!    each year followed by a balance step of its water budget, ticket
+//!    M4-22, to [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
 //!    [`moisture::MAX_YEARS`] years).
 //!
 //! So the climate's winds and currents follow its own temperatures. Ticket
@@ -146,8 +147,8 @@
 //!    ([`Moisture::converged`]), with its years and last change;
 //! 5. sub-steps of the moisture did not settle their active set
 //!    ([`Moisture::unsettled_steps`]);
-//! 6. monthly potentials and sub-steps of the moisture had a solve that did
-//!    not reach its tolerance ([`Moisture::failed_solves`]).
+//! 6. monthly potentials, sub-steps and balance steps of the moisture had a
+//!    solve that did not reach its tolerance ([`Moisture::failed_solves`]).
 //!
 //! Each message is one line of ASCII: the change of a temperature in kelvin
 //! with 3 decimals (above the 10⁻³ K of
@@ -163,7 +164,9 @@
 //! 184 s (7 years), the coupled sea surface, winds and currents 926 s (11
 //! years), the moisture 75 s (3 years) (ticket M4-17; 9.0 minutes with the
 //! models composed once, tickets M4-07 and M4-15; the models' own costs in
-//! tickets M4-09 and M4-14).
+//! tickets M4-09 and M4-14). The moisture's two balance steps (ticket
+//! M4-22) add about 90 % to its periodic state on 160,000 cells (from 8.3
+//! to 15.7 s) and 74 % on 650,000 (from 61.5 to 106.8 s).
 //! [`climate`] reports the progress [`PROGRESS`] after each model.
 
 pub mod circulation;
@@ -467,8 +470,8 @@ fn moisture_warnings(moisture: &Moisture) -> Vec<String> {
     }
     if moisture.failed_solves > 0 {
         warnings.push(format!(
-            "{} of the moisture's monthly potentials and sub-steps had a solve that did not \
-             reach its tolerance: its precipitation may be inaccurate",
+            "{} of the moisture's monthly potentials, sub-steps and balance steps had a solve \
+             that did not reach its tolerance: its precipitation may be inaccurate",
             moisture.failed_solves
         ));
     }

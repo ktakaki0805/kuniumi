@@ -979,17 +979,23 @@ fn generate_reads_the_planet_file_and_the_command_line_overrides_cells() {
 #[test]
 fn generate_prints_the_warnings_of_the_stages() {
     // A dry planet whose moisture is not periodic after its 10 years on
-    // 1,000 cells (seed 3): 13,000 km, 11 m/s², 240 h, 90 days,
-    // 2,500 W/m², no water, 10 bar, as corner 85 of the bounds tests of
-    // kuniumi-sim but for the gravity; its vapour changed by 54.7 kg/m² in
-    // the last year, its other models settled (the scratch tool of ticket
-    // M4-16). One erosion step: the climate does not depend on erosion.
+    // 1,000 cells (seed 3): 13,000 km, 11 m/s², 240 h, 90 days, e = 0.5,
+    // obliquity 90°, 2,500 W/m², no water, 0.1 bar; its vapour changed by
+    // 4.698 × 10⁻³ kg/m² in the last year, its other models settled (the
+    // scratch tool of ticket M4-22). Until ticket M4-22 this test took the
+    // same planet with Earth's orbit and 10 bar (corner 85 of the bounds
+    // tests of kuniumi-sim but for the gravity), whose moisture now settles
+    // in 9 years; with the stronger seasons of this orbit the balance step
+    // of the moisture, built on the year's mean operator, is not enough
+    // (follow-up M4-23). One erosion step: the climate does not depend on
+    // erosion.
     let planet = settings_file(
         "generate_warnings_planet",
         "[planet]\nradius_m = 13000000.0\nsurface_gravity_m_s2 = 11.0\n\
          rotation_period_s = 864000.0\norbital_period_s = 7776000.0\n\
+         orbital_eccentricity = 0.5\nobliquity_rad = 1.5707963267948966\n\
          stellar_flux_w_m2 = 2500.0\nocean_volume_m3 = 0.0\n\
-         surface_pressure_pa = 1000000.0\n\
+         surface_pressure_pa = 10000.0\n\
          [generation.erosion]\nsteps = 1\n",
     );
     let dir = scratch("generate_warnings");

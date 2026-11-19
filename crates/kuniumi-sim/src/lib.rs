@@ -569,9 +569,9 @@ mod tests {
     /// scratch tool, in ticket M4-16 and again in tickets M4-15, M4-17 and
     /// M4-20, which ran `stages::climate::climate` on the worlds of the
     /// Crust stage and read each model's own flags: independent of the
-    /// code of the warnings (and again in ticket M4-21). Every other model
-    /// of every planet of the bounds tests settles, and every solve
-    /// converges.
+    /// code of the warnings (and again in tickets M4-21 and M4-22). Every
+    /// other model of every planet of the bounds tests settles, and every
+    /// solve converges.
     const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
 
     /// The corners whose sea surface coupled with its winds and currents is
@@ -591,16 +591,18 @@ mod tests {
     /// M4-15).
     const UNSETTLED_SEA_SURFACE: [u32; 0] = [];
 
-    /// The corners whose moisture is not periodic after its 10 years: the
-    /// planets without water (whose only ocean is the cells at the sea
-    /// level) at the largest radius and the shortest orbit, but 1, 3, 65 and
-    /// 67 (19 too before the coupled winds of ticket M4-17), and since the
-    /// winds of the continuous thermal equator (ticket M4-21) those at the
-    /// largest radius, the longest orbit, the 240-hour day and 10 bar, 77,
-    /// 79, 93 and 95 (last change 3.6 × 10⁻⁶, 3.5 × 10⁻⁶, 61 and 57 kg/m²;
-    /// as 85 and 87, 47 kg/m²).
-    const UNSETTLED_MOISTURE: [u32; 16] =
-        [5, 7, 17, 19, 21, 23, 69, 71, 77, 79, 81, 83, 85, 87, 93, 95];
+    /// The corners whose moisture is not periodic after its 10 years: none
+    /// since its periodic state starts from no vapour and steps each year's
+    /// annual water budget (ticket M4-22; the slowest, 85, 87 and 93, settle
+    /// in 9 years and 21, 23, 83 and 95 in 10, corner 83 with a last change
+    /// of 9.7 × 10⁻⁷ kg/m², just within the tolerance). Before, 16 planets
+    /// without water (whose only ocean is the cells at the sea level) at the
+    /// largest radius did not: 5, 7, 17, 19, 21, 23, 69, 71, 77, 79, 81, 83,
+    /// 85, 87, 93 and 95, with last changes from 1.8 × 10⁻⁶ to 61 kg/m²,
+    /// their vapour draining from the start `r_c W_s` for decades where the
+    /// air hardly moves (corner 93: a polar cell with winds below 1 mm/s;
+    /// 231 years to the tolerance without the step).
+    const UNSETTLED_MOISTURE: [u32; 0] = [];
 
     /// The planets of `the_orbits_at_their_bounds_generate_finite_worlds`
     /// (by their index there) whose coupled sea surface is not periodic
@@ -696,8 +698,8 @@ mod tests {
     /// index halved is a multiple of 8 (8 of each radius; none of them warns
     /// of the coupled sea surface since ticket M4-20, which settled 17, 48,
     /// 64, 96 and 112, relaxed; since ticket M4-21 0, 16, 17, 48, 64, 65, 80
-    /// and 81 relax, and 96 and 112 settle without; 17 and 81 warn of the
-    /// moisture) and Earth.
+    /// and 81 relax, and 96 and 112 settle without; 17 and 81 warned of the
+    /// moisture until ticket M4-22) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);

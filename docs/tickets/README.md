@@ -140,6 +140,7 @@ parallel with later milestones.
 | [M4-20](M4-20-extreme-coupled-climate.md) | The coupled climate of the extreme planets | M4-17 |
 | [M4-21](M4-21-continuous-thermal-equator.md) | A continuous thermal equator | M4-20 |
 | [M4-22](M4-22-dry-planet-moisture.md) | The periodic state of the moisture of the dry planets | M4-21 |
+| [M4-23](M4-23-dry-planet-moisture-fine-grids.md) | The moisture of the dry planets on fine grids | M4-22 |
 | [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
 | [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-12](M4-12-mixed-layer.md) | Sea-surface fronts: a mixed layer under the atmosphere | M4-05 |
