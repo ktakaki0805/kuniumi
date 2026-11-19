@@ -4,8 +4,10 @@
 //! The pressure belts are placed by latitude, as the design says: an
 //! equatorial low that follows the thermal equator, subtropical highs,
 //! subpolar lows and polar highs, whose number and width follow the
-//! rotation rate; the land–sea temperature contrast of the energy balance
-//! ([`super::energy_balance`]) adds thermal lows and highs; the surface
+//! rotation rate; the land–sea temperature contrast (of the energy
+//! balance, [`super::energy_balance`], or of the sea surface coupled with
+//! the winds, [`super::coupling`]), smoothed over about 1,000 km, adds
+//! thermal lows and highs; the surface
 //! wind is the balance of the pressure gradient, the Coriolis force and the
 //! friction of the boundary layer.
 //!
@@ -98,12 +100,63 @@
 //! belts; temperatures are required within a factor of 1,000 of each other
 //! in a month, so that it stays finite (the energy balance ranges from
 //! about 95 K to 11,600 K at the most extreme corners of the v1 range,
-//! ticket M4-02). Finally every pressure is multiplied by `p / ⟨p⟩` (the
-//! mean over the sphere), so that the global mean sea-level pressure is the
-//! planet's surface pressure ([`PlanetParams::surface_pressure_pa`]).
+//! ticket M4-02). The exponent is then smoothed (below), and finally every
+//! pressure is multiplied by `p / ⟨p⟩` (the mean over the sphere), so that
+//! the global mean sea-level pressure is the planet's surface pressure
+//! ([`PlanetParams::surface_pressure_pa`]).
 //!
-//! No smoothing is added: the profile is smooth, and the energy balance's
-//! temperatures vary on its diffusion length (about 3,000 km on Earth).
+//! # The smoothing
+//!
+//! The exponent `x_i = h (T̄/T_i − 1)` of each cell is replaced by `x̃`, the
+//! solution of the screened Poisson (Helmholtz) equation
+//! `x̃ − (ℓ/a)² ∇² x̃ = x` on the unit sphere, with the finite-volume
+//! Laplacian of [`crate::operators::Laplacian`] (cell areas `a_i` in sr):
+//!
+//! ```text
+//! (diag(a_i) + (ℓ/a)² L) x̃ = a ∘ x
+//! ```
+//!
+//! symmetric and positive definite, solved by the conjugate gradient method
+//! preconditioned by the multigrid of [`crate::multigrid`] (ticket M4-09) to
+//! a relative residual of [`SMOOTHING_TOLERANCE`], from `x` (15 or 16
+//! iterations for Earth on 40,000 cells). The filter multiplies a spherical
+//! harmonic of degree `l` by `1 / (1 + (ℓ/a)² l(l + 1))`: on Earth, with
+//! `ℓ` = 1,000 km ([`CirculationParams::SMOOTHING_LENGTH_M`]), 0.871 for
+//! degree 2, 0.270 for degree 10 (a wavelength of 4,000 km) and 0.088 for
+//! degree 20; it keeps the area-weighted mean (the columns of `L` sum to
+//! zero) and a constant bit for bit. `ℓ` = 0 skips it: the circulation of
+//! ticket M4-03, bit for bit. The pressure and the winds are those of `x̃`.
+//!
+//! Ticket M4-03 added no smoothing: the energy balance's temperatures vary
+//! on its diffusion length (about 3,000 km on Earth). The sea surface with
+//! currents and coastal upwelling (ticket M4-05) does not: upwelling cools
+//! single coastal cells by up to about 1,500 W/m², a cold spot of one cell
+//! that the anomaly turns into a high of one cell. Near the equator the
+//! wind is the pressure gradient over the friction (`G / r`, below), about
+//! 21 m/s per kelvin per 100 km of temperature gradient (`R_d h / r`), and
+//! within 3° of it the Ekman transport of that wind's stress is downwind
+//! and about 18 times that of the same stress at 45°, so the wind moves
+//! the upwelling that made it. Without the smoothing the coupled loop of
+//! temperature, winds and currents ([`super::coupling`], ticket M4-17)
+//! wanders by several kelvin at equatorial coastal cells on 10,000 cells
+//! and diverges on 40,000 (the winds changing by up to 57 m/s), and the
+//! gain grows as the cells shrink; with `ℓ` = 250, 500, 750 and 1,000 km
+//! it settled faster and nearer the calibration of tickets M4-05 and M4-06
+//! as `ℓ` grew (ticket M4-17).
+//!
+//! The length is a choice of the model, not a cited parameterisation. The
+//! air of the boundary layer is not at the temperature of each cell's
+//! surface: it takes up the surface's temperature over the distance it
+//! travels while its heat is exchanged, of order `h_b / C_H` for a layer of
+//! depth `h_b` and a bulk transfer coefficient `C_H` (1,000 km for a 1.2-km
+//! mixed layer and `C_H` ≈ 1.2 × 10⁻³, whatever the wind), and 1,000 km is
+//! several cells at every resolution of the generator (10,000 cells: about
+//! 220 km apart; 650,000: about 28 km). On the energy balance's own
+//! temperatures (the 40,000-cell Earth) it changes the monthly winds by
+//! 0.72 m/s (RMS, at most 4.8 m/s) and the zonal-mean winds by less than
+//! 0.1 m/s. `ℓ` is the same for every planet, as `r`, so a small planet's
+//! land–sea contrast is smoothed more: a harmonic of degree 2 keeps 27 % of
+//! its amplitude at the smallest radius of v1 (1,500 km).
 //!
 //! # The surface wind
 //!
@@ -132,17 +185,17 @@
 //! the gradient. `R_d` is that of Earth's dry air, as the energy balance's
 //! `c_p`.
 //!
-//! The pressure gradient is `∇p = p ∇(ln B + x)`, with `x = h (T̄/T − 1)`
-//! the exponent of the thermal anomaly (the mean's scale is a constant):
+//! The pressure gradient is `∇p = p ∇(ln B + x̃)`, with `x̃` the smoothed
+//! exponent of the thermal anomaly (the mean's scale is a constant):
 //! the belts' part exactly, `(1/a) (dB/dψ)(dψ/dφ) / B` towards the north
 //! ([`Cells::pressure_and_slope`]), and the anomaly's by the least-squares
-//! gradient of `x` ([`crate::operators::Gradient`]), divided by the radius.
+//! gradient of `x̃` ([`crate::operators::Gradient`]), divided by the radius.
 //! The least-squares gradient is only first-order accurate, and the belts
 //! curve most where their gradient vanishes: on 10,000 cells it erred by up
 //! to 12 % of the largest belt wind at the thermal equator, where the wind
 //! is most sensitive to it (`G / r`), against well below 1 % for the exact
-//! part (ticket M4-03). The anomalies vary on the energy balance's
-//! diffusion length, much more slowly.
+//! part (ticket M4-03). The smoothed anomalies vary over `ℓ` or more,
+//! much more slowly.
 //!
 //! On the 40,000-cell Earth of ticket M4-02 the annual zonal-mean wind is
 //! easterly from the equator to 25–30° (at most −3.1 m/s) and westerly from
@@ -157,6 +210,9 @@
 //!   sea-level pressure.
 //! - The belts keep their strength through the year; only their position
 //!   (the thermal equator) and the thermal anomalies change.
+//! - The smoothing's length is a choice (above, "The smoothing"), and the
+//!   filter is isotropic, whereas the air carries the surface's
+//!   temperature downwind.
 //! - The thermal anomalies take the energy balance's land–sea contrast,
 //!   whose continents are cooler than the ocean in the annual mean (ticket
 //!   M4-02): continents carry a small permanent high, and summer heat lows
@@ -183,7 +239,8 @@ use kuniumi_world::PlanetParams;
 
 use super::energy_balance::Temperature;
 use super::insolation::MONTHS;
-use crate::operators::Gradient;
+use crate::multigrid::{self, Multigrid};
+use crate::operators::{Gradient, Laplacian};
 
 /// The largest latitude, north or south, of the thermal equator: 60°
 /// (module documentation, "The thermal equator").
@@ -195,6 +252,15 @@ pub const THERMAL_EQUATOR_STEP_RAD: f64 = PI / 1800.0;
 
 /// The degree of the Legendre fit of the zonal-mean temperature: 8.
 pub const ZONAL_FIT_DEGREE: usize = 8;
+
+/// The relative residual at which the smoothing of the thermal anomaly
+/// stops ([`crate::multigrid::conjugate_gradient`]; module documentation,
+/// "The smoothing"): 10⁻¹⁰.
+pub const SMOOTHING_TOLERANCE: f64 = 1e-10;
+
+/// The iterations after which the smoothing stops in any case: 10,000
+/// (Earth on 40,000 cells takes 15 or 16).
+pub const SMOOTHING_MAX_ITERATIONS: u32 = 10_000;
 
 /// The largest ratio of the warmest to the coldest temperature of a month
 /// that [`CirculationModel::month`] accepts: 1,000 (module documentation,
@@ -235,6 +301,10 @@ pub struct CirculationParams {
     pub rotation_rate_rad_s: f64,
     /// `a`, the radius (m); Earth 6,371 km.
     pub radius_m: f64,
+    /// `ℓ`, the length over which the thermal anomaly is smoothed (m;
+    /// module documentation, "The smoothing"); 1,000 km for every planet,
+    /// 0 for none (the circulation of ticket M4-03).
+    pub smoothing_length_m: f64,
 }
 
 impl CirculationParams {
@@ -269,6 +339,10 @@ impl CirculationParams {
     /// of dry air, 8.314 / 0.028 965.
     pub const DRY_AIR_GAS_CONSTANT_J_KG_K: f64 = 287.05;
 
+    /// `ℓ` (m): 1,000 km, the same for every planet (module documentation,
+    /// "The smoothing"; ticket M4-17).
+    pub const SMOOTHING_LENGTH_M: f64 = 1.0e6;
+
     /// Earth's parameters: [`for_planet`](Self::for_planet) of
     /// [`PlanetParams::earth`].
     pub fn earth() -> Self {
@@ -278,7 +352,8 @@ impl CirculationParams {
     /// The parameters of the planet `params`: `φ_H` and `w` are Earth's
     /// over `k = √((P⊕ / P)(a / a⊕))` (`Ω / Ω⊕ = P⊕ / P`; module
     /// documentation, "The cells"), the belts' pressures Earth's times
-    /// `p / p⊕`, and `Ω = 2π / P`, `a` and `p` the planet's. For Earth the
+    /// `p / p⊕`, `Ω = 2π / P`, `a` and `p` the planet's, and `ℓ`
+    /// [`SMOOTHING_LENGTH_M`](Self::SMOOTHING_LENGTH_M). For Earth the
     /// ratios are exactly 1.
     pub fn for_planet(params: &PlanetParams) -> Self {
         let earth = PlanetParams::earth();
@@ -299,6 +374,7 @@ impl CirculationParams {
             mean_pressure_pa: params.surface_pressure_pa,
             rotation_rate_rad_s: 2.0 * PI / params.rotation_period_s,
             radius_m: params.radius_m,
+            smoothing_length_m: Self::SMOOTHING_LENGTH_M,
         }
     }
 
@@ -319,6 +395,8 @@ impl CirculationParams {
             && self.rotation_rate_rad_s >= 0.0
             && self.rotation_rate_rad_s.is_finite()
             && positive(self.radius_m)
+            && self.smoothing_length_m >= 0.0
+            && self.smoothing_length_m.is_finite()
     }
 }
 
@@ -697,6 +775,10 @@ pub struct CirculationModel {
     lat_rad: Vec<f64>,
     /// `f = 2Ω sin φ` (1/s).
     coriolis_per_s: Vec<f64>,
+    /// The multigrid of the smoothing's matrix `diag(a_i) + (ℓ/a)² L`,
+    /// which holds the matrix; none where `ℓ` is 0 (module documentation,
+    /// "The smoothing").
+    smoothing: Option<Multigrid>,
 }
 
 impl CirculationModel {
@@ -705,24 +787,31 @@ impl CirculationModel {
     /// # Panics
     ///
     /// If a parameter is not finite, or not positive where it must be
-    /// (every one but `h` and `Ω`, which may be 0), or as [`Gradient::new`].
+    /// (every one but `h`, `Ω` and `ℓ`, which may be 0), or as
+    /// [`Gradient::new`].
     pub fn new(params: &CirculationParams, grid: &SphereGrid) -> Self {
         assert!(
             params.is_valid(),
             "CirculationModel needs finite positive parameters, got {params:?}"
         );
         let positions = grid.positions();
+        let areas_sr: Vec<f64> = (0..grid.len() as u32).map(|i| grid.area_sr(i)).collect();
+        let smoothing = (params.smoothing_length_m > 0.0).then(|| {
+            let ratio = params.smoothing_length_m / params.radius_m;
+            Multigrid::new(Laplacian::new(grid).matrix(&areas_sr, ratio * ratio))
+        });
         Self {
             params: *params,
             cells: Cells::new(params),
             gradient: Gradient::new(grid),
-            areas_sr: (0..grid.len() as u32).map(|i| grid.area_sr(i)).collect(),
+            areas_sr,
             sin_lat: positions.iter().map(|p| p.z).collect(),
             lat_rad: positions.iter().map(|&p| coords::lat_lon(p).0).collect(),
             coriolis_per_s: positions
                 .iter()
                 .map(|p| 2.0 * params.rotation_rate_rad_s * p.z)
                 .collect(),
+            smoothing,
         }
     }
 
@@ -744,6 +833,35 @@ impl CirculationModel {
     /// Whether the grid has no cells.
     pub fn is_empty(&self) -> bool {
         self.areas_sr.is_empty()
+    }
+
+    /// `values` (one per cell) smoothed over `ℓ` (module documentation,
+    /// "The smoothing"): the solution `x̃` of `(diag(a_i) + (ℓ/a)² L) x̃ =
+    /// a ∘ x` by the conjugate gradient method preconditioned by the
+    /// multigrid, to a relative residual of [`SMOOTHING_TOLERANCE`], from
+    /// `values`; `values` themselves where `ℓ` is 0.
+    fn smoothed(&self, values: &[f64]) -> Vec<f64> {
+        let mut smoothed = values.to_vec();
+        if let Some(multigrid) = &self.smoothing {
+            let rhs: Vec<f64> = values
+                .iter()
+                .zip(&self.areas_sr)
+                .map(|(x, a)| a * x)
+                .collect();
+            let solve = multigrid::conjugate_gradient(
+                multigrid.matrix(),
+                multigrid,
+                &rhs,
+                SMOOTHING_TOLERANCE,
+                SMOOTHING_MAX_ITERATIONS,
+                &mut smoothed,
+            );
+            debug_assert!(
+                solve.converged(),
+                "the smoothing did not converge: {solve:?}"
+            );
+        }
+        smoothed
     }
 
     /// The circulation of a month whose mean sea-level temperatures are
@@ -793,12 +911,11 @@ impl CirculationModel {
             FRAC_PI_2 / (FRAC_PI_2 - thermal_equator_rad),
             FRAC_PI_2 / (FRAC_PI_2 + thermal_equator_rad),
         );
-        let mut pressure_pa = Vec::with_capacity(n);
-        // `x = h (T̄/T − 1)`, the exponent of the thermal anomaly, and
-        // `∂(ln B)/∂φ` (per radian) of the belts.
-        let mut anomaly = Vec::with_capacity(n);
+        // `B(ψ)` and `∂(ln B)/∂φ` (per radian) of the belts, and
+        // `x = h (T̄/T − 1)`, the exponent of the thermal anomaly.
+        let mut belts_pa = Vec::with_capacity(n);
         let mut belt_slope_per_rad = Vec::with_capacity(n);
-        let (mut weighted, mut area) = (0.0, 0.0);
+        let mut anomaly = Vec::with_capacity(n);
         for (i, &temperature) in sea_level_k.iter().enumerate() {
             let lat = self.lat_rad[i];
             let psi = stretched_latitude_rad(lat, thermal_equator_rad);
@@ -809,13 +926,20 @@ impl CirculationModel {
                 south_slope
             };
             let zonal = fit.at(self.sin_lat[i]).clamp(coldest, warmest);
-            let x = p.thermal_depth * (zonal / temperature - 1.0);
-            let pressure = belts * det::exp(x);
+            belts_pa.push(belts);
+            belt_slope_per_rad.push(slope * dpsi / belts);
+            anomaly.push(p.thermal_depth * (zonal / temperature - 1.0));
+        }
+        if self.smoothing.is_some() {
+            anomaly = self.smoothed(&anomaly);
+        }
+        let mut pressure_pa = Vec::with_capacity(n);
+        let (mut weighted, mut area) = (0.0, 0.0);
+        for i in 0..n {
+            let pressure = belts_pa[i] * det::exp(anomaly[i]);
             weighted += self.areas_sr[i] * pressure;
             area += self.areas_sr[i];
             pressure_pa.push(pressure);
-            anomaly.push(x);
-            belt_slope_per_rad.push(slope * dpsi / belts);
         }
         let scale = p.mean_pressure_pa / (weighted / area);
         for pressure in &mut pressure_pa {

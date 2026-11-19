@@ -776,13 +776,19 @@ fn climate_summary(grid: &SphereGrid, t: &Temperature) -> (f64, f64, f64) {
 
 #[test]
 fn earth_stays_calibrated() {
-    // Criterion 3 with the refitted A and D: on the 40,000-cell world of
-    // the calibration (release) the P₂ coefficient −28.0 ± 0.5 K, the mean
-    // surface temperature 288.0 ± 0.3 K and every 10° band within 5 K of
-    // North & Coakley's fit, as the energy balance alone of ticket M4-02.
-    // On the 10,000-cell world of debug builds (another world) within 2 K
-    // and 0.5 K of the energy balance alone on the same world (prototype:
-    // 1.3 K and 0.25 K).
+    // Criterion 3 with the refitted A and D. Since ticket M4-17 the targets
+    // (on the 40,000-cell world of the calibration, release: the P₂
+    // coefficient −28.0 ± 0.5 K, the mean surface temperature
+    // 288.0 ± 0.3 K and every 10° band within 5 K of North & Coakley's fit)
+    // are those of the coupled state of the sea surface, winds and
+    // currents (`coupling::tests::earth_is_calibrated_with_its_coupled_climate`);
+    // here, with the winds and currents of the energy balance alone (now
+    // with its thermal anomaly smoothed), the sea surface stays within 1 K
+    // of the two targets and every band within 5 K (ticket M4-17: 287.72 K,
+    // −28.74 K, 3.51 K; 287.99 K and −27.97 K before the smoothing). On
+    // the 10,000-cell world of debug builds (another world) within 2 K and
+    // 0.5 K of the energy balance alone on the same world (prototype of
+    // ticket M4-05: 1.3 K and 0.25 K).
     let run = earth_reference();
     let sea = earth_sea_reference();
     let grid = &run.world.grid;
@@ -796,8 +802,8 @@ fn earth_stays_calibrated() {
         assert!((p2 - p20).abs() <= 2.0);
         assert!((mean - mean0).abs() <= 0.5);
     } else {
-        assert!((p2 + 28.0).abs() <= 0.5);
-        assert!((mean - 288.0).abs() <= 0.3);
+        assert!((p2 + 28.0).abs() <= 1.0);
+        assert!((mean - 288.0).abs() <= 1.0);
         assert!(worst <= 5.0);
     }
 }
@@ -1229,7 +1235,10 @@ fn golden_fingerprint_of_earth_sea_surface() {
     // and the images of out/M4-09 were viewed (ticket M4-09); and when the
     // balance step replaced the annual correction, after the other tests
     // passed and the images of out/M4-15 were viewed (ticket M4-15: 7 years
-    // instead of 9, every monthly mean within 3.6 × 10⁻⁴ K of the old one).
+    // instead of 9, every monthly mean within 3.6 × 10⁻⁴ K of the old one);
+    // and when the circulation's thermal anomaly was smoothed over 1,000 km,
+    // after the other tests passed and the images of out/M4-17 were viewed
+    // (ticket M4-17).
     let run = earth_10k();
     let sea = earth_sea_10k();
     let t = &sea.temperature;
@@ -1271,4 +1280,4 @@ fn golden_fingerprint_of_earth_sea_surface() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
-const GOLDEN_FINGERPRINT: u64 = 0xDB9F_73DB_B780_2E2E;
+const GOLDEN_FINGERPRINT: u64 = 0x7E3A_35AA_94C7_8CEA;

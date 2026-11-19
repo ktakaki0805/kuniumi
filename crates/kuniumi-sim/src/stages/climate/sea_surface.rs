@@ -155,8 +155,14 @@
 //! 287.99 K, and every 10° band within 4.5 K of North & Coakley's fit
 //! (ticket M4-05; [`SeaSurfaceParams::EARTH_OLR_AT_FREEZING_W_M2`],
 //! [`SeaSurfaceParams::EARTH_DIFFUSION_W_M2_K`]). The energy balance alone
-//! keeps its own ([`EnergyBalanceParams::earth`]). Provisional until ticket
-//! M4-08 calibrates on Earth's topography.
+//! keeps its own ([`EnergyBalanceParams::earth`]). The Climate stage runs
+//! the sea surface coupled with its winds and currents
+//! ([`super::coupling`], ticket M4-17), with the circulation's thermal
+//! anomaly smoothed over 1,000 km: its coupled state on the same world
+//! (288.02 K and −27.94 K) meets the same targets with the same `A` and
+//! `D`, which were kept; with the smoothed winds of the energy balance
+//! alone the sea surface gives 287.72 K and −28.74 K.
+//! Provisional until ticket M4-08 calibrates on Earth's topography.
 //!
 //! # Limitations
 //!

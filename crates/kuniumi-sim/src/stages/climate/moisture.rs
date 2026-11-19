@@ -253,8 +253,12 @@
 //! water close to Earth's, about 25 kg/m² (the 1.27 × 10¹⁶ kg of water
 //! vapour of K. E. Trenberth & L. Smith 2005, "The mass of the atmosphere:
 //! a constraint on global analyses", J. Climate 18, 864–875, over
-//! 5.1 × 10¹⁴ m²). These are values of the generated world, not of Earth;
-//! ticket M4-08 calibrates on Earth's topography. Every planet takes the
+//! 5.1 × 10¹⁴ m²). With the winds and sea surface of the coupled state of
+//! the Climate stage ([`super::coupling`], ticket M4-17) the same `U_g`
+//! gives 1.09 m/yr and 24.9 kg/m² on that world (1.04 m/yr at 1 m/s, 1.02
+//! at 0), within the same targets, so it was kept. These are values of the
+//! generated world, not of Earth; ticket M4-08 calibrates on Earth's
+//! topography. Every planet takes the
 //! same parameters: the planet enters through its temperatures, winds,
 //! radius, surface pressure (the boiling point) and the energy balance's
 //! lapse rate.

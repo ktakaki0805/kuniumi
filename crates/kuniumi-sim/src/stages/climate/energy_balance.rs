@@ -1183,7 +1183,7 @@ pub(crate) fn periodic_run<S: Seasons>(
 /// drift of the year before and is at least as large has its shift halved
 /// from then on, at most [`STEP_DAMPING_HALVINGS`] times, and a cell whose
 /// drift keeps its sign has its factor doubled again, up to 1.
-struct StepDamping {
+pub(crate) struct StepDamping {
     /// The factor of each cell's shift, 1 to `2^−STEP_DAMPING_HALVINGS`.
     factor: Vec<f64>,
     /// Each cell's drift of the year before (K), none before the first.
@@ -1191,7 +1191,7 @@ struct StepDamping {
 }
 
 impl StepDamping {
-    fn new(n: usize) -> Self {
+    pub(crate) fn new(n: usize) -> Self {
         Self {
             factor: vec![1.0; n],
             drift_k: None,
@@ -1201,7 +1201,7 @@ impl StepDamping {
     /// Updates the factors with the drift of the year from `start` to
     /// `end`, and scales the shift from `end` to `stepped` by them, in
     /// place; a cell whose factor is 1 keeps its shift bit for bit.
-    fn apply(&mut self, start: &[f64], end: &[f64], stepped: &mut [f64]) {
+    pub(crate) fn apply(&mut self, start: &[f64], end: &[f64], stepped: &mut [f64]) {
         let floor = 1.0 / f64::from(1_u32 << STEP_DAMPING_HALVINGS);
         let drift: Vec<f64> = end.iter().zip(start).map(|(e, s)| e - s).collect();
         if let Some(last) = &self.drift_k {

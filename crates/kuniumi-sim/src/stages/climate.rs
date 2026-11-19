@@ -40,50 +40,50 @@
 //! # The Climate stage
 //!
 //! [`run`] (ticket M4-07) runs after the Crust stage, on its relief
-//! (`surface_height`) and sea level, and before the Erosion stage. It
-//! composes the models once, in the order of the design (気候モデル /
-//! 計算の流れ) and as tickets M4-05 and M4-06 calibrated them ([`climate`]):
+//! (`surface_height`) and sea level, and before the Erosion stage. It runs
+//! the design's loop (気候モデル / 計算の流れ; ticket M4-17), [`climate`]:
 //!
 //! 1. the energy balance without currents to its periodic state,
 //!    [`energy_balance::monthly_temperature`] (to
 //!    [`energy_balance::PERIODIC_TOLERANCE_K`], at most
-//!    [`energy_balance::MAX_YEARS`] years);
-//! 2. the monthly pressure and surface winds of its sea-level
-//!    temperatures, [`circulation::monthly_circulation`];
-//! 3. the currents of their annual-mean stress, [`ocean::ocean_currents`],
-//!    solved once;
-//! 4. the sea surface with those currents and the monthly coastal upwelling
-//!    of those winds, [`sea_surface::monthly_sea_surface_temperature`], to
-//!    its periodic state (the same tolerance and years);
-//! 5. the moisture of those winds over the sea surface's surface
-//!    temperatures, [`moisture::monthly_moisture`] (to
+//!    [`energy_balance::MAX_YEARS`] years): the temperatures of the first
+//!    year's winds;
+//! 2. the coupled periodic state of the sea surface, the winds and the
+//!    currents, [`coupling::coupled_sea_surface`]: year after year the sea
+//!    surface with the currents and the monthly coastal upwelling of the
+//!    winds of the year before, the winds
+//!    ([`circulation::CirculationModel::monthly`]) and the currents of their
+//!    annual-mean stress ([`ocean::OceanModel::currents`]) made again from
+//!    each year's temperatures, until no monthly mean changes by more than
+//!    the same tolerance from the year before (at most the same years);
+//! 3. the moisture of the coupled winds over the coupled sea surface's
+//!    surface temperatures, [`moisture::monthly_moisture`] (to
 //!    [`moisture::PERIODIC_TOLERANCE_KG_M2`], at most
 //!    [`moisture::MAX_YEARS`] years).
 //!
-//! Each model's periodic state is its own; the stage adds no criterion and
-//! no outer iteration. So the winds and currents are those of the energy
-//! balance without currents, while the climate's temperatures are those of
-//! the sea surface with them, the composition of the calibrations of
-//! tickets M4-05 and M4-06. The design's loop would make the winds follow
-//! the temperatures they drive; iterated as a fixed point (winds and
-//! currents from the sea surface, the sea surface again) it did not settle:
-//! on the 40,000-cell Earth-parameter world the largest change of a monthly
-//! sea-level temperature stayed at 5–10 K, the mean warmed by 1.1 K and the
-//! precipitation rose by 26 % in four iterations, away from the
-//! calibrations (ticket M4-07); ticket M4-17 looks for its periodic state.
+//! So the climate's winds and currents follow its own temperatures. Ticket
+//! M4-07 composed the models once instead (the winds and currents of the
+//! energy balance without currents, the sea surface with them), because
+//! the coupled loop, iterated as a fixed point, did not settle: the coastal
+//! upwelling and the thermal highs and lows near the equator drove each
+//! other at the scale of the cells. With the circulation's thermal anomaly
+//! smoothed over 1,000 km ([`circulation`], "The smoothing") Earth's
+//! coupled state settles in 11 or 12 years on 10,000 to 650,000 cells and
+//! keeps the calibrations of tickets M4-05 and M4-06 with their parameters
+//! ([`coupling`], "Convergence").
 //!
 //! A model that does not reach its periodic state keeps the months of its
 //! last year, which may be those of a climate in transition (an ice front
 //! still advancing on a planet with little heat transport;
-//! [`energy_balance`], "The periodic state"), and the stage reports it as a
-//! warning of the
-//! world (below, "Warnings"). Of the 128 corners of the v1 range on 1,000
-//! cells (seed 3), every energy balance and sea surface is periodic within
-//! 10 years since the balance step of ticket M4-15 (4 and 2 were not after
-//! 100 years before it), and 11 moistures are not after their 10 (tickets
-//! M4-07, M4-16). The
-//! temperatures have no fixed bound at the corners (monthly means from
-//! about 95 K to about 11,600 K, ticket M4-02).
+//! [`energy_balance`], "The periodic state") or of a coupling still
+//! changing, and the stage reports it as a warning of the world (below,
+//! "Warnings"). Of the 128 corners of the v1 range on 1,000 cells (seed 3),
+//! every energy balance is periodic within 10 years since the balance step
+//! of ticket M4-15, the coupled sea surface of 23 is not after its 100
+//! years (mostly 10-bar atmospheres, 8-hour days and worlds without water;
+//! ticket M4-17, [`coupling`]), and 12 moistures are not after their 10
+//! (tickets M4-07, M4-16, M4-17). The temperatures have no fixed bound at the
+//! corners (monthly means from about 95 K to about 11,600 K, ticket M4-02).
 //!
 //! The climate is that of the relief of the Crust stage: the Erosion stage
 //! that follows changes the land but not the climate (the alternation of
@@ -101,11 +101,11 @@
 //! | Field | Unit | Values |
 //! | --- | --- | --- |
 //! | [`TEMPERATURE_ANNUAL`] | K | the mean of the twelve months |
-//! | [`TEMPERATURE_MONTHS`] | K | the sea surface's monthly-mean surface temperature, at the cell's height |
+//! | [`TEMPERATURE_MONTHS`] | K | the coupled sea surface's monthly-mean surface temperature, at the cell's height |
 //! | [`PRECIPITATION_ANNUAL`] | m/s | the mean of the twelve months |
 //! | [`PRECIPITATION_MONTHS`] | m/s | the moisture's monthly-mean precipitation |
-//! | [`WIND_EAST`], [`WIND_NORTH`] | m/s | the mean of the twelve monthly surface winds |
-//! | [`CURRENT_EAST`], [`CURRENT_NORTH`] | m/s | the currents, 0 on land |
+//! | [`WIND_EAST`], [`WIND_NORTH`] | m/s | the mean of the twelve monthly surface winds of the coupled state |
+//! | [`CURRENT_EAST`], [`CURRENT_NORTH`] | m/s | the coupled state's currents, 0 on land |
 //!
 //! The annual mean of a cell is the sum of its months in month order
 //! divided by 12: the months are equal twelfths of the orbital period
@@ -129,7 +129,8 @@
 //! 2. the solve of the currents of a basin did not reach its tolerance
 //!    ([`OceanCurrents::solves`]), with the number of such basins and their
 //!    largest relative residual;
-//! 3. the sea surface did not reach its periodic state, as 1;
+//! 3. the sea surface coupled with its winds and currents did not reach
+//!    its periodic state, as 1 (also when the coupling does not settle);
 //! 4. the moisture did not reach its periodic state
 //!    ([`Moisture::converged`]), with its years and last change;
 //! 5. sub-steps of the moisture did not settle their active set
@@ -146,15 +147,16 @@
 //!
 //! # Cost
 //!
-//! About 5.6 s on 10,000 cells (release) and 9.0 minutes on 650,000 (Earth,
-//! seed 1, release): the energy balance 185 s (7 years), the circulation
-//! and the currents 38 s, the sea surface 233 s (7 years), the moisture
-//! 82 s (3 years) (tickets M4-07 and M4-15, 11.4 minutes before the
-//! balance step of M4-15; the models' own costs in tickets M4-09 and
-//! M4-14).
+//! About 10 s on 10,000 cells (release) and
+//! 19.7 minutes on 650,000 (Earth, seed 1, release): the energy balance
+//! 184 s (7 years), the coupled sea surface, winds and currents 926 s (11
+//! years), the moisture 75 s (3 years) (ticket M4-17; 9.0 minutes with the
+//! models composed once, tickets M4-07 and M4-15; the models' own costs in
+//! tickets M4-09 and M4-14).
 //! [`climate`] reports the progress [`PROGRESS`] after each model.
 
 pub mod circulation;
+pub mod coupling;
 pub mod energy_balance;
 pub mod insolation;
 pub mod moisture;
@@ -164,12 +166,13 @@ pub mod sea_surface;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{FieldError, PlanetParams, Warning, World};
 
-use self::circulation::{Circulation, monthly_circulation};
+use self::circulation::Circulation;
+use self::coupling::{Coupled, coupled_sea_surface};
 use self::energy_balance::{SUBSTEPS_PER_MONTH, Temperature, monthly_temperature};
 use self::insolation::MONTHS;
 use self::moisture::{MAX_ACTIVE_SET_ITERATIONS, Moisture, monthly_moisture};
-use self::ocean::{OceanCurrents, ocean_currents};
-use self::sea_surface::{SeaSurface, monthly_sea_surface_temperature};
+use self::ocean::OceanCurrents;
+use self::sea_surface::SeaSurface;
 use crate::stages::crust::SURFACE_HEIGHT;
 use crate::{SimError, StageId};
 
@@ -178,8 +181,8 @@ use crate::{SimError, StageId};
 pub const TEMPERATURE_ANNUAL: &str = "temperature_annual";
 
 /// The fields of the monthly-mean surface temperature (K), January to
-/// December: the sea surface's periodic state with currents and upwelling
-/// ([`Climate::sea_surface`]) at the height of each cell in the Crust
+/// December: the coupled periodic state of the sea surface with its winds
+/// and currents ([`Climate::sea_surface`]) at the height of each cell in the Crust
 /// stage's relief (before erosion); over the ocean the sea-surface
 /// temperature.
 pub const TEMPERATURE_MONTHS: [&str; MONTHS] = [
@@ -236,28 +239,29 @@ pub const CURRENT_EAST: &str = "current_east";
 pub const CURRENT_NORTH: &str = "current_north";
 
 /// The progress that [`climate`] reports after the energy balance without
-/// currents, after the circulation and the currents, and after the sea
-/// surface: the shares of the time at 650,000 cells that end there (241,
-/// 281 and 604 of 686 s, ticket M4-07).
-pub const PROGRESS: [f64; 3] = [0.35, 0.41, 0.88];
+/// currents and after the coupled sea surface: the shares of the time at
+/// 650,000 cells that end there (184 and 1,109 of 1,185 s, ticket M4-17).
+pub const PROGRESS: [f64; 2] = [0.16, 0.94];
 
-/// The climate of a planet: the models of the climate composed once, in the
-/// order of the design and as they were calibrated (module documentation,
-/// "The Climate stage"), each in its periodic state.
+/// The climate of a planet: the models of the climate in the design's loop
+/// (module documentation, "The Climate stage"), each in its periodic state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Climate {
     /// The periodic state of the energy balance without currents (ticket
-    /// M4-02): the temperatures of the winds and of the currents.
+    /// M4-02): the temperatures of the first year's winds of the coupled
+    /// loop.
     pub energy_balance: Temperature,
-    /// The monthly pressure and surface winds of `energy_balance` (ticket
-    /// M4-03).
+    /// The monthly pressure and surface winds of the coupled state (tickets
+    /// M4-03, M4-17): those of the last year of `sea_surface`, made from
+    /// the year before's temperatures.
     pub circulation: Circulation,
-    /// The currents of the annual-mean wind stress of `circulation` (ticket
-    /// M4-04).
+    /// The currents of the annual-mean wind stress of `circulation` (tickets
+    /// M4-04, M4-17).
     pub currents: OceanCurrents,
     /// The sea surface with the heat of `currents` and the monthly coastal
-    /// upwelling of `circulation` (ticket M4-05): the climate's
-    /// temperatures.
+    /// upwelling of `circulation`, coupled with them (tickets M4-05,
+    /// M4-17): the climate's temperatures. Its `years`, `change_k` and
+    /// `converged` are those of the coupled loop.
     pub sea_surface: SeaSurface,
     /// The moisture of the winds of `circulation` over the surface
     /// temperatures of `sea_surface` (ticket M4-06): the climate's
@@ -267,9 +271,9 @@ pub struct Climate {
 
 /// The climate of the surface `heights_m` (m, one height per cell of
 /// `grid`, on the datum of `sea_level_m`) of the planet `params` (valid):
-/// the models composed once (module documentation, "The Climate stage").
+/// the design's loop (module documentation, "The Climate stage").
 /// `progress` receives the fractions of [`PROGRESS`] after the energy
-/// balance, after the currents and after the sea surface.
+/// balance and after the coupled sea surface.
 ///
 /// # Panics
 ///
@@ -284,26 +288,12 @@ pub fn climate(
 ) -> Climate {
     let energy_balance = monthly_temperature(params, grid, heights_m, sea_level_m);
     progress(PROGRESS[0]);
-    let circulation = monthly_circulation(params, grid, &energy_balance);
-    let currents = ocean_currents(
-        params,
-        grid,
-        heights_m,
-        sea_level_m,
-        &circulation,
-        &energy_balance,
-    );
+    let Coupled {
+        circulation,
+        currents,
+        sea_surface,
+    } = coupled_sea_surface(params, grid, heights_m, sea_level_m, &energy_balance);
     progress(PROGRESS[1]);
-    let sea_surface = monthly_sea_surface_temperature(
-        params,
-        grid,
-        heights_m,
-        sea_level_m,
-        &circulation,
-        &energy_balance,
-        &currents,
-    );
-    progress(PROGRESS[2]);
     let moisture = monthly_moisture(
         params,
         grid,
@@ -333,13 +323,16 @@ impl Climate {
         warnings.extend(periodic_temperature_warning(
             "the energy balance without currents",
             &self.energy_balance,
-            "whose temperatures are kept, with the winds and currents made from them",
+            "whose temperatures are kept as the start of the coupled sea surface",
+            TRANSITIONS,
         ));
         warnings.extend(currents_warning(&self.currents));
         warnings.extend(periodic_temperature_warning(
-            "the sea surface with currents and upwelling",
+            "the sea surface coupled with its winds and currents",
             &self.sea_surface.temperature,
-            "whose temperatures are kept as the climate's, with the moisture made from them",
+            "whose temperatures, winds and currents are kept as the climate's, with the moisture \
+             made from them",
+            COUPLED_TRANSITIONS,
         ));
         warnings.extend(moisture_warnings(&self.moisture));
         warnings
@@ -383,20 +376,32 @@ impl Climate {
     }
 }
 
+/// The transitions in which an energy balance's last year may lie (the
+/// end of its warning).
+const TRANSITIONS: &str = "an ice front still advancing on a planet with little heat \
+                           transport, or a planet near an ice-albedo bifurcation";
+
+/// The transitions in which the coupled sea surface's last year may lie:
+/// those of [`TRANSITIONS`], and a coupling that does not settle (ticket
+/// M4-17).
+const COUPLED_TRANSITIONS: &str = "an ice front still advancing on a planet with little heat \
+                                   transport, a planet near an ice-albedo bifurcation, or winds, \
+                                   upwelling and currents that keep changing each other";
+
 /// The warning of the energy balance `model` (its name in the message)
 /// whose periodic state is `temperature`, if it did not converge; `kept`
-/// says what is kept of its last year.
+/// says what is kept of its last year, `transitions` in what it may lie.
 fn periodic_temperature_warning(
     model: &str,
     temperature: &Temperature,
     kept: &str,
+    transitions: &str,
 ) -> Option<String> {
     (!temperature.converged).then(|| {
         format!(
             "{model} did not reach its periodic state in {} years: a monthly-mean sea-level \
              temperature changed by {:.3} K in the last year, {kept}; they may be those of a \
-             climate in transition (an ice front still advancing on a planet with little heat \
-             transport, or a planet near an ice-albedo bifurcation)",
+             climate in transition ({transitions})",
             temperature.years, temperature.change_k
         )
     })

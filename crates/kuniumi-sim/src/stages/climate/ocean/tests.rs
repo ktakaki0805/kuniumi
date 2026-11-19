@@ -1205,8 +1205,10 @@ fn golden_fingerprint_of_earth_currents() {
     // A change means that the same world has different currents. Recorded
     // after the other tests passed and the images of out/M4-04 were viewed
     // (ticket M4-04, Result); recorded again when the temperatures' solver
-    // became the multigrid (ticket M4-09) and when their periodic state came
-    // from the balance step (ticket M4-15).
+    // became the multigrid (ticket M4-09), when their periodic state came
+    // from the balance step (ticket M4-15) and when the circulation's
+    // thermal anomaly was smoothed over 1,000 km (ticket M4-17, after the
+    // other tests passed and the images of out/M4-17 were viewed).
     let run = earth_10k();
     let heights = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
     let circulation =
@@ -1233,4 +1235,4 @@ fn golden_fingerprint_of_earth_currents() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_currents`.
-const GOLDEN_FINGERPRINT: u64 = 0xDEA9_F592_CBD6_037B;
+const GOLDEN_FINGERPRINT: u64 = 0x8A1B_EC2A_584E_D38D;

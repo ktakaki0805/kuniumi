@@ -1096,7 +1096,11 @@ fn earth_hydrological_cycle_is_calibrated() {
     // 2018) and its precipitable water 25 ± 3 kg/m² (Earth: 1.27 × 10¹⁶ kg
     // over 5.1 × 10¹⁴ m², Trenberth & Smith 2005); prototype 1.05 m/yr and
     // 24.5 kg/m². On 10,000 cells in debug builds (another world, prototype
-    // 0.93 m/yr and 23.7 kg/m²): 0.8–1.1 m/yr and 20–28 kg/m².
+    // 0.93 m/yr and 23.7 kg/m²): 0.8–1.1 m/yr and 20–28 kg/m². These are
+    // the winds of the energy balance alone (with the smoothing of ticket
+    // M4-17: 1.062 m/yr, 24.6 kg/m²); the climate's own, of the coupled
+    // state, meet the same targets
+    // (`coupling::tests::earth_is_calibrated_with_its_coupled_climate`).
     let earth = earth_moisture_reference();
     let grid = &earth.run.world.grid;
     let a = annual_of(earth);
@@ -1447,7 +1451,9 @@ fn golden_fingerprint_of_earth_moisture() {
     // the tests above passed and the images of out/M4-14 were viewed; this
     // periodic state within 1.1 × 10⁻⁹ kg/m² of the Jacobi solver's); and
     // when the temperatures' periodic states came from the balance step
-    // (ticket M4-15).
+    // (ticket M4-15); and when the circulation's thermal anomaly was
+    // smoothed over 1,000 km (ticket M4-17, after the other tests passed and
+    // the images of out/M4-17 were viewed).
     let run = earth_10k();
     let earth = earth_moisture_10k();
     let m = &earth.moisture;
@@ -1475,4 +1481,4 @@ fn golden_fingerprint_of_earth_moisture() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
-const GOLDEN_FINGERPRINT: u64 = 0x0763_CEDA_6D45_1441;
+const GOLDEN_FINGERPRINT: u64 = 0xD652_EFF1_5F5E_3400;

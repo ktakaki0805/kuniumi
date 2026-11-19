@@ -595,6 +595,18 @@ section: every change after which an existing seed produces a different world
   balance, 57 and 59 of the sea surface, 11 dry corners at 13,000 km of the
   moisture; Earth has none. `kuniumi generate` prints each as
   `warning: <stage>: <message>` on the standard error (M4-16).
+- `stages::climate::coupling` (M4-17): `coupled_sea_surface` and its
+  result `Coupled`, the coupled periodic state of the sea surface, the
+  winds and the currents, the design's loop (気候モデル / 計算の流れ):
+  after each year of the sea surface with currents and upwelling, the
+  circulation of that year's monthly temperatures, the currents of its
+  annual stress and the upwelling of its monthly stress, until no monthly
+  mean sea-level temperature changes by more than 10⁻³ K from the year
+  before (at most 100 years), with the balance step of M4-15 after each
+  year. Earth settles in 11 or 12 years on 10,000 to 650,000 cells.
+- `CirculationParams::smoothing_length_m` and `SMOOTHING_LENGTH_M`
+  (1,000 km for every planet), `circulation::SMOOTHING_TOLERANCE` and
+  `SMOOTHING_MAX_ITERATIONS` (M4-17).
 
 ### Changed
 
@@ -903,6 +915,31 @@ section: every change after which an existing seed produces a different world
   100 on finer grids. The warning of a model that did not settle now
   names that case, an ice front still advancing on a planet with little
   heat transport, before a planet near an ice–albedo bifurcation (M4-15).
+- The Climate stage runs the coupled loop of the sea surface, the winds
+  and the currents (`stages::climate::climate`, M4-17) instead of
+  composing the models once: the energy balance without currents, then
+  `coupling::coupled_sea_surface` from it, then the moisture of its winds
+  over its temperatures. The fields' winds, currents and temperatures are
+  those of the coupled state; `Climate`'s `circulation`, `currents` and
+  `sea_surface` hold it. `climate::PROGRESS` has two shares (after the
+  energy balance and after the coupled sea surface) instead of three. The
+  warning of the sea surface names "the sea surface coupled with its winds
+  and currents" and, among its possible transitions, a coupling that does
+  not settle; the energy balance's says that its temperatures are kept as
+  the start of the coupled sea surface. The calibration of M4-05 and M4-06
+  holds for the coupled state with the same `A`, `D` and `U_g` (the
+  40,000-cell Earth-parameter world: 288.02 K, `P₂` −27.94 K, 1.09 m/yr,
+  24.9 kg/m²). Of the 128 corners of the bounds tests, 23 do not settle
+  within the 100 years (mostly 10-bar atmospheres, 8-hour days and worlds
+  without water; follow-up M4-20) and are warned; so are three of the
+  planets at the bounds of the orbit. The Climate stage takes about
+  20 minutes at 650,000 cells instead of 9.
+- The circulation's thermal anomaly is smoothed over 1,000 km
+  (`circulation`, "The smoothing"; M4-17): the screened Poisson filter
+  `x̃ − (ℓ/a)² ∇² x̃ = x`, solved by the multigrid's conjugate gradient, so
+  that the cold spots of coastal upwelling at the scale of a cell do not
+  drive the equatorial winds that move the upwelling. With `ℓ` = 0 the
+  circulation is M4-03's bit for bit.
 
 ### Removed
 
@@ -1004,6 +1041,16 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-17: every world's climate changes: the 30 fields of the Climate
+  stage are those of the coupled state of the sea surface, the winds and
+  the currents, with the thermal anomaly of the circulation smoothed over
+  1,000 km (Earth, seed 1, 10,000 cells: a mean surface temperature of
+  289.02 K instead of 288.98 K, a precipitation of 0.958 m/yr instead of
+  0.926). The golden values of the circulation, the currents, the sea
+  surface and the moisture (of the winds of the energy balance, now
+  smoothed), of the Climate stage and of the CLI's world are recorded
+  again. The other fields and the sea level are unchanged.
 
 - M4-15: every world's climate changes: the 30 fields of the Climate
   stage, from the periodic states of the balance step (Earth, seed 1:

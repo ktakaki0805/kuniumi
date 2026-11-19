@@ -565,24 +565,36 @@ mod tests {
     /// currents is not periodic after its 100 years on 1,000 cells (seed 3):
     /// none since the balance step of ticket M4-15 (corners 56–59 before,
     /// which alternated between two years under the annual correction of
-    /// ticket M4-02). This and the next two lists were measured by a
-    /// scratch tool, in ticket M4-16 and again in ticket M4-15, which ran
-    /// `stages::climate::climate` on the worlds of the Crust stage and read
-    /// each model's own flags: independent of the code of the warnings.
-    /// Every other model of every planet of the bounds tests settles, and
-    /// every solve converges.
+    /// ticket M4-02). This and the next three lists were measured by a
+    /// scratch tool, in ticket M4-16 and again in tickets M4-15 and M4-17,
+    /// which ran `stages::climate::climate` on the worlds of the Crust stage
+    /// and read each model's own flags: independent of the code of the
+    /// warnings. Every other model of every planet of the bounds tests
+    /// settles, and every solve converges.
     const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
 
-    /// The corners whose sea surface with currents and upwelling is not
-    /// periodic after its 100 years: none since ticket M4-15 (corners 57
-    /// and 59 before).
-    const UNSETTLED_SEA_SURFACE: [u32; 0] = [];
+    /// The corners whose sea surface coupled with its winds and currents is
+    /// not periodic after its 100 years (ticket M4-17): mostly the 10-bar
+    /// atmospheres, the 8-hour days and the worlds without water, whose
+    /// stress and upwelling are many times Earth's (ticket M4-20). Before
+    /// ticket M4-17 the sea surface, with the winds and currents of the
+    /// energy balance alone, was periodic at every corner (since ticket
+    /// M4-15).
+    const UNSETTLED_SEA_SURFACE: [u32; 23] = [
+        17, 19, 25, 27, 48, 50, 64, 66, 68, 72, 73, 74, 75, 83, 84, 86, 89, 90, 91, 92, 94, 96, 112,
+    ];
 
     /// The corners whose moisture is not periodic after its 10 years: the
     /// planets without water (whose only ocean is the cells at the sea
-    /// level) at the largest radius and the shortest orbit, but 1, 3, 19, 65
-    /// and 67.
-    const UNSETTLED_MOISTURE: [u32; 11] = [5, 7, 17, 21, 23, 69, 71, 81, 83, 85, 87];
+    /// level) at the largest radius and the shortest orbit, but 1, 3, 65 and
+    /// 67 (19 too before the coupled winds of ticket M4-17).
+    const UNSETTLED_MOISTURE: [u32; 12] = [5, 7, 17, 19, 21, 23, 69, 71, 81, 83, 85, 87];
+
+    /// The planets of `the_orbits_at_their_bounds_generate_finite_worlds`
+    /// (by their index there) whose coupled sea surface is not periodic
+    /// after its 100 years (ticket M4-17): the two at obliquity 90° and
+    /// e = 0.99, and Earth at e = 0.99; the others settle.
+    const UNSETTLED_ORBITS: [usize; 3] = [0, 1, 3];
 
     /// Checks that the warnings of `world`, the planet `corner` of
     /// [`bound_planets`] (Earth, or another planet of the bounds tests, for
@@ -592,16 +604,29 @@ mod tests {
     /// surface's and the moisture's likewise, and no other.
     fn assert_warnings(corner: Option<u32>, world: &World) {
         let unsettled = |corners: &[u32]| corner.is_some_and(|c| corners.contains(&c));
-        let expected: Vec<(&str, &str)> = [
-            (
+        assert_warned(
+            &format!("corner {corner:?}"),
+            world,
+            [
                 unsettled(&UNSETTLED_ENERGY_BALANCE),
-                "the energy balance without currents",
-            ),
-            (
                 unsettled(&UNSETTLED_SEA_SURFACE),
-                "the sea surface with currents and upwelling",
+                unsettled(&UNSETTLED_MOISTURE),
+            ],
+        );
+    }
+
+    /// Checks that the warnings of `world` (the planet `what`) are those of
+    /// the Climate stage for the models that did not settle, in the stage's
+    /// name: the energy balance's, the sea surface's and the moisture's
+    /// where `unsettled` says so, in that order, and no other.
+    fn assert_warned(what: &str, world: &World, unsettled: [bool; 3]) {
+        let expected: Vec<(&str, &str)> = [
+            (unsettled[0], "the energy balance without currents"),
+            (
+                unsettled[1],
+                "the sea surface coupled with its winds and currents",
             ),
-            (unsettled(&UNSETTLED_MOISTURE), "the moisture"),
+            (unsettled[2], "the moisture"),
         ]
         .into_iter()
         .filter(|&(warned, _)| warned)
@@ -620,7 +645,7 @@ mod tests {
                 (w.stage.as_str(), model.unwrap_or(&w.message))
             })
             .collect();
-        assert_eq!(warned, expected, "corner {corner:?}: {:#?}", world.warnings);
+        assert_eq!(warned, expected, "{what}: {:#?}", world.warnings);
     }
 
     /// Generates the planet `p` with `settings` (seed 3) and checks that the
@@ -649,9 +674,11 @@ mod tests {
     /// Generates the planets of [`bound_planets`] that `keep` keeps
     /// ([`assert_finite_world`]) and checks their warnings
     /// ([`assert_warnings`]). Release builds run every corner kept; debug
-    /// builds, where the climate takes about 6 s a planet, the corners
-    /// whose index halved is a multiple of 8 (8 of each radius; of them 17
-    /// and 81 warn) and Earth.
+    /// builds, where the climate takes several seconds a planet (more for
+    /// one whose coupled sea surface runs its 100 years), the corners whose
+    /// index halved is a multiple of 8 (8 of each radius; of them 17, 48,
+    /// 64, 96 and 112 warn of the coupled sea surface and 17 and 81 of the
+    /// moisture) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);
@@ -714,11 +741,16 @@ mod tests {
             },
         ];
         let settings = bounds_settings();
-        for p in &planets {
+        for (k, p) in planets.iter().enumerate() {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
-            // Each settles (the scratch tool of ticket M4-16): no warning.
+            // Each settles but the coupled sea surface of three (the scratch
+            // tools of tickets M4-16 and M4-17).
             let world = assert_finite_world(p, &settings);
-            assert_warnings(None, &world);
+            assert_warned(
+                &format!("orbit {k}"),
+                &world,
+                [false, UNSETTLED_ORBITS.contains(&k), false],
+            );
         }
     }
 

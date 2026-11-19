@@ -1,12 +1,14 @@
-//! The Earth runs shared by the climate tests (tickets M4-02 to M4-06): the
-//! Earth-parameter world of seed 1 through the Crust stage, the periodic
-//! state of its energy balance and the periodic state of its sea surface
-//! with currents and upwelling, each computed once per test process, so
-//! that the tests of the energy balance, the circulation, the sea surface
-//! and the moisture use the same runs. On 40,000 cells, the world of the
-//! calibration of ticket M4-02, in release builds (about 10 s for the
-//! energy balance, 11 s more for the sea surface, 7 years each; ticket
-//! M4-15); on 10,000 cells in debug builds, where the world differs.
+//! The Earth runs shared by the climate tests (tickets M4-02 to M4-06 and
+//! M4-17): the Earth-parameter world of seed 1 through the Crust stage, the
+//! periodic state of its energy balance, the periodic state of its sea
+//! surface with currents and upwelling, and the coupled state of its sea
+//! surface, winds and currents, each computed once per test process, so
+//! that the tests of the energy balance, the circulation, the sea surface,
+//! the coupling, the moisture and the stage use the same runs. On 40,000
+//! cells, the world of the calibration of ticket M4-02, in release builds
+//! (about 10 s for the energy balance, 11 s more for the sea surface, 7
+//! years each, ticket M4-15; about 40 s for the coupled state, 12 years,
+//! ticket M4-17); on 10,000 cells in debug builds, where the world differs.
 
 use std::sync::OnceLock;
 
@@ -14,6 +16,7 @@ use kuniumi_sphere::SphereGrid;
 use kuniumi_world::{PlanetParams, Settings, World};
 
 use super::circulation::monthly_circulation;
+use super::coupling::{Coupled, coupled_sea_surface};
 use super::energy_balance::{EnergyBalance, EnergyBalanceParams, Temperature};
 use super::insolation::{MONTHS, monthly_insolation};
 use super::ocean::{OceanParams, monthly_wind_stress, ocean_currents};
@@ -148,5 +151,35 @@ pub(crate) fn earth_sea_reference() -> &'static EarthSea {
         earth_sea_10k()
     } else {
         SEA.get_or_init(|| earth_sea(earth_reference()))
+    }
+}
+
+/// The coupled state of the sea surface, the winds and the currents of the
+/// run `run` with Earth's parameters (ticket M4-17).
+fn earth_coupled(run: &Run) -> Coupled {
+    let heights = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
+    coupled_sea_surface(
+        &PlanetParams::earth(),
+        &run.world.grid,
+        heights,
+        run.world.sea_level_m,
+        &run.temperature,
+    )
+}
+
+/// The coupled state of the 10,000-cell run, once.
+pub(crate) fn earth_coupled_10k() -> &'static Coupled {
+    static COUPLED: OnceLock<Coupled> = OnceLock::new();
+    COUPLED.get_or_init(|| earth_coupled(earth_10k()))
+}
+
+/// The coupled state of the run of the criteria: 40,000 cells in release
+/// builds, the 10,000 cells of [`earth_coupled_10k`] in debug builds.
+pub(crate) fn earth_coupled_reference() -> &'static Coupled {
+    static COUPLED: OnceLock<Coupled> = OnceLock::new();
+    if cfg!(debug_assertions) {
+        earth_coupled_10k()
+    } else {
+        COUPLED.get_or_init(|| earth_coupled(earth_reference()))
     }
 }

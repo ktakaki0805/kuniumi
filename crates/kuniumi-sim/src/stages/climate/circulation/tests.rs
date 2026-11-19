@@ -156,6 +156,7 @@ fn the_parameters_scale_with_the_planet() {
     assert_same(earth.gas_constant_j_kg_k, 287.05);
     assert_same(earth.mean_pressure_pa, 101_325.0);
     assert_same(earth.radius_m, 6_371_000.0);
+    assert_same(earth.smoothing_length_m, 1.0e6);
     // Ω = 2π / 86,164.0905 s = 7.292116e-5 rad/s.
     assert_near(earth.rotation_rate_rad_s, 7.292_116e-5, 1e-11, "Ω");
     // Twice the surface pressure doubles every belt; the mean follows.
@@ -169,6 +170,8 @@ fn the_parameters_scale_with_the_planet() {
     assert_same(thick.polar_high_pa, 203_000.0);
     assert_same(thick.mean_pressure_pa, 202_650.0);
     assert_same(thick.hadley_edge_rad, earth.hadley_edge_rad);
+    // The smoothing's length is the same for every planet (ticket M4-17).
+    assert_same(thick.smoothing_length_m, 1.0e6);
     // Twice the day and twice the radius keep Ω a, so the cells.
     let same = CirculationParams::for_planet(&PlanetParams {
         rotation_period_s: 2.0 * EARTH_DAY_S,
@@ -668,9 +671,14 @@ fn thermal_anomalies_follow_the_temperature() {
     // hydrostatic factor, to first order `δp / p = −h δT / T̄` with
     // `T̄ = 300 − 30 sin² 40° = 287.6 K` (the fit of the patched field
     // differs little from the symmetric part): −0.36 × 10 / 287.6 = −1.25 %
-    // and +0.36 × 15 / 287.6 = +1.88 %.
+    // and +0.36 × 15 / 287.6 = +1.88 %. Without the smoothing of ticket
+    // M4-17, which spreads the patches (tested below, "Smoothing").
     let grid = grid_10k();
-    let model = CirculationModel::new(&CirculationParams::earth(), grid);
+    let params = CirculationParams {
+        smoothing_length_m: 0.0,
+        ..CirculationParams::earth()
+    };
+    let model = CirculationModel::new(&params, grid);
     let base = symmetric_temperature(grid);
     let warm = kuniumi_sphere::coords::from_lat_lon(40.0 * DEG, 0.0);
     let cold = kuniumi_sphere::coords::from_lat_lon(-40.0 * DEG, 2.0);
@@ -1029,6 +1037,156 @@ fn the_model_needs_positive_friction() {
     CirculationModel::new(&params, &SphereGrid::octahedron());
 }
 
+#[test]
+#[should_panic(expected = "finite positive parameters")]
+fn the_model_needs_a_non_negative_smoothing_length() {
+    let params = CirculationParams {
+        smoothing_length_m: -1.0,
+        ..CirculationParams::earth()
+    };
+    CirculationModel::new(&params, &SphereGrid::octahedron());
+}
+
+// ---------------------------------------------------------------------------
+// Smoothing (ticket M4-17).
+
+/// The 40,000-cell grid of seed 1, built once.
+fn grid_40k() -> &'static SphereGrid {
+    static GRID: OnceLock<SphereGrid> = OnceLock::new();
+    GRID.get_or_init(|| SphereGrid::fibonacci(40_000, 1).expect("grid"))
+}
+
+#[test]
+fn the_smoothing_damps_harmonics_as_the_helmholtz_filter() {
+    // `(a + (ℓ/R)² L) x̃ = a x` is the screened Poisson equation
+    // `x̃ − (ℓ/R)² ∇² x̃ = x` on the unit sphere, whose Laplacian has the
+    // spherical harmonics of degree `l` as eigenfunctions with eigenvalue
+    // `−l(l + 1)`: a harmonic comes back multiplied by
+    // `1 / (1 + (ℓ/R)² l(l + 1))`. Earth, ℓ = 1,000 km: (ℓ/R)² =
+    // (1/6.371)² = 0.024 637, so by hand 1/(1 + 0.024 637 × 6) = 0.871 21
+    // for degree 2, 1/(1 + 0.024 637 × 110) = 0.269 54 for degree 10 and
+    // 1/(1 + 0.024 637 × 420) = 0.088 13 for degree 20; the sectoral
+    // harmonic Re((x + iy)¹⁰) of degree 10 likewise 0.269 54. The ratio is
+    // measured as the projection `Σ a x̃ x / Σ a x²` on 40,000 cells, where
+    // the finite-volume Laplacian is first-order accurate (ticket M3-04).
+    let grid = grid_40k();
+    let params = CirculationParams::earth();
+    let model = CirculationModel::new(&params, grid);
+    let c = (1.0e6 / 6.371e6) * (1.0e6 / 6.371e6);
+    let sectoral = |p: &kuniumi_math::Vec3| {
+        // Re((x + iy)^10) by the binomial expansion of its real part.
+        let (x, y) = (p.x, p.y);
+        let (x2, y2) = (x * x, y * y);
+        x2.powi(5) - 45.0 * x2.powi(4) * y2 + 210.0 * x2.powi(3) * y2 * y2
+            - 210.0 * x2 * x2 * y2.powi(3)
+            + 45.0 * x2 * y2.powi(4)
+            - y2.powi(5)
+    };
+    let cases: [(&str, f64, Vec<f64>); 4] = [
+        (
+            "P_2",
+            2.0,
+            grid.positions().iter().map(|p| legendre(2, p.z)).collect(),
+        ),
+        (
+            "P_10",
+            10.0,
+            grid.positions().iter().map(|p| legendre(10, p.z)).collect(),
+        ),
+        (
+            "P_20",
+            20.0,
+            grid.positions().iter().map(|p| legendre(20, p.z)).collect(),
+        ),
+        (
+            "Y_10,10",
+            10.0,
+            grid.positions().iter().map(sectoral).collect(),
+        ),
+    ];
+    for (name, l, field) in cases {
+        let smoothed = model.smoothed(&field);
+        let (mut projection, mut norm) = (0.0, 0.0);
+        for (i, (&x, &y)) in field.iter().zip(&smoothed).enumerate() {
+            let a = grid.area_sr(i as u32);
+            projection += a * x * y;
+            norm += a * x * x;
+        }
+        let ratio = projection / norm;
+        let expected = 1.0 / (1.0 + c * l * (l + 1.0));
+        println!("{name}: damped to {ratio:.5} against {expected:.5}");
+        assert_near(ratio, expected, 0.02 * expected, name);
+    }
+}
+
+#[test]
+fn the_smoothing_keeps_the_mean_and_the_constants() {
+    // The columns of the Laplacian sum to zero, so `Σ a x̃ = Σ a x` up to
+    // the solver's residual (10⁻¹⁰ of the right-hand side); a constant
+    // solves the system exactly and comes back bit for bit.
+    let grid = grid_10k();
+    let model = CirculationModel::new(&CirculationParams::earth(), grid);
+    let mut rng = Rng::for_stream(7, "test/smoothing");
+    let noisy: Vec<f64> = (0..grid.len())
+        .map(|_| 1.0 + rng.range_f64(-1.0, 1.0))
+        .collect();
+    let smoothed = model.smoothed(&noisy);
+    let (before, after) = (global_mean(grid, &noisy), global_mean(grid, &smoothed));
+    println!("mean {before} → {after}");
+    assert_near(after, before, 1e-9 * before, "mean");
+    // Noise of the cell scale is nearly gone.
+    let spread = |v: &[f64], m: f64| {
+        (global_mean(
+            grid,
+            &v.iter().map(|x| (x - m) * (x - m)).collect::<Vec<_>>(),
+        ))
+        .sqrt()
+    };
+    assert!(spread(&smoothed, after) < 0.1 * spread(&noisy, before));
+    let constant = vec![0.25; grid.len()];
+    for (x, y) in constant.iter().zip(model.smoothed(&constant)) {
+        assert_same(y, *x);
+    }
+}
+
+#[test]
+fn a_zero_length_is_the_circulation_of_m4_03() {
+    // With ℓ = 0 the model skips the smoothing: the circulation of ticket
+    // M4-03 (as of ticket M4-15), whose golden fingerprint stays.
+    let run = earth_10k();
+    let params = CirculationParams {
+        smoothing_length_m: 0.0,
+        ..CirculationParams::for_planet(&PlanetParams::earth())
+    };
+    let c = CirculationModel::new(&params, &run.world.grid).monthly(&run.temperature.sea_level_k);
+    let fingerprint = circulation_fingerprint(&c);
+    println!("fingerprint {fingerprint:#018X}");
+    assert_eq!(fingerprint, UNSMOOTHED_GOLDEN_FINGERPRINT);
+}
+
+/// FNV-1a over the bits of the twelve monthly pressures, then the twelve
+/// eastward and the twelve northward winds, then the twelve thermal
+/// equators of `c` (f64, little-endian, cells in index order).
+fn circulation_fingerprint(c: &Circulation) -> u64 {
+    let bytes: Vec<u8> = c
+        .pressure_pa
+        .iter()
+        .chain(&c.wind_east_m_s)
+        .chain(&c.wind_north_m_s)
+        .flat_map(|m| m.iter().flat_map(|v| v.to_bits().to_le_bytes()))
+        .chain(
+            c.thermal_equator_rad
+                .iter()
+                .flat_map(|v| v.to_bits().to_le_bytes()),
+        )
+        .collect();
+    fnv1a64(&bytes)
+}
+
+/// The fingerprint of `a_zero_length_is_the_circulation_of_m4_03`: that of
+/// `golden_fingerprint_of_earth_circulation` before ticket M4-17.
+const UNSMOOTHED_GOLDEN_FINGERPRINT: u64 = 0xA63E_8ED9_C397_F5B8;
+
 // ---------------------------------------------------------------------------
 // Golden fingerprint.
 
@@ -1042,26 +1200,17 @@ fn golden_fingerprint_of_earth_circulation() {
     // that the same world has a different circulation. Recorded after the
     // other tests passed and the images of out/M4-03 were viewed (ticket
     // M4-03, Result); recorded again when the temperatures' solver became
-    // the multigrid (ticket M4-09) and when their periodic state came from
-    // the balance step (ticket M4-15).
+    // the multigrid (ticket M4-09), when their periodic state came from
+    // the balance step (ticket M4-15) and when the thermal anomaly was
+    // smoothed over 1,000 km (ticket M4-17, after the other tests passed and
+    // the images of out/M4-17 were viewed; the unsmoothed circulation keeps
+    // its value, `a_zero_length_is_the_circulation_of_m4_03`).
     let run = earth_10k();
     let c = monthly_circulation(&PlanetParams::earth(), &run.world.grid, &run.temperature);
-    let bytes: Vec<u8> = c
-        .pressure_pa
-        .iter()
-        .chain(&c.wind_east_m_s)
-        .chain(&c.wind_north_m_s)
-        .flat_map(|m| m.iter().flat_map(|v| v.to_bits().to_le_bytes()))
-        .chain(
-            c.thermal_equator_rad
-                .iter()
-                .flat_map(|v| v.to_bits().to_le_bytes()),
-        )
-        .collect();
-    let fingerprint = fnv1a64(&bytes);
+    let fingerprint = circulation_fingerprint(&c);
     println!("fingerprint {fingerprint:#018X}");
     assert_eq!(fingerprint, GOLDEN_FINGERPRINT);
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_circulation`.
-const GOLDEN_FINGERPRINT: u64 = 0xA63E_8ED9_C397_F5B8;
+const GOLDEN_FINGERPRINT: u64 = 0x9D60_EEA7_14F1_7A23;

@@ -164,12 +164,12 @@ fn generate_writes_the_world_so_far_then_exits_with_code_2() {
     let o = kuniumi(&["generate", "--seed", "1", "--cells", "1000", "--out", out]);
     assert_eq!(o.status.code(), Some(2), "{o:?}");
     // Each stage's progress in whole percent, each line once: the Climate
-    // stage's after each of its models (ticket M4-07), and the 1,000 steps
+    // stage's after each of its models (tickets M4-07, M4-17), and the 1,000 steps
     // of the Erosion stage give every percent from 0 to 100.
     let mut expected = String::from(
         "[grid] 0%\n[grid] 100%\n[tectonics] 0%\n[tectonics] 100%\n\
          [crust] 0%\n[crust] 100%\n\
-         [climate] 0%\n[climate] 35%\n[climate] 41%\n[climate] 88%\n[climate] 100%\n",
+         [climate] 0%\n[climate] 16%\n[climate] 94%\n[climate] 100%\n",
     );
     for percent in 0..=100 {
         expected.push_str(&format!("[erosion] {percent}%\n"));
@@ -544,7 +544,10 @@ fn generate_writes_a_world_that_reads_back() {
 /// were recorded again by ticket M4-15 (the balance step after each year
 /// of the energy balance and the sea surface, world-breaking) after the
 /// tests of `stages::climate` passed and the maps of `out/M4-15` were
-/// looked at; the 16 others are unchanged by it.
+/// looked at; the 16 others are unchanged by it. And again by ticket M4-17
+/// (the coupled state of the sea surface, winds and currents,
+/// world-breaking) after the tests of `stages::climate` passed and the maps
+/// of `out/M4-17` were looked at; the 16 others are unchanged by it.
 const GOLDEN_FIELDS: [(&str, u64); 46] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
@@ -559,36 +562,36 @@ const GOLDEN_FIELDS: [(&str, u64); 46] = [
     ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
     ("surface_height", 0xDB1E_0D68_718E_F38C),
-    ("temperature_annual", 0x3C09_2E42_48A2_2938),
-    ("temperature_m01", 0xF891_21D3_83E8_84E4),
-    ("temperature_m02", 0xEB62_7EC0_4DBB_65C6),
-    ("temperature_m03", 0x9C60_9E3C_8B07_9A0A),
-    ("temperature_m04", 0x1F97_9201_4051_5E69),
-    ("temperature_m05", 0x6CD5_47D5_CF09_8757),
-    ("temperature_m06", 0xBB15_1528_832F_C9FE),
-    ("temperature_m07", 0x2BB7_57A6_C506_A5CD),
-    ("temperature_m08", 0xF2B0_94DD_B71F_2B0F),
-    ("temperature_m09", 0x7534_9296_CCB0_C160),
-    ("temperature_m10", 0x85B2_9D80_34B9_BCEC),
-    ("temperature_m11", 0xD5F1_1DB1_A3A4_B803),
-    ("temperature_m12", 0x1434_758E_7803_3B4E),
-    ("precipitation_annual", 0x2CAE_973E_6EA2_7A4A),
-    ("precipitation_m01", 0x78CC_639D_E272_997C),
-    ("precipitation_m02", 0xCA94_3AB0_BF9C_9B0B),
-    ("precipitation_m03", 0x1C00_B513_5677_0EEF),
-    ("precipitation_m04", 0x16E1_D504_A1B8_F46F),
-    ("precipitation_m05", 0xB0D2_3A59_8170_3601),
-    ("precipitation_m06", 0x6630_F741_4709_F795),
-    ("precipitation_m07", 0xBAFE_FB06_37F7_0249),
-    ("precipitation_m08", 0x2697_BC48_AAC8_0117),
-    ("precipitation_m09", 0x7F19_46CF_975B_05A6),
-    ("precipitation_m10", 0xF46A_3087_DBAF_8EFA),
-    ("precipitation_m11", 0x888E_C2DD_38F1_6E43),
-    ("precipitation_m12", 0x7C2F_FFE6_2180_CD67),
-    ("wind_east", 0xD0AE_F423_21FB_B171),
-    ("wind_north", 0xC1D7_D2D3_465C_E11E),
-    ("current_east", 0x2633_FFA3_72B5_04BF),
-    ("current_north", 0xC551_2B4B_1C67_ED82),
+    ("temperature_annual", 0x7CE0_1DDE_DBB3_729C),
+    ("temperature_m01", 0xC5BB_47B3_AEB1_ECAB),
+    ("temperature_m02", 0x9EE8_A8C5_F7A2_6690),
+    ("temperature_m03", 0x7BBE_9D3C_005C_20EF),
+    ("temperature_m04", 0xA0A4_9B15_0B02_C3E6),
+    ("temperature_m05", 0x9B20_7725_95BA_D377),
+    ("temperature_m06", 0xAE99_4EF5_8D04_18D7),
+    ("temperature_m07", 0x0F5F_F224_6C0C_915C),
+    ("temperature_m08", 0xD228_C598_6542_8BE0),
+    ("temperature_m09", 0xDDBB_7B54_A0A7_49FA),
+    ("temperature_m10", 0x717B_F52A_183F_7735),
+    ("temperature_m11", 0x31C4_F28C_89C0_1129),
+    ("temperature_m12", 0x4611_28CA_64DD_6DD0),
+    ("precipitation_annual", 0x8E67_3DD9_3481_E067),
+    ("precipitation_m01", 0xCD31_8F87_72EE_320C),
+    ("precipitation_m02", 0x53FB_E448_4E66_B695),
+    ("precipitation_m03", 0x4B35_BA7F_BAC2_A065),
+    ("precipitation_m04", 0xB2E9_7C93_E507_BDA4),
+    ("precipitation_m05", 0x2669_1406_DF47_8B2E),
+    ("precipitation_m06", 0xC99E_C844_7BEA_7EB2),
+    ("precipitation_m07", 0x23A8_8710_177E_913D),
+    ("precipitation_m08", 0x4E6B_12C0_5441_B263),
+    ("precipitation_m09", 0x0F23_D098_1233_0F74),
+    ("precipitation_m10", 0x7E04_FA03_A5D7_0ABC),
+    ("precipitation_m11", 0x026C_B47F_0DA8_2B61),
+    ("precipitation_m12", 0x5448_8ABF_41A4_6FCF),
+    ("wind_east", 0x370B_EDC8_7190_13D4),
+    ("wind_north", 0x72C1_226A_0F3A_7F6C),
+    ("current_east", 0xC800_0976_C85F_A52C),
+    ("current_north", 0xEA32_99F2_B702_4EF2),
     ("drainage_area", 0x74B7_97DE_863F_9C2A),
     ("discharge", 0x714B_06C0_204A_48F6),
     ("depression_depth", 0x2128_8731_7CB9_00EB),
@@ -1004,9 +1007,8 @@ fn generate_prints_the_warnings_of_the_stages() {
         "[crust] 0%",
         "[crust] 100%",
         "[climate] 0%",
-        "[climate] 35%",
-        "[climate] 41%",
-        "[climate] 88%",
+        "[climate] 16%",
+        "[climate] 94%",
         "[climate] 100%",
         "[erosion] 0%",
         "[erosion] 100%",

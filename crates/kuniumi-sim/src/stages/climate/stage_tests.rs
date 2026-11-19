@@ -1,8 +1,8 @@
-//! Tests of the Climate stage (ticket M4-07):
+//! Tests of the Climate stage (tickets M4-07 and M4-17):
 //!
 //! - `the_field_names_are_the_ticket_s`;
 //! - `the_stage_composes_the_models`: every field bit for bit against the
-//!   models of tickets M4-02 to M4-06 composed by hand, the annual means
+//!   models of tickets M4-02 to M4-06 and M4-17 composed by hand, the annual means
 //!   recomputed from the months, the names, units, kinds and order;
 //! - `the_climate_is_earth_like`: finite, positive temperatures,
 //!   non-negative precipitation, still water on land, Earth's global means
@@ -18,7 +18,7 @@
 //! The stage runs once per test process on the Earth-parameter world of
 //! seed 1 on 10,000 cells through the Crust stage ([`earth_10k`]), in debug
 //! and release builds alike; the composition by hand reuses the runs of
-//! [`earth_10k`] and [`earth_sea_10k`] that the models' own tests share.
+//! [`earth_10k`] and [`earth_coupled_10k`] that the models' own tests share.
 #![allow(clippy::disallowed_methods)]
 
 use core::f64::consts::PI;
@@ -28,10 +28,8 @@ use kuniumi_math::rng::fnv1a64;
 use kuniumi_math::units::SECONDS_PER_YEAR;
 use kuniumi_world::{FieldKind, PlanetParams, Settings, World};
 
-use super::circulation::monthly_circulation;
 use super::moisture::monthly_moisture;
-use super::ocean::ocean_currents;
-use super::test_worlds::{earth_10k, earth_sea_10k};
+use super::test_worlds::{earth_10k, earth_coupled_10k};
 use super::*;
 
 /// The world of [`earth_10k`] after the Climate stage, and the stage's
@@ -121,22 +119,14 @@ fn the_stage_composes_the_models() {
         .collect();
     assert_eq!(added, expected);
 
-    // The models composed by hand, as the tests of M4-05 and M4-06 compose
-    // them: the energy balance's periodic state, its circulation and
-    // currents, the sea surface with them, the moisture of its winds over
-    // the sea surface's temperatures.
-    let run_10k = earth_10k();
-    let circulation = monthly_circulation(&params, grid, &run_10k.temperature);
-    let currents = ocean_currents(
-        &params,
-        grid,
-        heights,
-        z,
-        &circulation,
-        &run_10k.temperature,
-    );
-    let sea = &earth_sea_10k().temperature;
-    let moisture = monthly_moisture(&params, grid, heights, z, &circulation, sea);
+    // The models composed by hand, as the tests of the coupling compose
+    // them: the energy balance's periodic state, the coupled state of the
+    // sea surface, winds and currents from it, the moisture of its winds
+    // over its temperatures.
+    let coupled = earth_coupled_10k();
+    let (circulation, currents) = (&coupled.circulation, &coupled.currents);
+    let sea = &coupled.sea_surface.temperature;
+    let moisture = monthly_moisture(&params, grid, heights, z, circulation, sea);
 
     let n = grid.len();
     for k in 0..MONTHS {
@@ -210,9 +200,10 @@ fn the_climate_is_earth_like() {
             }
         }
     }
-    // Earth's global means: the calibration's 288 K (M4-05, 40,000 cells;
-    // 288.98 K on this 10,000-cell world, scratch tool of the ticket) and
-    // about 1 m/yr (M4-06: 0.93 m/yr on this world).
+    // Earth's global means: the calibration's 288 K (M4-05 and M4-17,
+    // 40,000 cells; the coupled state of this 10,000-cell world 289.02 K in
+    // the prototype of ticket M4-17, the chain of M4-07 288.98 K) and about
+    // 1 m/yr (M4-06; the prototype 0.958 m/yr on this world).
     let mean_k = area_mean(world, values(world, TEMPERATURE_ANNUAL), |_| true);
     let rain_m_yr =
         area_mean(world, values(world, PRECIPITATION_ANNUAL), |_| true) * SECONDS_PER_YEAR;
@@ -298,21 +289,24 @@ fn a_climate_that_settles_has_no_warnings() {
 
 /// The six messages of [`Climate::warnings`] for the flags that
 /// `warnings_name_each_model_that_did_not_settle` sets, written out by hand
-/// from the ticket (M4-16, "The Climate stage's warnings"), in their order.
+/// from the ticket (M4-16, "The Climate stage's warnings"; the energy
+/// balance's and the sea surface's as ticket M4-17 renamed them), in their
+/// order.
 const UNSETTLED_MESSAGES: [&str; 6] = [
     "the energy balance without currents did not reach its periodic state in 100 years: a \
      monthly-mean sea-level temperature changed by 11.500 K in the last year, whose \
-     temperatures are kept, with the winds and currents made from them; they may be those \
-     of a climate in transition (an ice front still advancing on a planet with little heat \
+     temperatures are kept as the start of the coupled sea surface; they may be those of a \
+     climate in transition (an ice front still advancing on a planet with little heat \
      transport, or a planet near an ice-albedo bifurcation)",
     "the currents of 2 of the 3 ocean basins did not reach the solver's tolerance (the \
      largest relative residual 3.200e-9): those currents, and the sea surface and moisture \
      made with them, may be inaccurate",
-    "the sea surface with currents and upwelling did not reach its periodic state in 100 \
-     years: a monthly-mean sea-level temperature changed by 7.405 K in the last year, whose \
-     temperatures are kept as the climate's, with the moisture made from them; they may be \
-     those of a climate in transition (an ice front still advancing on a planet with little \
-     heat transport, or a planet near an ice-albedo bifurcation)",
+    "the sea surface coupled with its winds and currents did not reach its periodic state in \
+     100 years: a monthly-mean sea-level temperature changed by 7.405 K in the last year, \
+     whose temperatures, winds and currents are kept as the climate's, with the moisture made \
+     from them; they may be those of a climate in transition (an ice front still advancing on \
+     a planet with little heat transport, a planet near an ice-albedo bifurcation, or winds, \
+     upwelling and currents that keep changing each other)",
     "the moisture did not reach its periodic state in 10 years: a monthly-mean column water \
      vapour changed by 2.006e-6 kg/m^2 in the last year, whose precipitation is kept as the \
      climate's; it may be that of an atmosphere still filling or drying",
@@ -418,11 +412,12 @@ fn golden_fingerprints_of_the_climate_stage() {
     // of out/M4-07 were viewed, and again by ticket M4-15 (the balance step
     // after each year: Earth's temperatures within the periodic tolerance
     // of their periodic state, world-breaking) after the other tests passed
-    // and the maps of out/M4-15 were viewed; `kuniumi generate` writes the
-    // same values (the CLI's golden test). The temperatures are those of the sea
-    // surface of `sea_surface::tests` and the precipitation that of
-    // `moisture::tests` on this world (the moisture's golden value is of
-    // the 40,000-cell world in release builds).
+    // and the maps of out/M4-15 were viewed, and by ticket M4-17 (the
+    // coupled state of the sea surface, winds and currents, world-breaking)
+    // after the other tests passed and the maps of out/M4-17 were viewed;
+    // `kuniumi generate` writes the same values (the CLI's golden test). The
+    // temperatures, winds and currents are those of the coupled state of
+    // `coupling::tests` on this world.
     let (world, _) = stage_world();
     let fingerprints: Vec<(&str, u64)> = GOLDEN_FINGERPRINTS
         .iter()
@@ -445,34 +440,34 @@ fn golden_fingerprints_of_the_climate_stage() {
 
 /// The fingerprints of `golden_fingerprints_of_the_climate_stage`.
 const GOLDEN_FINGERPRINTS: [(&str, u64); 30] = [
-    ("temperature_annual", 0xC59C_B8C0_2AA0_D239),
-    ("temperature_m01", 0x45B2_2CBF_57B9_4CF1),
-    ("temperature_m02", 0x9E59_E313_155E_2FAC),
-    ("temperature_m03", 0x71B1_6112_A62F_5FC1),
-    ("temperature_m04", 0x7E61_3042_75A1_BFC9),
-    ("temperature_m05", 0xE65E_1208_47FF_B36A),
-    ("temperature_m06", 0xA671_BC2E_A774_E238),
-    ("temperature_m07", 0xC664_CB12_670F_40FE),
-    ("temperature_m08", 0xCBB2_C620_D2CC_6353),
-    ("temperature_m09", 0x4FC0_74B6_F094_BBBD),
-    ("temperature_m10", 0x062D_A502_141A_8C1B),
-    ("temperature_m11", 0x463E_1382_4435_0D35),
-    ("temperature_m12", 0xC4A0_9D79_F89F_24F3),
-    ("precipitation_annual", 0x460E_3368_0004_267A),
-    ("precipitation_m01", 0x662A_BDDD_98D2_0A3E),
-    ("precipitation_m02", 0xA89B_38C1_90D0_4916),
-    ("precipitation_m03", 0xCCDE_5455_C709_5DEB),
-    ("precipitation_m04", 0xB862_8E7B_F712_AD1C),
-    ("precipitation_m05", 0x9FC3_9C4B_1C30_DCBB),
-    ("precipitation_m06", 0x88A8_0163_122F_3660),
-    ("precipitation_m07", 0xD40D_22F6_E0E2_5C51),
-    ("precipitation_m08", 0xC65B_1E3A_01C4_BD0C),
-    ("precipitation_m09", 0x6FB4_DB77_EE2E_62B0),
-    ("precipitation_m10", 0xD4EA_8609_23DB_A056),
-    ("precipitation_m11", 0x7673_2C6A_1E2B_9156),
-    ("precipitation_m12", 0x5538_219F_55A0_0315),
-    ("wind_east", 0xCC7E_7D2A_58C7_CC55),
-    ("wind_north", 0x1729_BF53_B825_70C7),
-    ("current_east", 0x7AA1_7F87_BE8E_6AAB),
-    ("current_north", 0x2CA6_FCC4_B1C6_44AF),
+    ("temperature_annual", 0xFCE5_4229_3078_64E1),
+    ("temperature_m01", 0x5764_2F7E_2DFD_2822),
+    ("temperature_m02", 0x977B_313C_9B61_2322),
+    ("temperature_m03", 0x91F1_91AD_A616_A764),
+    ("temperature_m04", 0xD7D5_291E_378C_B806),
+    ("temperature_m05", 0x80A9_89F2_5A01_8732),
+    ("temperature_m06", 0x928E_1EC9_B195_5CE1),
+    ("temperature_m07", 0x34FC_BC02_468E_EF73),
+    ("temperature_m08", 0x90E4_A724_09EA_0AB4),
+    ("temperature_m09", 0x642B_B71B_F430_D517),
+    ("temperature_m10", 0x1D21_4401_145B_5C06),
+    ("temperature_m11", 0xB50A_6C7B_86CD_EA9F),
+    ("temperature_m12", 0xB53A_AEAB_5CC0_9AD9),
+    ("precipitation_annual", 0x41BE_2B5F_145C_0DD7),
+    ("precipitation_m01", 0xC5BC_F6FD_88BC_96E6),
+    ("precipitation_m02", 0x7C70_4401_5C69_27B8),
+    ("precipitation_m03", 0xBAA8_59B3_FEFB_0001),
+    ("precipitation_m04", 0x917F_C744_7F4A_982F),
+    ("precipitation_m05", 0x38D4_89B3_F58B_1F68),
+    ("precipitation_m06", 0xC125_45C8_2D1F_F3A3),
+    ("precipitation_m07", 0x08CE_913F_1080_A695),
+    ("precipitation_m08", 0xA6BB_F6AE_1749_7540),
+    ("precipitation_m09", 0x93C6_592A_DB34_871E),
+    ("precipitation_m10", 0xF6A6_738A_AA92_B6C8),
+    ("precipitation_m11", 0x4B37_6B1C_107F_B7A0),
+    ("precipitation_m12", 0xC267_F1A6_7FBC_6879),
+    ("wind_east", 0xC815_B48D_1DE8_D918),
+    ("wind_north", 0x33D8_3043_BFF3_0DA5),
+    ("current_east", 0x9A8C_C7CD_7B6A_F058),
+    ("current_north", 0xF2C8_FDA9_3C97_6ECF),
 ];
