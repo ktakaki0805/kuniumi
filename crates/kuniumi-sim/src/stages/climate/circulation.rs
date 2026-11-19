@@ -64,17 +64,88 @@
 //!
 //! # The thermal equator
 //!
-//! The equatorial low follows the latitude `φ_T` of the warmest zonal mean
-//! of the month's sea-level temperature: the maximum of a fit by Legendre
-//! polynomials in `sin φ` to degree [`ZONAL_FIT_DEGREE`] ([`ZonalFit`]),
-//! within [`THERMAL_EQUATOR_CAP_RAD`] of the equator. The cap keeps at
-//! least 30° for the summer hemisphere's belts; Earth stays far inside it
-//! (about −4° to +3° on the 40,000-cell Earth of ticket M4-02), but a slow
-//! rotator, whose strong heat transport leaves the summer pole warmest,
-//! reaches it. The whole pattern moves with `φ_T`, less towards the poles:
-//! `ψ` maps `[φ_T, 90°]` linearly onto `[0, 90°]` and `[−90°, φ_T]` onto
-//! `[−90°, 0]`, so the poles stay put, and `B'(0) = 0` keeps the pressure
-//! smooth across `φ_T`.
+//! The equatorial low follows the thermal equator `φ_T`, the warm centre of
+//! the month's zonal-mean sea-level temperature (ticket M4-21). With `f` the
+//! fit of the temperatures by Legendre polynomials in `sin φ` to degree
+//! [`ZONAL_FIT_DEGREE`] ([`ZonalFit`]), evaluated at the 1,201 latitudes
+//! `φ_k = −60° + 0.1° k` within [`THERMAL_EQUATOR_CAP_RAD`] of the equator,
+//! and `f*` its largest value there ([`ZonalFit::warm_centre_rad`]):
+//!
+//! ```text
+//! φ_T = Σ_k c_k cos φ_k e_k φ_k / Σ_k c_k cos φ_k e_k,   e_k = max(0, f(φ_k) − f* + ΔT)
+//! ```
+//!
+//! with the trapezoidal weights `c_k` (½ at the two ends): the area-weighted
+//! mean latitude of the latitudes within `ΔT` = 2 K
+//! ([`THERMAL_EQUATOR_BAND_K`]) of the warmest, each weighted by how much
+//! warmer it is than `f* − ΔT`. GCM studies locate the ITCZ likewise by a
+//! weighted mean latitude rather than a maximum: the centroid of the
+//! zonal-mean precipitation (D. M. W. Frierson & Y.-T. Hwang 2012,
+//! "Extratropical influence on ITCZ shifts in slab ocean simulations of
+//! global warming", J. Climate 25, 720–733), or its mean weighted by the
+//! precipitation to the 10th power (O. Adam, T. Bischoff & T. Schneider
+//! 2016, "Seasonal and interannual variations of the energy flux equator
+//! and ITCZ. Part I", J. Climate 29, 3219–3230); here the weight is the
+//! warmth. The energy-flux equator (T. Bischoff & T. Schneider 2014,
+//! "Energetic constraints on the position of the intertropical convergence
+//! zone", J. Climate 27, 4937–4951) is no alternative here: the energy
+//! balance's transport is diffusive (ticket M4-02), so its flux vanishes
+//! where `∂f/∂φ = 0`, at the warmest latitude again.
+//!
+//! The warmest latitude itself ([`ZonalFit::maximum_rad`], the thermal
+//! equator of ticket M4-03) is a discontinuous function of the
+//! temperatures: where two latitudes are almost equally warm it jumps from
+//! one to the other, and the coupled loop ([`super::coupling`]) may then
+//! have no fixed point, the circulation of either making the other warmer
+//! (ticket M4-20). The warm centre is continuous: `f` is linear in the
+//! temperatures, `f*` and the positive part are 1-Lipschitz, so a change of
+//! the fit by at most `ε` changes each `e_k` by at most `2ε`, and the
+//! largest value's own `e_k = ΔT` keeps the denominator at least
+//! `½ cos 60° ΔT`. Where two separated warm regions trade places as the
+//! warmer, a continuous rule must cross the latitudes between them, so at a
+//! tie the thermal equator lies between them.
+//!
+//! `ΔT` is a choice of the model, not a cited parameterisation: about the
+//! offset of the threshold of deep convection over the tropical oceans
+//! below the warmest sea surface (convection sets in near 27.5 °C,
+//! N. E. Graham & T. P. Barnett 1987, "Sea surface temperature, surface
+//! wind divergence, and convection over tropical oceans", Science 238,
+//! 657–659, against 29–30 °C in the warm pool; the threshold moves with the
+//! tropical mean, N. C. Johnson & S.-P. Xie 2010, "Changes in the sea
+//! surface temperature threshold for tropical convection", Nature
+//! Geoscience 3, 842–845), and of the bands of 0.25 to 4 K the one that
+//! settled the most planets of the bounds tests without losing one (ticket
+//! M4-21).
+//!
+//! What it gives (ticket M4-21):
+//!
+//! - Earth: from the energy balance's temperatures, every month within
+//!   0.085° of the warmest latitude on the 40,000-cell Earth of ticket
+//!   M4-02 and within 0.61° on 10,000 cells (seed 1), about −4° to +3°; in
+//!   the coupled state within 0.8° of the warmest latitude of its own
+//!   temperatures on 40,000 cells (seeds 1, 2, 3) and 1.2° on 10,000 (seed
+//!   1), the seasonal range 7.6° instead of 8.5° (40,000 cells, seed 1).
+//! - One warm region: its thermal equator lies in it, within 2 K of the
+//!   warmest (the centre of an interval lies in it), a little poleward of a
+//!   peak in `sin φ` (12.37° for a parabola in `sin φ` peaking at 12.3°: the
+//!   band reaches further in latitude on its poleward side). A warm region
+//!   at the cap is cut by it and its centre lies inside: 56.45° for a fit
+//!   `300 + 20 sin φ` (K), warmest at the pole, and 51.39° for a parabola
+//!   peaking at 59°.
+//! - A fit within 2 K of its warmest over most of the cap (in some months of
+//!   every planet of the bounds tests with a 240-hour day and 10 bar, 33 of
+//!   the 135, at seed 3): a thermal equator near the middle of the cap, up
+//!   to 60° from the warmest latitude but within 0.8 K of its temperature.
+//! - Two separated warm regions within 2 K of each other: a thermal
+//!   equator between them, below the warmest by up to 9.3 K (corner 82 of
+//!   the bounds tests, 22.5° from the warmest latitude; 6.1 K for corner
+//!   88).
+//!
+//! The cap keeps at least 30° for the summer hemisphere's belts. The whole
+//! pattern moves with `φ_T`, less towards the poles: `ψ` maps `[φ_T, 90°]`
+//! linearly onto `[0, 90°]` and `[−90°, φ_T]` onto `[−90°, 0]`, so the poles
+//! stay put, and `B'(0) = 0` keeps the pressure smooth across `φ_T`. The
+//! warm centre costs one sine and one cosine per latitude and month.
 //!
 //! # Thermal lows and highs
 //!
@@ -210,6 +281,10 @@
 //!   sea-level pressure.
 //! - The belts keep their strength through the year; only their position
 //!   (the thermal equator) and the thermal anomalies change.
+//! - One equatorial low: where two separated regions are within 2 K of the
+//!   warmest, the thermal equator is a compromise between them, where
+//!   neither is, rather than two zones of convergence (a double ITCZ;
+//!   above, "The thermal equator").
 //! - The smoothing's length is a choice (above, "The smoothing"), and the
 //!   filter is isotropic, whereas the air carries the surface's
 //!   temperature downwind.
@@ -249,6 +324,11 @@ pub const THERMAL_EQUATOR_CAP_RAD: f64 = FRAC_PI_3;
 /// The step of the search for the thermal equator: 0.1°, refined by a
 /// parabola ([`ZonalFit::maximum_rad`]).
 pub const THERMAL_EQUATOR_STEP_RAD: f64 = PI / 1800.0;
+
+/// `ΔT`, the band below the warmest zonal-mean temperature whose
+/// latitudes make the thermal equator ([`ZonalFit::warm_centre_rad`];
+/// module documentation, "The thermal equator"): 2 K.
+pub const THERMAL_EQUATOR_BAND_K: f64 = 2.0;
 
 /// The degree of the Legendre fit of the zonal-mean temperature: 8.
 pub const ZONAL_FIT_DEGREE: usize = 8;
@@ -682,13 +762,8 @@ impl ZonalFit {
             cap_rad > 0.0 && cap_rad.is_finite(),
             "maximum_rad needs a finite positive cap, got {cap_rad}"
         );
-        let steps = (2.0 * cap_rad / THERMAL_EQUATOR_STEP_RAD).ceil();
-        // 1,200 for the cap of 60°; at most 1,800 for a cap of π/2.
-        let steps = (steps as usize).max(2);
-        let latitude = |k: usize| -cap_rad + 2.0 * cap_rad * (k as f64 / steps as f64);
-        let values: Vec<f64> = (0..=steps)
-            .map(|k| self.at(det::sin(latitude(k))))
-            .collect();
+        let (steps, values) = self.search(cap_rad);
+        let latitude = |k: usize| search_latitude_rad(cap_rad, steps, k);
         let mut best = 0;
         for (k, &v) in values.iter().enumerate() {
             if v > values[best] {
@@ -708,6 +783,81 @@ impl ZonalFit {
             latitude(best)
         }
     }
+
+    /// The warm centre (rad) of the fit within `|φ| ≤ cap_rad`: the
+    /// area-weighted mean latitude of the latitudes whose fit is within
+    /// `band_k` (`ΔT`, K) of the warmest, each weighted by how much warmer
+    /// it is than `f* − ΔT` (module documentation, "The thermal equator"),
+    ///
+    /// ```text
+    /// φ_c = Σ_k c_k cos φ_k e_k φ_k / Σ_k c_k cos φ_k e_k,
+    /// e_k = max(0, f(φ_k) − f* + ΔT),   f* = max_k f(φ_k),
+    /// ```
+    ///
+    /// over the steps `φ_k` of [`maximum_rad`](Self::maximum_rad), with the
+    /// trapezoidal weights `c_k` (½ at the two ends, 1 otherwise), summed
+    /// from the south; a continuous function of the fit. The steps of the
+    /// largest value have `e_k = ΔT`, so the denominator is positive. It is
+    /// a convex combination of the `φ_k`, kept within the cap against the
+    /// rounding of the division. Where the fit is exactly flat (a uniform
+    /// field) every step weighs by its area alone and the centre is the
+    /// equator, up to rounding.
+    ///
+    /// # Panics
+    ///
+    /// If `cap_rad` is not in (0, π/2] (beyond the poles `cos φ` would
+    /// weigh latitudes negatively), or `band_k` is not finite and positive.
+    pub fn warm_centre_rad(&self, cap_rad: f64, band_k: f64) -> f64 {
+        // Written so that NaN fails.
+        assert!(
+            cap_rad > 0.0 && cap_rad <= FRAC_PI_2,
+            "warm_centre_rad needs a cap in (0, π/2], got {cap_rad}"
+        );
+        assert!(
+            band_k > 0.0 && band_k.is_finite(),
+            "warm_centre_rad needs a finite positive band, got {band_k}"
+        );
+        let (steps, values) = self.search(cap_rad);
+        let mut warmest = values[0];
+        for &v in &values[1..] {
+            if v > warmest {
+                warmest = v;
+            }
+        }
+        let (mut weighted, mut total) = (0.0, 0.0);
+        for (k, &v) in values.iter().enumerate() {
+            let excess = v - warmest + band_k;
+            if excess > 0.0 {
+                let phi = search_latitude_rad(cap_rad, steps, k);
+                let end = if k == 0 || k == steps { 0.5 } else { 1.0 };
+                let weight = excess * det::cos(phi) * end;
+                weighted += weight * phi;
+                total += weight;
+            }
+        }
+        (weighted / total).clamp(-cap_rad, cap_rad)
+    }
+
+    /// The steps of the search within `|φ| ≤ cap_rad`
+    /// ([`maximum_rad`](Self::maximum_rad),
+    /// [`warm_centre_rad`](Self::warm_centre_rad)): their number
+    /// `N = ⌈2 cap / `[`THERMAL_EQUATOR_STEP_RAD`]`⌉` (at least 2) and the
+    /// fit at each latitude [`search_latitude_rad`], `k = 0 … N`.
+    fn search(&self, cap_rad: f64) -> (usize, Vec<f64>) {
+        let steps = (2.0 * cap_rad / THERMAL_EQUATOR_STEP_RAD).ceil();
+        // 1,200 for the cap of 60°; at most 1,800 for a cap of π/2.
+        let steps = (steps as usize).max(2);
+        let values = (0..=steps)
+            .map(|k| self.at(det::sin(search_latitude_rad(cap_rad, steps, k))))
+            .collect();
+        (steps, values)
+    }
+}
+
+/// The latitude (rad) of step `k` of `steps` of the search for the thermal
+/// equator within `|φ| ≤ cap_rad`: `φ_k = −cap + 2 cap (k / N)`.
+fn search_latitude_rad(cap_rad: f64, steps: usize, k: usize) -> f64 {
+    -cap_rad + 2.0 * cap_rad * (k as f64 / steps as f64)
 }
 
 /// The surface wind (m/s, east and north) of the balance of the module
@@ -905,7 +1055,8 @@ impl CirculationModel {
         let p = &self.params;
         let fit =
             ZonalFit::from_cells(&self.areas_sr, &self.sin_lat, sea_level_k, ZONAL_FIT_DEGREE);
-        let thermal_equator_rad = fit.maximum_rad(THERMAL_EQUATOR_CAP_RAD);
+        let thermal_equator_rad =
+            fit.warm_centre_rad(THERMAL_EQUATOR_CAP_RAD, THERMAL_EQUATOR_BAND_K);
         // The slopes of ψ on either side of the thermal equator.
         let (north_slope, south_slope) = (
             FRAC_PI_2 / (FRAC_PI_2 - thermal_equator_rad),

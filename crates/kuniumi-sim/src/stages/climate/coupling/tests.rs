@@ -244,12 +244,15 @@ fn earth_is_calibrated_with_its_coupled_climate() {
     // of 288.0 ± 0.3 K, a `P₂` coefficient of −28.0 ± 0.5 K, every 10° band
     // within 5 K of North & Coakley's fit) and of ticket M4-06 (a global
     // precipitation of 1.0 ± 0.1 m/yr and 25 ± 3 kg/m² of precipitable
-    // water), with their parameters unchanged (measured: 288.016 K,
-    // −27.939 K, the worst band 4.68 K, 1.090 m/yr, 24.9 kg/m²). Debug
-    // builds, the 10,000-cell world (another world, as M4-05's and M4-06's
-    // tests): within 2 K and 0.5 K of the energy balance alone, 0.8–1.1 m/yr
-    // and 20–28 kg/m² (measured: 289.02 K and −24.54 K against 288.70 K and
-    // −25.80 K, 0.958 m/yr, 23.9 kg/m²).
+    // water), with their parameters unchanged (measured: 288.011 K,
+    // −27.954 K, the worst band 4.66 K, 1.090 m/yr, 24.9 kg/m²; with the
+    // thermal equator of ticket M4-03, before ticket M4-21: 288.016 K,
+    // −27.939 K, 4.68 K, 1.090 m/yr). Debug builds, the 10,000-cell world
+    // (another world, as M4-05's and M4-06's tests): within 2 K and 0.5 K of
+    // the energy balance alone, 0.8–1.1 m/yr and 20–28 kg/m² (measured:
+    // 289.03 K and −24.51 K against 288.70 K and −25.80 K, 0.963 m/yr,
+    // 24.0 kg/m²; before ticket M4-21 289.02 K, −24.54 K, 0.958 m/yr,
+    // 23.9 kg/m²).
     let run = earth_reference();
     let coupled = earth_coupled_reference();
     let params = PlanetParams::earth();
@@ -422,14 +425,17 @@ fn golden_fingerprint_of_a_relaxed_loop() {
     // Ticket M4-20. Every other golden value is Earth's, whose loop is
     // never relaxed: this one covers the relaxed loop. Corner 72 on the
     // 1,000 cells of the bounds tests (seed 3), relaxed from year 5 and
-    // settled in 34 years: FNV-1a over the bits of the twelve monthly
-    // sea-level and surface temperatures, the twelve monthly winds towards
-    // the east and the north, the transports of the currents and the
-    // twelve monthly upwellings (f64, little-endian, cells and CSR entries
-    // in index order). A change means that the same planet has a different
-    // climate: a world-breaking change, stated in the commit's
-    // `World-breaking:` line. Recorded after the other tests passed and
-    // the maps of out/M4-20 were viewed (ticket M4-20, Result).
+    // settled in 35 years (34 before ticket M4-21): FNV-1a over the bits
+    // of the twelve monthly sea-level and surface temperatures, the twelve
+    // monthly winds towards the east and the north, the transports of the
+    // currents and the twelve monthly upwellings (f64, little-endian, cells
+    // and CSR entries in index order). A change means that the same planet
+    // has a different climate: a world-breaking change, stated in the
+    // commit's `World-breaking:` line. Recorded after the other tests
+    // passed and the maps of out/M4-20 were viewed (ticket M4-20, Result),
+    // and again when the thermal equator became the warm centre (ticket
+    // M4-21, after the other tests passed and the maps of out/M4-21 were
+    // viewed).
     let c = &corner_72_run().coupled;
     let t = &c.sea_surface.temperature;
     let bytes: Vec<u8> = t
@@ -448,20 +454,21 @@ fn golden_fingerprint_of_a_relaxed_loop() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_a_relaxed_loop`.
-const RELAXED_GOLDEN_FINGERPRINT: u64 = 0xC793_26CF_E725_5548;
+const RELAXED_GOLDEN_FINGERPRINT: u64 = 0xB1B8_3871_864B_8328;
 
 #[test]
 fn an_oscillating_loop_settles_relaxed() {
     // Ticket M4-20. Corner 72 on the 1,000 cells of the bounds tests (seed
     // 3): without the relaxation the loop swings between two years for
     // its 100 years (the residual 57.5 K at a coastal cell 0.7° from the
-    // equator in both of its last years, the ticket's prototype); relaxed
-    // once it oscillates (from year 5) it settles (measured 34 years, as
-    // in the prototype), to a fixed point of the same loop: the loop run
-    // on to 10⁻⁵ K (48 years) stays within 10⁻³ K of it (measured
-    // 2.4 × 10⁻⁴ K), and the winds of the returned temperatures are near
-    // the returned winds, which are those of the drive within the
-    // tolerance of the returned temperatures.
+    // equator in both of its last years, the prototype of ticket M4-20; a
+    // last change of 59.7 K with the thermal equator of ticket M4-21);
+    // relaxed once it oscillates (from year 5) it settles (measured 35
+    // years, 34 before ticket M4-21, as in the prototypes), to a fixed
+    // point of the same loop: the loop run on to 10⁻⁵ K (49 years) stays
+    // within 10⁻³ K of it (measured 2.9 × 10⁻⁴ K), and the winds of the
+    // returned temperatures are near the returned winds, which are those of
+    // the drive within the tolerance of the returned temperatures.
     let run = corner_72_run();
     let (params, grid) = (&run.params, &run.world.grid);
     let h = &run.world.field(SURFACE_HEIGHT).expect("heights").values;
@@ -474,16 +481,18 @@ fn an_oscillating_loop_settles_relaxed() {
     );
     assert!(t.converged);
     assert!(t.change_k <= PERIODIC_TOLERANCE_K);
-    // The trigger fires at the end of year 4 (the residual grows from 38.6
-    // to 51.5 K and has reversed), so year 5 is the first relaxed one; the
+    // The trigger fires at the end of year 4 (the residual grows from 39.0
+    // to 50.5 K and has reversed), so year 5 is the first relaxed one; the
     // years and the first relaxed year are exact, as the loop is
     // deterministic (the prototype gave the same).
     assert_eq!(coupled.relaxed_from_year, Some(5));
-    assert_eq!(t.years, 34);
+    assert_eq!(t.years, 35);
     // The last change reported is the larger of the year's change from the
-    // year before (8.7 × 10⁻⁵ K) and its residual from the drive: the
-    // residual, exactly (review of ticket M4-20).
-    assert_eq!(t.change_k.to_bits(), 8.507919344822312e-4_f64.to_bits());
+    // year before (the change of year 35 from year 34, 1.2 × 10⁻⁴ K, from a
+    // scratch run of the loop stopped after 34 years) and its residual from
+    // the drive: the residual, exactly (review of ticket M4-20; recorded
+    // again in ticket M4-21).
+    assert_eq!(t.change_k.to_bits(), 8.088448848582175e-4_f64.to_bits());
     for month in t.sea_level_k.iter().chain(&t.surface_k) {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
     }
@@ -527,8 +536,8 @@ fn an_oscillating_loop_settles_relaxed() {
 
 /// The bound of `an_oscillating_loop_settles_relaxed` on the winds of the
 /// returned temperatures (m/s): that of Earth's state in
-/// `the_coupled_state_is_within_the_tolerance_of_its_fixed_point`, 20 times
-/// the measured 9.5 × 10⁻⁵ m/s.
+/// `the_coupled_state_is_within_the_tolerance_of_its_fixed_point`, 14 times
+/// the measured 1.4 × 10⁻⁴ m/s (9.5 × 10⁻⁵ m/s before ticket M4-21).
 const WINDS_BOUND_M_S: f64 = 2e-3;
 
 #[test]

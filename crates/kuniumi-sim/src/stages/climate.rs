@@ -84,12 +84,13 @@
 //! changing, and the stage reports it as a warning of the world (below,
 //! "Warnings"). Of the 128 corners of the v1 range on 1,000 cells (seed 3),
 //! every energy balance is periodic within 10 years since the balance step
-//! of ticket M4-15, the coupled sea surface of 8 is not after its 100
-//! years (10-bar atmospheres whose thermal equator jumps between two
-//! latitudes from one year to the next; tickets M4-17, M4-20,
-//! [`coupling`]), and 12 moistures are not after their 10 (tickets M4-07,
-//! M4-16, M4-17). The temperatures have no fixed bound at the
-//! corners (monthly means from about 95 K to about 11,600 K, ticket M4-02).
+//! of ticket M4-15, every coupled sea surface within its 100 years since
+//! the thermal equator is continuous (tickets M4-17, M4-20, M4-21,
+//! [`coupling`]; of the 6 planets at the bounds of the orbit, Earth at
+//! e = 0.99 is not), and 16 moistures are not after their 10 (planets
+//! without water; tickets M4-07, M4-16, M4-17, M4-21). The temperatures
+//! have no fixed bound at the corners (monthly means from about 95 K to
+//! about 11,600 K, ticket M4-02).
 //!
 //! The climate is that of the relief of the Crust stage: the Erosion stage
 //! that follows changes the land but not the climate (the alternation of

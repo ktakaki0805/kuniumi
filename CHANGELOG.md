@@ -610,6 +610,10 @@ section: every change after which an existing seed produces a different world
 - `coupling::RELAXATION` (1/3) and `Coupled::relaxed_from_year`, the
   first year of the coupled loop driven by relaxed temperatures, none
   where the loop never oscillated, as on Earth (M4-20).
+- `ZonalFit::warm_centre_rad` and `circulation::THERMAL_EQUATOR_BAND_K`
+  (2 K), the thermal equator as the warm centre of a month's zonal-mean
+  temperature, and `tools/thermal_equator_reference.py`, its mpmath
+  reference values (M4-21).
 
 ### Changed
 
@@ -957,6 +961,26 @@ section: every change after which an existing seed produces a different world
   atmospheres whose thermal equator jumps between two latitudes from one
   year to the next; follow-up M4-21), nor do two of the planets at the
   bounds of the orbit instead of three.
+- The thermal equator of the circulation is the warm centre of the
+  month's zonal-mean sea-level temperature instead of its warmest latitude
+  (`circulation`, "The thermal equator"; M4-21): the mean latitude of the
+  latitudes within 2 K of the warmest within ±60°, weighted by their area
+  and by how much warmer they are than the warmest less 2 K. It is a
+  continuous function of the temperatures, so the coupled loop settles on
+  the planets where two latitudes are almost equally warm: of the planets
+  of the bounds tests (1,000 cells, seed 3) 134 of 135 settle instead of
+  125, none fewer, all but Earth at e = 0.99 (`UNSETTLED_SEA_SURFACE`
+  empty, `UNSETTLED_ORBITS` [3]); 133 instead of 122 at 10,000 cells.
+  Earth's thermal equator stays within 0.085° of its warmest latitude on
+  the energy balance's temperatures of the 40,000-cell world (0.61° on
+  10,000 cells), its loop settles unrelaxed in the same years and the
+  calibration of M4-05 and M4-06 holds (288.01 K, `P₂` −27.95 K,
+  1.09 m/yr). Where two separated regions are within 2 K of the warmest,
+  the thermal equator lies between them; where the fit is within 2 K over
+  most of the cap (the 240-hour days with 10 bar), near the middle of the
+  cap. The moisture of 4 more dry corners of the bounds tests (77, 79, 93
+  and 95) is not periodic after its 10 years, of 16 in all (follow-up
+  M4-22).
 
 ### Removed
 
@@ -1058,6 +1082,18 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-21: every world's climate changes: the thermal equator of every
+  month, and with it the pressure, the winds, the currents, the sea
+  surface, the moisture and the precipitation (Earth, seed 1, 40,000
+  cells: the coupled state's thermal equators by up to 0.47°, its monthly
+  winds by up to 0.41 m/s, RMS 0.09 m/s, its pressure by up to 24 Pa).
+  The golden values of the circulation (with and without the smoothing),
+  the currents, the sea surface and the moisture (of the winds of the
+  energy balance), of the relaxed loop, of the Climate stage and of the
+  CLI's world's 30 climate fields are recorded again. The other fields,
+  the sea level, the energy balance's and the erosion's (on the uniform
+  precipitation) are unchanged.
 
 - M4-20: the climate of a planet whose coupled loop oscillates changes:
   its 30 fields of the Climate stage are those of the relaxed loop (in the

@@ -414,8 +414,11 @@ fn golden_fingerprints_of_the_climate_stage() {
     // of their periodic state, world-breaking) after the other tests passed
     // and the maps of out/M4-15 were viewed, and by ticket M4-17 (the
     // coupled state of the sea surface, winds and currents, world-breaking)
-    // after the other tests passed and the maps of out/M4-17 were viewed;
-    // `kuniumi generate` writes the same values (the CLI's golden test). The
+    // after the other tests passed and the maps of out/M4-17 were viewed,
+    // and by ticket M4-21 (the thermal equator as the warm centre,
+    // world-breaking) after the other tests passed and the maps of
+    // out/M4-21 were viewed; `kuniumi generate` writes the same values (the
+    // CLI's golden test). The
     // temperatures, winds and currents are those of the coupled state of
     // `coupling::tests` on this world.
     let (world, _) = stage_world();
@@ -440,34 +443,34 @@ fn golden_fingerprints_of_the_climate_stage() {
 
 /// The fingerprints of `golden_fingerprints_of_the_climate_stage`.
 const GOLDEN_FINGERPRINTS: [(&str, u64); 30] = [
-    ("temperature_annual", 0xFCE5_4229_3078_64E1),
-    ("temperature_m01", 0x5764_2F7E_2DFD_2822),
-    ("temperature_m02", 0x977B_313C_9B61_2322),
-    ("temperature_m03", 0x91F1_91AD_A616_A764),
-    ("temperature_m04", 0xD7D5_291E_378C_B806),
-    ("temperature_m05", 0x80A9_89F2_5A01_8732),
-    ("temperature_m06", 0x928E_1EC9_B195_5CE1),
-    ("temperature_m07", 0x34FC_BC02_468E_EF73),
-    ("temperature_m08", 0x90E4_A724_09EA_0AB4),
-    ("temperature_m09", 0x642B_B71B_F430_D517),
-    ("temperature_m10", 0x1D21_4401_145B_5C06),
-    ("temperature_m11", 0xB50A_6C7B_86CD_EA9F),
-    ("temperature_m12", 0xB53A_AEAB_5CC0_9AD9),
-    ("precipitation_annual", 0x41BE_2B5F_145C_0DD7),
-    ("precipitation_m01", 0xC5BC_F6FD_88BC_96E6),
-    ("precipitation_m02", 0x7C70_4401_5C69_27B8),
-    ("precipitation_m03", 0xBAA8_59B3_FEFB_0001),
-    ("precipitation_m04", 0x917F_C744_7F4A_982F),
-    ("precipitation_m05", 0x38D4_89B3_F58B_1F68),
-    ("precipitation_m06", 0xC125_45C8_2D1F_F3A3),
-    ("precipitation_m07", 0x08CE_913F_1080_A695),
-    ("precipitation_m08", 0xA6BB_F6AE_1749_7540),
-    ("precipitation_m09", 0x93C6_592A_DB34_871E),
-    ("precipitation_m10", 0xF6A6_738A_AA92_B6C8),
-    ("precipitation_m11", 0x4B37_6B1C_107F_B7A0),
-    ("precipitation_m12", 0xC267_F1A6_7FBC_6879),
-    ("wind_east", 0xC815_B48D_1DE8_D918),
-    ("wind_north", 0x33D8_3043_BFF3_0DA5),
-    ("current_east", 0x9A8C_C7CD_7B6A_F058),
-    ("current_north", 0xF2C8_FDA9_3C97_6ECF),
+    ("temperature_annual", 0x3ACD_A5C3_95B6_C08C),
+    ("temperature_m01", 0xC684_8B77_8686_D3D1),
+    ("temperature_m02", 0x5011_2A68_C995_A8C0),
+    ("temperature_m03", 0xE90E_1BEB_D47D_E905),
+    ("temperature_m04", 0x7B77_1A61_AF20_77A0),
+    ("temperature_m05", 0x1A83_6C45_C33F_4E36),
+    ("temperature_m06", 0x5D3B_C0CF_5EB3_CC57),
+    ("temperature_m07", 0x3D9C_DA20_2668_FAA9),
+    ("temperature_m08", 0x9D57_00E6_28BA_5B3F),
+    ("temperature_m09", 0x48F7_7C06_A744_E8FD),
+    ("temperature_m10", 0xD030_348B_9AEB_0714),
+    ("temperature_m11", 0x9207_725E_972C_E2F7),
+    ("temperature_m12", 0xE696_C648_DD62_0D32),
+    ("precipitation_annual", 0x895F_6C7B_BAC3_E0AF),
+    ("precipitation_m01", 0x21CE_6412_480F_1D57),
+    ("precipitation_m02", 0xAD39_2739_03B9_06DF),
+    ("precipitation_m03", 0xDE9C_6CC3_59A2_68D7),
+    ("precipitation_m04", 0x29B3_D973_1FCF_3A4D),
+    ("precipitation_m05", 0xC545_2311_D7FC_A882),
+    ("precipitation_m06", 0xF0D9_6BAA_63CC_89CF),
+    ("precipitation_m07", 0x7678_3EF3_1337_905D),
+    ("precipitation_m08", 0x96E5_C3E3_F6BE_C0B9),
+    ("precipitation_m09", 0x8E59_F9C6_0425_C67B),
+    ("precipitation_m10", 0x1B46_F597_E157_1FBA),
+    ("precipitation_m11", 0x7227_FBF4_4381_7881),
+    ("precipitation_m12", 0x4D00_9234_8A3A_5450),
+    ("wind_east", 0x5060_45AE_46C1_7D6A),
+    ("wind_north", 0x009E_A5BE_41E9_293F),
+    ("current_east", 0x5577_F010_EADB_E86E),
+    ("current_north", 0x02BC_EF26_3A93_DEC8),
 ];

@@ -1238,7 +1238,9 @@ fn golden_fingerprint_of_earth_sea_surface() {
     // instead of 9, every monthly mean within 3.6 × 10⁻⁴ K of the old one);
     // and when the circulation's thermal anomaly was smoothed over 1,000 km,
     // after the other tests passed and the images of out/M4-17 were viewed
-    // (ticket M4-17).
+    // (ticket M4-17); and when the thermal equator became the warm centre,
+    // after the other tests passed and the maps of out/M4-21 were viewed
+    // (ticket M4-21).
     let run = earth_10k();
     let sea = earth_sea_10k();
     let t = &sea.temperature;
@@ -1280,4 +1282,4 @@ fn golden_fingerprint_of_earth_sea_surface() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
-const GOLDEN_FINGERPRINT: u64 = 0x7E3A_35AA_94C7_8CEA;
+const GOLDEN_FINGERPRINT: u64 = 0xAB61_A6F9_838F_1609;

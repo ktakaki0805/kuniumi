@@ -1453,7 +1453,9 @@ fn golden_fingerprint_of_earth_moisture() {
     // when the temperatures' periodic states came from the balance step
     // (ticket M4-15); and when the circulation's thermal anomaly was
     // smoothed over 1,000 km (ticket M4-17, after the other tests passed and
-    // the images of out/M4-17 were viewed).
+    // the images of out/M4-17 were viewed); and when the thermal equator
+    // became the warm centre (ticket M4-21, after the other tests passed and
+    // the maps of out/M4-21 were viewed).
     let run = earth_10k();
     let earth = earth_moisture_10k();
     let m = &earth.moisture;
@@ -1481,4 +1483,4 @@ fn golden_fingerprint_of_earth_moisture() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
-const GOLDEN_FINGERPRINT: u64 = 0xD652_EFF1_5F5E_3400;
+const GOLDEN_FINGERPRINT: u64 = 0xC171_0A87_B57D_2B3D;

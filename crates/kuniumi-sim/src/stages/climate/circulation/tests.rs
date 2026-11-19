@@ -16,6 +16,14 @@
 //!   (the gradient's convergence is tested in `operators::tests`);
 //! - criterion 4: `golden_fingerprint_of_earth_circulation`.
 //!
+//! The thermal equator as the warm centre (ticket M4-21), with reference
+//! values from `tools/thermal_equator_reference.py`:
+//! `the_thermal_equator_is_continuous_between_two_competing_maxima`,
+//! `the_thermal_equator_is_the_centre_of_the_warm_latitudes`,
+//! `earth_s_thermal_equator_is_near_its_warmest_latitude`,
+//! `warm_centre_needs_a_positive_band` and
+//! `warm_centre_needs_a_cap_within_the_poles`.
+//!
 //! The Earth tests use the energy balance's shared Earth runs
 //! ([`crate::stages::climate::test_worlds`]): 40,000 cells in release
 //! builds, 10,000 in debug builds, with the same thresholds.
@@ -479,6 +487,191 @@ fn the_thermal_equator_is_the_warmest_latitude() {
 }
 
 // ---------------------------------------------------------------------------
+// The thermal equator as the warm centre (ticket M4-21).
+//
+// Reference values from `tools/thermal_equator_reference.py`: the centre of
+// the continuous profile, `∫ asin(z) e(z) dz / ∫ e(z) dz` over the band's
+// intervals in `z = sin φ` (with `cos φ dφ = dz`), its largest value and
+// the band's ends as roots of polynomials, by mpmath at 50 digits;
+// independent of the code's sum over latitudes 0.1° apart of a fit of the
+// cells' temperatures.
+
+/// The warm centre (rad) of the fit of `t` (K, one per cell of `grid`),
+/// as [`CirculationModel::month`] takes it, and the fit.
+fn warm_centre_of(grid: &SphereGrid, t: &[f64]) -> (f64, ZonalFit) {
+    let fit = ZonalFit::new(grid, t, ZONAL_FIT_DEGREE);
+    let centre = fit.warm_centre_rad(THERMAL_EQUATOR_CAP_RAD, THERMAL_EQUATOR_BAND_K);
+    (centre, fit)
+}
+
+/// `T = 300 − 40 (z² − ¼)² + δ z` (K) on the cells of `grid`: two peaks
+/// near ±30°, 2.5 K above the valley at the equator, the northern warmer
+/// by about `δ` (K).
+fn two_peaks(grid: &SphereGrid, delta_k: f64) -> Vec<f64> {
+    grid.positions()
+        .iter()
+        .map(|p| {
+            let q = p.z * p.z - 0.25;
+            300.0 - 40.0 * q * q + delta_k * p.z
+        })
+        .collect()
+}
+
+#[test]
+fn the_thermal_equator_is_continuous_between_two_competing_maxima() {
+    // Criterion 1 of ticket M4-21. As `δ` goes from −4 to +4 K in steps of
+    // 0.02 K the warmest latitude jumps from the southern peak to the
+    // northern one at `δ` = 0, by about 60°; the warm centre moves through
+    // the latitudes between them. The script: the centre rises
+    // monotonically, by at most 0.376° in a step (near `δ` = ±1.4 K), is 0
+    // at `δ` = 0 and 5.813°, 13.411°, 29.883°, 30.354° and 31.639° at
+    // `δ` = 0.5, 1, 2, 2.5 and 4 K (antisymmetric in `δ`; at 2.5 K the
+    // southern peak has left the band).
+    let grid = grid_10k();
+    // By `k` of `δ = k / 50` K.
+    let reference = [
+        (25, 5.813_143_372_91),
+        (50, 13.410_910_765_6),
+        (100, 29.882_742_277_3),
+        (125, 30.354_399_157_2),
+        (200, 31.639_089_420_7),
+    ];
+    let mut previous: Option<(f64, f64)> = None;
+    let (mut largest_rise, mut largest_jump, mut jump_at) = (0.0_f64, 0.0_f64, 0.0);
+    for k in -200_i32..=200 {
+        let delta = f64::from(k) / 50.0;
+        let (centre, fit) = warm_centre_of(grid, &two_peaks(grid, delta));
+        let (centre, warmest) = (centre / DEG, fit.maximum_rad(THERMAL_EQUATOR_CAP_RAD) / DEG);
+        if let Some((last_centre, last_warmest)) = previous {
+            let rise = centre - last_centre;
+            assert!(
+                (0.0..=0.5).contains(&rise),
+                "δ {delta} K: the centre moved from {last_centre}° to {centre}°"
+            );
+            largest_rise = largest_rise.max(rise);
+            if (warmest - last_warmest).abs() > largest_jump {
+                largest_jump = (warmest - last_warmest).abs();
+                jump_at = delta;
+            }
+        }
+        previous = Some((centre, warmest));
+        if k == 0 {
+            println!("δ 0 K: centre {centre}°, warmest {warmest}°");
+            assert_near(centre, 0.0, 0.05, "the centre at δ = 0");
+        }
+        for (at, expected) in reference {
+            if k.abs() == at {
+                let expected = if k < 0 { -expected } else { expected };
+                println!("δ {delta} K: centre {centre}° (script {expected}°)");
+                assert_near(centre, expected, 0.05, "the centre");
+            }
+        }
+    }
+    println!(
+        "largest rise of the centre {largest_rise}° a step; the warmest latitude jumps by \
+         {largest_jump}° up to δ {jump_at} K"
+    );
+    assert!(largest_jump > 50.0);
+    assert!(jump_at.abs() <= 0.02 + 1e-12, "{jump_at}");
+}
+
+#[test]
+fn the_thermal_equator_is_the_centre_of_the_warm_latitudes() {
+    // Single peaks, `300 − c (z − sin φ₀)²`, and the fit warmest at the
+    // cap, `300 + 20 z`: the centre of the latitudes within 2 K of the
+    // warmest, weighted by their excess and their area, lies a little
+    // poleward of a peak in `z` (the band reaches further in latitude on
+    // the poleward side) and inside the cap where the warmest latitude is
+    // at or near it (the band beyond 60° is cut). The script's centres.
+    let grid = grid_10k();
+    let parabola = |c: f64, peak_deg: f64| -> Vec<f64> {
+        let s = (peak_deg * DEG).sin();
+        grid.positions()
+            .iter()
+            .map(|p| 300.0 - c * (p.z - s) * (p.z - s))
+            .collect()
+    };
+    let rising: Vec<f64> = grid
+        .positions()
+        .iter()
+        .map(|p| 300.0 + 20.0 * p.z)
+        .collect();
+    // Within 0.05° (the quadrature of the fit and the sum over steps of
+    // 0.1°; measured at most 0.0097°), and closer at the cap, where the
+    // trapezoidal half weights of the two ends matter: without them the
+    // centre would move by 0.024° (peak at 59°) and 0.031° (`300 + 20 z`;
+    // review of ticket M4-21), measured 0.0097° and 0.0019° off.
+    for (name, t, expected, tolerance) in [
+        ("40, 12.3°", parabola(40.0, 12.3), 12.366_654_874_3, 0.05),
+        ("40, −7°", parabola(40.0, -7.0), -7.036_317_733_49, 0.05),
+        ("40, 59°", parabola(40.0, 59.0), 51.389_450_287_6, 0.015),
+        ("30, 20°", parabola(30.0, 20.0), 20.162_349_703_3, 0.05),
+        ("30, 0°", parabola(30.0, 0.0), 0.0, 0.05),
+        ("300 + 20 z", rising, 56.452_182_747, 0.01),
+    ] {
+        let (centre, fit) = warm_centre_of(grid, &t);
+        let warmest = fit.maximum_rad(THERMAL_EQUATOR_CAP_RAD);
+        let below = fit.at(warmest.sin()) - fit.at(centre.sin());
+        println!(
+            "{name}: centre {}° (script {expected}°), warmest {}°, {below} K below it",
+            centre / DEG,
+            warmest / DEG
+        );
+        assert_near(centre / DEG, expected, tolerance, name);
+        assert!(centre.abs() <= THERMAL_EQUATOR_CAP_RAD);
+        // One warm region: its centre lies in it.
+        assert!(below <= THERMAL_EQUATOR_BAND_K, "{name}: {below} K");
+    }
+    // A uniform field: every latitude of the cap within the band, weighted
+    // by its area alone, centred on the equator.
+    let (centre, _) = warm_centre_of(grid, &vec![288.0; grid.len()]);
+    println!("uniform: {centre:e} rad");
+    assert!(centre.abs() <= 1e-12, "{centre}");
+}
+
+#[test]
+fn earth_s_thermal_equator_is_near_its_warmest_latitude() {
+    // Criterion 1 of ticket M4-21 on Earth: the circulation of the energy
+    // balance's periodic temperatures (the shared Earth run), whose fit has
+    // one warm region a month, takes a thermal equator within 1° of the
+    // warmest latitude of the same fit (the thermal equator of ticket
+    // M4-03). Measured by the ticket's prototype: within 0.085° on 40,000
+    // cells and 0.61° on 10,000 (seed 1).
+    let (run, circulation) = earth_reference_circulation();
+    let grid = &run.world.grid;
+    let mut largest = 0.0_f64;
+    for (k, &equator) in circulation.thermal_equator_rad.iter().enumerate() {
+        let (centre, fit) = warm_centre_of(grid, &run.temperature.sea_level_k[k]);
+        assert_same(equator, centre);
+        let warmest = fit.maximum_rad(THERMAL_EQUATOR_CAP_RAD);
+        println!(
+            "month {}: thermal equator {:.3}°, warmest latitude {:.3}°",
+            k + 1,
+            equator / DEG,
+            warmest / DEG
+        );
+        largest = largest.max((equator - warmest).abs() / DEG);
+    }
+    println!("largest difference {largest:.3}°");
+    assert!(largest <= 1.0, "{largest}°");
+}
+
+#[test]
+#[should_panic(expected = "finite positive band")]
+fn warm_centre_needs_a_positive_band() {
+    let grid = SphereGrid::octahedron();
+    ZonalFit::new(&grid, &[288.0; 6], 2).warm_centre_rad(THERMAL_EQUATOR_CAP_RAD, 0.0);
+}
+
+#[test]
+#[should_panic(expected = "a cap in (0, π/2]")]
+fn warm_centre_needs_a_cap_within_the_poles() {
+    // Beyond the poles `cos φ` would weigh latitudes negatively.
+    let grid = SphereGrid::octahedron();
+    ZonalFit::new(&grid, &[288.0; 6], 2).warm_centre_rad(2.0, THERMAL_EQUATOR_BAND_K);
+}
+
+// ---------------------------------------------------------------------------
 // The wind.
 
 #[test]
@@ -599,10 +792,11 @@ fn belt_winds_match_the_closed_form() {
     // `u = −f R_d T ∂(ln B)/∂y / (r² + f²)` and
     // `v = −r R_d T ∂(ln B)/∂y / (r² + f²)`, with
     // `∂(ln B)/∂y = (1/a) (dB/dψ)(dψ/dφ) / B`: the normalisation of the mean
-    // cancels. Three thermal equators: at the equator (`300 − 30 z²`), at
-    // 20° N (`300 − 30 (z − sin 20°)²`, dψ/dφ = 9/7 north and 9/11 south)
-    // and at the cap (`300 + 20 z`, warmest at the pole: 60°, dψ/dφ = 3
-    // north and 3/5 south).
+    // cancels. Three thermal equators, the warm centres of
+    // `tools/thermal_equator_reference.py` (ticket M4-21): at the equator
+    // (`300 − 30 z²`), at 20.162° N (`300 − 30 (z − sin 20°)²`, warmest at
+    // 20°) and at 56.452° N (`300 + 20 z`, warmest at the pole and so at the
+    // cap of 60°).
     let grid = grid_10k();
     let symmetric = symmetric_temperature(grid);
     let month = check_belt_winds(grid, &symmetric, 0.0);
@@ -612,14 +806,13 @@ fn belt_winds_match_the_closed_form() {
         .iter()
         .map(|p| 300.0 - 30.0 * (p.z - s) * (p.z - s))
         .collect();
-    check_belt_winds(grid, &shifted, 20.0);
+    check_belt_winds(grid, &shifted, 20.162_349_703_3);
     let rising: Vec<f64> = grid
         .positions()
         .iter()
         .map(|p| 300.0 + 20.0 * p.z)
         .collect();
-    let capped = check_belt_winds(grid, &rising, 60.0);
-    assert_same(capped.thermal_equator_rad, THERMAL_EQUATOR_CAP_RAD);
+    check_belt_winds(grid, &rising, 56.452_182_747);
     // Over the zonal isobars the wind crosses by atan(r/|f|), 20–30°
     // between 35° and 55° (away from the belts' extrema at 30° and 60°,
     // where the belts' gradient vanishes).
@@ -1150,9 +1343,10 @@ fn the_smoothing_keeps_the_mean_and_the_constants() {
 }
 
 #[test]
-fn a_zero_length_is_the_circulation_of_m4_03() {
+fn a_zero_length_skips_the_smoothing() {
     // With ℓ = 0 the model skips the smoothing: the circulation of ticket
-    // M4-03 (as of ticket M4-15), whose golden fingerprint stays.
+    // M4-03 (as of ticket M4-15), whose golden fingerprint it kept, but
+    // with the thermal equator of ticket M4-21 (the warm centre).
     let run = earth_10k();
     let params = CirculationParams {
         smoothing_length_m: 0.0,
@@ -1183,9 +1377,12 @@ fn circulation_fingerprint(c: &Circulation) -> u64 {
     fnv1a64(&bytes)
 }
 
-/// The fingerprint of `a_zero_length_is_the_circulation_of_m4_03`: that of
-/// `golden_fingerprint_of_earth_circulation` before ticket M4-17.
-const UNSMOOTHED_GOLDEN_FINGERPRINT: u64 = 0xA63E_8ED9_C397_F5B8;
+/// The fingerprint of `a_zero_length_skips_the_smoothing`: that of
+/// `golden_fingerprint_of_earth_circulation` before ticket M4-17
+/// (0xA63E_8ED9_C397_F5B8) until the thermal equator became the warm centre;
+/// recorded again by ticket M4-21 after the other tests passed and the maps
+/// of out/M4-21 were viewed.
+const UNSMOOTHED_GOLDEN_FINGERPRINT: u64 = 0x69B6_A1CD_AC60_773A;
 
 // ---------------------------------------------------------------------------
 // Golden fingerprint.
@@ -1203,8 +1400,11 @@ fn golden_fingerprint_of_earth_circulation() {
     // the multigrid (ticket M4-09), when their periodic state came from
     // the balance step (ticket M4-15) and when the thermal anomaly was
     // smoothed over 1,000 km (ticket M4-17, after the other tests passed and
-    // the images of out/M4-17 were viewed; the unsmoothed circulation keeps
-    // its value, `a_zero_length_is_the_circulation_of_m4_03`).
+    // the images of out/M4-17 were viewed; the unsmoothed circulation kept
+    // its value, `a_zero_length_skips_the_smoothing`), and when the thermal
+    // equator became the warm centre (ticket M4-21, world-breaking, with the
+    // unsmoothed circulation's, after the other tests passed and the maps of
+    // out/M4-21 were viewed).
     let run = earth_10k();
     let c = monthly_circulation(&PlanetParams::earth(), &run.world.grid, &run.temperature);
     let fingerprint = circulation_fingerprint(&c);
@@ -1213,4 +1413,4 @@ fn golden_fingerprint_of_earth_circulation() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_circulation`.
-const GOLDEN_FINGERPRINT: u64 = 0x9D60_EEA7_14F1_7A23;
+const GOLDEN_FINGERPRINT: u64 = 0x8F79_4961_AB46_90A9;
