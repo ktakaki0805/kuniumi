@@ -89,8 +89,8 @@
 //! # Time stepping
 //!
 //! The sub-steps of the energy balance (four a month, backward Euler, the
-//! albedo of the temperatures at the start of the sub-step), with the
-//! advection and the upwelling in the same implicit system, without
+//! month's albedo at the temperatures at the start of the sub-step), with
+//! the advection and the upwelling in the same implicit system, without
 //! operator splitting ([`SeaSurfaceModel::substep`]):
 //!
 //! ```text
@@ -161,7 +161,14 @@
 //! anomaly smoothed over 1,000 km: its coupled state on the same world
 //! (288.02 K and −27.94 K) meets the same targets with the same `A` and
 //! `D`, which were kept; with the smoothed winds of the energy balance
-//! alone the sea surface gives 287.72 K and −28.74 K.
+//! alone the sea surface gives 287.72 K and −28.74 K. With the zenith
+//! angle law of the albedo (ticket M4-10; [`super::energy_balance`], "The
+//! zenith angle law") the coupled state warmed to 288.28 K, its `P₂`
+//! coefficient weakened to −27.56 K and its worst band left the 5 K of
+//! ticket M4-02 (5.10 K), so `A` and `D` were fitted again in the same way
+//! on the coupled state: `A` = 202.8 W/m² and `D⊕` = 0.502 W m⁻² K⁻¹ give
+//! 287.99 K, −27.97 K and every band within 4.5 K (the sea surface with
+//! the winds of the energy balance alone 287.72 K and −28.75 K).
 //! Provisional until ticket M4-08 calibrates on Earth's topography.
 //!
 //! # Limitations
@@ -202,7 +209,7 @@ use super::energy_balance::{
     PERIODIC_TOLERANCE_K, Seasons, Temperature, WARM_START_ITERATIONS, balance_step,
     largest_difference_k,
 };
-use super::insolation::{MONTHS, monthly_insolation};
+use super::insolation::{MONTHS, monthly_insolation, monthly_zenith_cosine};
 use super::ocean::{OceanCurrents, OceanParams, WindStress, monthly_wind_stress};
 use crate::multigrid::{self, Multigrid};
 use crate::operators::Solve;
@@ -256,15 +263,17 @@ impl SeaSurfaceParams {
     /// freezes (−1.92 °C at the mean ocean's 35).
     pub const FREEZING_TEMPERATURE_K: f64 = ZERO_CELSIUS_K - 1.8;
 
-    /// Earth's `A` (W/m²) for the energy balance with currents: 202.6,
-    /// fitted (module documentation, "Calibration"); the energy balance
-    /// alone has 202.7.
-    pub const EARTH_OLR_AT_FREEZING_W_M2: f64 = 202.6;
+    /// Earth's `A` (W/m²) for the energy balance with currents: 202.8,
+    /// fitted with the zenith angle law of the albedo (module
+    /// documentation, "Calibration"; 202.6 with the `P₂` form); the energy
+    /// balance alone has 202.8 too.
+    pub const EARTH_OLR_AT_FREEZING_W_M2: f64 = 202.8;
 
-    /// Earth's `D` (W m⁻² K⁻¹) for the energy balance with currents: 0.508,
-    /// fitted (module documentation, "Calibration"); the energy balance
-    /// alone has 0.583.
-    pub const EARTH_DIFFUSION_W_M2_K: f64 = 0.508;
+    /// Earth's `D` (W m⁻² K⁻¹) for the energy balance with currents: 0.502,
+    /// fitted with the zenith angle law of the albedo (module
+    /// documentation, "Calibration"; 0.508 with the `P₂` form); the energy
+    /// balance alone has 0.579.
+    pub const EARTH_DIFFUSION_W_M2_K: f64 = 0.502;
 
     /// The parameters (the same for every planet).
     pub fn earth() -> Self {
@@ -847,7 +856,7 @@ impl SeaSurfaceModel {
         let capacities = self.balance.heat_capacity_j_m2_k();
         let u = &self.upwelling_coupling[month];
         let t_fz = self.params.freezing_temperature_k;
-        let albedos = self.balance.albedos(temperature_k);
+        let albedos = self.balance.albedos(month, temperature_k);
         let mut rhs = Vec::with_capacity(n);
         let mut absorbed = Vec::with_capacity(n);
         for i in 0..n {
@@ -950,32 +959,24 @@ impl SeaSurfaceModel {
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
         let n = self.len();
         let areas = self.balance.areas_sr();
-        let ocean = self.balance.ocean();
-        let sin_lat = self.balance.sin_lat();
         let u = &self.mean_upwelling_coupling;
         let t_fz = self.params.freezing_temperature_k;
         let mass: Vec<f64> = areas.iter().map(|s| s * b).collect();
         let matrix = warm.matrix();
         let z = self.return_vector(matrix, warm, u);
-        let mut mean_w_m2 = Vec::with_capacity(n);
+        let (free_w_m2, lost_w_m2) = self.balance.annual_sunlight_w_m2(insolation_w_m2);
         let mut temperature_k = Vec::with_capacity(n);
         let mut rhs = Vec::with_capacity(n);
         for i in 0..n {
-            let mut sum = 0.0;
-            for month in insolation_w_m2 {
-                sum += month[i];
-            }
-            let mean = sum / MONTHS as f64;
-            let absorbed = mean * (1.0 - p.free_albedo(ocean[i], sin_lat[i]));
-            mean_w_m2.push(mean);
+            let absorbed = free_w_m2[i];
             rhs.push(areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz);
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
         self.solve_with_return((matrix, warm), &mass, u, &z, &mut rhs, &mut temperature_k);
         for _ in 0..WARM_START_ITERATIONS {
-            let albedos = self.balance.albedos(&temperature_k);
+            let surface = self.balance.surface_temperature_k(&temperature_k);
             for i in 0..n {
-                let absorbed = mean_w_m2[i] * (1.0 - albedos[i]);
+                let absorbed = free_w_m2[i] - p.ice_fraction(surface[i]) * lost_w_m2[i];
                 rhs[i] = areas[i] * (absorbed - a + b * ZERO_CELSIUS_K) + u[i] * t_fz;
             }
             let before = temperature_k.clone();
@@ -1126,6 +1127,7 @@ pub fn monthly_sea_surface_temperature(
         heights_m,
         sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(params, grid),
     );
     let ocean = balance.ocean().to_vec();
     let ocean_params = OceanParams::for_planet(params);

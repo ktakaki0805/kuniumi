@@ -32,6 +32,16 @@
 //! `the_step_weighs_the_drift_by_the_memory_of_the_year`,
 //! `the_balance_step_keeps_the_fixed_point`.
 //!
+//! Ticket M4-10 (the zenith angle law of the albedo, reference values from
+//! `tools/zenith_albedo_reference.py` and hand values): criterion 1,
+//! `the_zenith_law_keeps_earth_s_albedo`, `earth_keeps_its_planetary_albedo`
+//! and `earth_zonal_means_match_north_and_coakley` with the refitted `A`
+//! and `D`; criterion 2,
+//! `the_poles_absorb_with_their_insolation_at_high_obliquity`; and
+//! `snow_and_ice_ramp_the_albedo`, `the_model_takes_each_month_s_free_albedo`,
+//! `new_needs_cosines_in_the_unit_interval`,
+//! `new_needs_one_cosine_per_cell`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! on 40,000 cells, the world of the calibration, in release builds (about
 //! 12 s), and on 10,000 cells in debug builds, where the world differs
@@ -45,6 +55,7 @@ use kuniumi_math::units::deg_to_rad;
 use kuniumi_world::{PlanetParams, Settings};
 
 use super::*;
+use crate::stages::climate::insolation::{MonthlyInsolation, Orbit};
 use crate::stages::climate::test_worlds::{earth_10k, earth_reference};
 use crate::stages::crust::SURFACE_HEIGHT;
 
@@ -71,12 +82,12 @@ fn p2(x: f64) -> f64 {
     0.5 * (3.0 * x * x - 1.0)
 }
 
-/// Earth's parameters without the latitude term of the albedo and without
-/// snow or ice (the thresholds far below any temperature here), so that
-/// the model is linear.
+/// Earth's parameters without the zenith-angle term of the albedo and
+/// without snow or ice (the thresholds far below any temperature here), so
+/// that the model is linear.
 fn linear_params() -> EnergyBalanceParams {
     EnergyBalanceParams {
-        albedo_p2: 0.0,
+        albedo_zenith_slope: 0.0,
         melting_temperature_k: 20.0,
         frozen_temperature_k: 10.0,
         ..EnergyBalanceParams::earth()
@@ -86,6 +97,12 @@ fn linear_params() -> EnergyBalanceParams {
 /// The same insolation in every month.
 fn every_month(values: Vec<f64>) -> [Vec<f64>; MONTHS] {
     core::array::from_fn(|_| values.clone())
+}
+
+/// The reference cosine of the zenith angle `μ_r` in every month and cell
+/// of `n`, at which the ice-free albedo is `α_ocean` or `α_land` exactly.
+fn reference_zenith(n: usize) -> [Vec<f64>; MONTHS] {
+    every_month(vec![EnergyBalanceParams::REFERENCE_ZENITH_COSINE; n])
 }
 
 /// The annual mean of each cell.
@@ -246,25 +263,31 @@ fn snow_and_ice_ramp_the_albedo() {
     assert_same(p.ice_fraction(150.0), 1.0, "f at 150 K");
     assert_near(p.ice_fraction(268.15), 0.5, 1e-12, "half way");
     assert_near(p.ice_fraction(270.65), 0.25, 1e-12, "a quarter");
-    // Ice-free: 0.263 − 0.04 at the equator (P₂(0) = −1/2), 0.363 + 0.08
-    // at a pole, 0.263 where P₂ = 0 (sin² φ = 1/3).
-    assert_near(p.albedo(true, 0.0, 300.0), 0.223, 1e-15, "ocean, equator");
-    assert_near(p.albedo(false, 1.0, 300.0), 0.443, 1e-15, "land, pole");
+    // Ice-free (ticket M4-10): α_type + 0.338 (0.644 − μ̄), exactly α_type
+    // at μ̄ = μ_r; under an overhead sun (μ̄ = 1) 0.263 − 0.120328; without
+    // light (μ̄ = 0) 0.263 + 0.217672 and 0.363 + 0.217672; at the
+    // equator's equinox (μ̄ = π/4) 0.263 − 0.338 (π/4 − 0.644).
+    assert_same(p.albedo_zenith_slope, 0.338, "b");
+    assert_same(p.reference_zenith_cosine, 0.644, "μ_r");
+    assert_same(p.free_albedo(true, 0.644), 0.263, "ocean at μ_r");
+    assert_same(p.free_albedo(false, 0.644), 0.363, "land at μ_r");
+    assert_near(p.albedo(true, 1.0, 300.0), 0.142_672, 1e-15, "overhead sun");
+    assert_near(p.albedo(true, 0.0, 300.0), 0.480_672, 1e-15, "no light");
     assert_near(
-        p.albedo(false, -1.0, 300.0),
-        0.443,
+        p.albedo(false, 0.0, 300.0),
+        0.580_672,
         1e-15,
-        "land, south pole",
+        "land, no light",
     );
     assert_near(
-        p.albedo(true, (1.0_f64 / 3.0).sqrt(), 300.0),
-        0.263,
+        p.albedo(true, PI / 4.0, 300.0),
+        0.263 - 0.338 * (PI / 4.0 - 0.644),
         1e-15,
-        "ocean, P₂ = 0",
+        "π/4",
     );
     // Exactly the ice-free value without ice, exactly α_ice under full
     // cover, the mean half way.
-    for (ocean, s) in [(true, 0.0), (false, 0.5), (true, -0.9)] {
+    for (ocean, s) in [(true, 0.0), (false, 0.5), (true, 0.9)] {
         assert_same(
             p.albedo(ocean, s, 273.15),
             p.free_albedo(ocean, s),
@@ -289,7 +312,14 @@ fn the_lapse_rate_cools_land_only() {
     // sea.
     let grid = SphereGrid::octahedron();
     let heights = [-100.0, 0.0, 0.5, 1000.0, 8848.0, 3.0];
-    let model = EnergyBalance::new(&EnergyBalanceParams::earth(), &grid, &heights, 0.5, 3.0e7);
+    let model = EnergyBalance::new(
+        &EnergyBalanceParams::earth(),
+        &grid,
+        &heights,
+        0.5,
+        3.0e7,
+        &reference_zenith(6),
+    );
     assert_eq!(model.ocean(), [true, true, true, false, false, false]);
     let sea = [280.0, 281.0, 282.0, 283.0, 284.0, 285.0];
     let surface = model.surface_temperature_k(&sea);
@@ -315,11 +345,19 @@ fn snow_follows_the_surface_temperature() {
     // 280 K has none, one at 268.15 K is half covered.
     let grid = SphereGrid::octahedron();
     let heights = [2000.0, -10.0, -10.0, 0.5, 0.5, 0.5];
-    let model = EnergyBalance::new(&EnergyBalanceParams::earth(), &grid, &heights, 0.0, 3.0e7);
+    let model = EnergyBalance::new(
+        &EnergyBalanceParams::earth(),
+        &grid,
+        &heights,
+        0.0,
+        3.0e7,
+        &reference_zenith(6),
+    );
     let p = EnergyBalanceParams::earth();
     let sea = [280.0, 280.0, 268.15, 300.0, 300.0, 300.0];
-    let albedos = model.albedos(&sea);
-    let s: Vec<f64> = (0..6).map(|i| grid.position(i).z).collect();
+    let albedos = model.albedos(0, &sea);
+    let s = [EnergyBalanceParams::REFERENCE_ZENITH_COSINE; 6];
+    assert_same(albedos[1], 0.263, "an ice-free ocean at μ_r");
     let f = (273.15 - 267.0) / 10.0;
     assert_near(
         albedos[0],
@@ -337,17 +375,290 @@ fn snow_follows_the_surface_temperature() {
 }
 
 // ---------------------------------------------------------------------------
+// The zenith angle law (ticket M4-10).
+
+/// The annual means at each cell of `grid` on the planet `params` of the
+/// insolation (W/m²) and of the sunlight absorbed by an ice-free ocean
+/// (W/m²) with the zenith angle law and with North & Coakley's form
+/// `α_ocean + 0.08 P₂(sin φ)` of ticket M4-02, in closed form.
+fn ice_free_sunlight(params: &PlanetParams, grid: &SphereGrid) -> [Vec<f64>; 3] {
+    let p = EnergyBalanceParams::earth();
+    let insolation = monthly_insolation(params, grid);
+    let zenith = monthly_zenith_cosine(params, grid);
+    let n = grid.len();
+    let (mut q, mut law, mut p2_form) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
+    for i in 0..n {
+        let old = 0.263 + 0.08 * p2(grid.position(i as u32).z);
+        for (q_k, mu_k) in insolation.iter().zip(&zenith) {
+            let qk = q_k[i];
+            q[i] += qk / MONTHS as f64;
+            law[i] += qk * (1.0 - p.free_albedo(true, mu_k[i])) / MONTHS as f64;
+            p2_form[i] += qk * (1.0 - old) / MONTHS as f64;
+        }
+    }
+    [q, law, p2_form]
+}
+
+#[test]
+fn the_zenith_law_keeps_earth_s_albedo() {
+    // Criterion 1 (ticket M4-10). On Earth's orbit, the annual ice-free
+    // absorbed sunlight of an ocean planet with the law has the global
+    // mean and the P₂ moment of North & Coakley's form (the script
+    // tools/zenith_albedo_reference.py: within 4.7 × 10⁻⁵ and 3.3 × 10⁻⁵
+    // with the rounded b and μ_r, in exact integrals), here within 10⁻³ on
+    // the grid; and each 10° band's insolation-weighted annual ice-free
+    // albedo (relative to α_ocean) is within 0.005 of the form's
+    // equatorward of 60° and within 0.03 poleward, and within 10⁻³ of the
+    // script's bands (exact integrals over the band, either hemisphere).
+    let cells = if cfg!(debug_assertions) {
+        10_000
+    } else {
+        40_000
+    };
+    let grid = SphereGrid::fibonacci(cells, 1).expect("grid");
+    let [q, law, form] = ice_free_sunlight(&PlanetParams::earth(), &grid);
+    let (mean_law, mean_form) = (global_mean(&grid, &law), global_mean(&grid, &form));
+    let (p2_law, p2_form) = (p2_coefficient(&grid, &law), p2_coefficient(&grid, &form));
+    println!(
+        "{cells} cells: global {mean_law:.4} against {mean_form:.4} W/m², \
+         P₂ {p2_law:.4} against {p2_form:.4} W/m²"
+    );
+    assert!((mean_law / mean_form - 1.0).abs() <= 1e-3);
+    assert!((p2_law / p2_form - 1.0).abs() <= 1e-3);
+    let script = [
+        (-0.036_239_625_686_335_58, -0.038_798_321_893_847_64),
+        (-0.030_598_544_592_137_61, -0.031_776_074_518_068_373),
+        (-0.019_646_984_588_987_605, -0.018_577_205_530_790_673),
+        (-0.004_073_014_380_547_546, -0.000_790_303_824_375_710_5),
+        (0.015_023_576_219_170_51, 0.019_446_744_321_066_966),
+        (0.036_122_542_355_544_477, 0.039_711_178_509_132_97),
+        (0.058_475_435_213_815_89, 0.057_624_447_605_633_566),
+        (0.085_834_386_672_568_74, 0.071_044_892_966_331_62),
+        (0.106_230_830_776_551_57, 0.078_176_251_181_401_78),
+    ];
+    for b in 0..18 {
+        let lo = -90.0 + 10.0 * b as f64;
+        let (mut sq, mut sl, mut sf) = (0.0, 0.0, 0.0);
+        for i in band(&grid, lo) {
+            let a = grid.area_sr(i as u32);
+            sq += a * q[i];
+            sl += a * (q[i] - law[i]);
+            sf += a * (q[i] - form[i]);
+        }
+        let (albedo_law, albedo_form) = (sl / sq - 0.263, sf / sq - 0.263);
+        let (expected_law, expected_form) = script[if lo < 0.0 { 8 - b } else { b - 9 }];
+        println!(
+            "{lo:>4}° to {:>3}°: law {albedo_law:+.4} (script {expected_law:+.4}), \
+             P₂ form {albedo_form:+.4} (script {expected_form:+.4})",
+            lo + 10.0
+        );
+        let tolerance = if (-60.0..60.0).contains(&lo) {
+            0.005
+        } else {
+            0.03
+        };
+        assert!((albedo_law - albedo_form).abs() <= tolerance, "{lo}°");
+        assert_near(albedo_law, expected_law, 1e-3, "the law's band");
+        assert_near(albedo_form, expected_form, 1e-3, "the form's band");
+    }
+}
+
+#[test]
+fn the_poles_absorb_with_their_insolation_at_high_obliquity() {
+    // Criterion 2 (ticket M4-10). At obliquity 90° the annual
+    // insolation-weighted cosine of the zenith angle is π/4 at the poles
+    // (∫ sin² λ / ∫ sin λ over the half year of light) and π²/16 at the
+    // equator ((π/4) ∫ cos² λ / ∫ |cos λ|), whatever the eccentricity, so
+    // the ice-free ocean's annual co-albedo is
+    // 1 − 0.263 − 0.338 (0.644 − μ̄): 0.784 79 and 0.727 82 (script), where
+    // North & Coakley's form gives 0.657 and 0.777. The pole's absorbed
+    // sunlight over the equator's then exceeds the ratio of their
+    // insolation, π/2 (circular orbit; S/π against 2S/π²); with the P₂
+    // form it falls short. On the grid (10,000 cells) the cells poleward of
+    // 80° have at least the co-albedo of those within 10° of the equator,
+    // in the model's own monthly ice-free albedos.
+    let params = PlanetParams {
+        obliquity_rad: deg_to_rad(90.0),
+        ..PlanetParams::earth()
+    };
+    let table = MonthlyInsolation::new(&Orbit::of(&params));
+    let p = EnergyBalanceParams::earth();
+    let annual = |sin: f64, cos: f64| {
+        let (q, mu) = (table.at(sin, cos), table.zenith_cosines(sin, cos));
+        let total: f64 = q.iter().sum();
+        let weighted: f64 = q.iter().zip(&mu).map(|(q, m)| q * m).sum::<f64>() / total;
+        let absorbed: f64 = q
+            .iter()
+            .zip(&mu)
+            .map(|(q, &m)| q * (1.0 - p.free_albedo(true, m)))
+            .sum::<f64>();
+        (total / MONTHS as f64, weighted, absorbed / total)
+    };
+    let (q_pole, mu_pole, co_pole) = annual(1.0, 0.0);
+    let (q_equator, mu_equator, co_equator) = annual(0.0, 1.0);
+    println!(
+        "pole: {q_pole:.2} W/m², μ̄ {mu_pole:.6}, co-albedo {co_pole:.5} (P₂ form 0.657); \
+         equator: {q_equator:.2} W/m², μ̄ {mu_equator:.6}, co-albedo {co_equator:.5} (0.777); \
+         absorbed ratio {:.4} (P₂ form {:.4}), insolation ratio {:.4}",
+        q_pole * co_pole / (q_equator * co_equator),
+        q_pole * 0.657 / (q_equator * 0.777),
+        q_pole / q_equator
+    );
+    assert_near(mu_pole, PI / 4.0, 1e-4, "π/4");
+    assert_near(mu_equator, PI * PI / 16.0, 1e-4, "π²/16");
+    assert_near(
+        co_pole,
+        0.784_792_579_228_337_5,
+        1e-4,
+        "the pole's co-albedo",
+    );
+    assert_near(co_equator, 0.727_823_392_973_012_7, 1e-4, "the equator's");
+    assert!(q_pole * co_pole / (q_equator * co_equator) >= q_pole / q_equator);
+    // The model on an ocean planet.
+    let grid = SphereGrid::fibonacci(10_000, 1).expect("grid");
+    let n = grid.len();
+    let model = EnergyBalance::new(
+        &p,
+        &grid,
+        &vec![-1000.0; n],
+        0.0,
+        params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &grid),
+    );
+    let insolation = monthly_insolation(&params, &grid);
+    let co_albedo = |keep: &dyn Fn(f64) -> bool| {
+        let (mut q, mut absorbed) = (0.0, 0.0);
+        for i in (0..n).filter(|&i| keep(latitude_deg(&grid, i))) {
+            let a = grid.area_sr(i as u32);
+            for (k, month) in insolation.iter().enumerate() {
+                q += a * month[i];
+                absorbed += a * month[i] * (1.0 - model.free_albedos(k)[i]);
+            }
+        }
+        absorbed / q
+    };
+    let polar = co_albedo(&|lat| lat.abs() >= 80.0);
+    let equatorial = co_albedo(&|lat| lat.abs() <= 10.0);
+    println!("grid: polar co-albedo {polar:.5}, equatorial {equatorial:.5}");
+    assert!(polar >= equatorial, "{polar} against {equatorial}");
+}
+
+#[test]
+fn the_model_takes_each_month_s_free_albedo() {
+    // The ice-free albedo of each cell and month is the law at the cell's
+    // monthly cosine, bit for bit, and the albedo of a month without ice is
+    // that value (Earth's world of seed 1, 2,000 cells, 400 K at sea level,
+    // so that no mountain is under snow).
+    let params = PlanetParams::earth();
+    let settings = Settings {
+        cells: 2_000,
+        allow_partial: true,
+        ..Settings::default()
+    };
+    let world = crate::generate_through_crust(&params, &settings, 1).expect("a partial world");
+    let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
+    let zenith = monthly_zenith_cosine(&params, &world.grid);
+    let p = EnergyBalanceParams::earth();
+    let model = EnergyBalance::new(
+        &p,
+        &world.grid,
+        heights,
+        world.sea_level_m,
+        params.orbital_period_s,
+        &zenith,
+    );
+    let hot = vec![400.0; model.len()];
+    for (k, mu) in zenith.iter().enumerate() {
+        let albedos = model.albedos(k, &hot);
+        for (i, (&albedo, &ocean)) in albedos.iter().zip(model.ocean()).enumerate() {
+            let free = p.free_albedo(ocean, mu[i]);
+            assert_same(model.free_albedos(k)[i], free, "the month's free albedo");
+            assert_same(albedo, free, "without ice");
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "EnergyBalance needs cosines of the zenith angle in [0, 1]")]
+fn new_needs_cosines_in_the_unit_interval() {
+    let mut zenith = reference_zenith(6);
+    zenith[4][2] = 1.0 + 1e-15;
+    EnergyBalance::new(
+        &EnergyBalanceParams::earth(),
+        &SphereGrid::octahedron(),
+        &[0.0; 6],
+        0.0,
+        3e7,
+        &zenith,
+    );
+}
+
+#[test]
+#[should_panic(expected = "month 8 of the zenith cosines needs one value per cell")]
+fn new_needs_one_cosine_per_cell() {
+    let mut zenith = reference_zenith(6);
+    zenith[7].pop();
+    EnergyBalance::new(
+        &EnergyBalanceParams::earth(),
+        &SphereGrid::octahedron(),
+        &[0.0; 6],
+        0.0,
+        3e7,
+        &zenith,
+    );
+}
+
+#[test]
+fn earth_keeps_its_planetary_albedo() {
+    // Criterion 1 (ticket M4-10): the planetary albedo of Earth's periodic
+    // state, 1 − Σ Q_k (1 − α_k) / Σ Q_k over the cells (area-weighted)
+    // and months with each month's albedo at its mean temperature, within
+    // 0.005 of ticket M4-02's 0.3006 (with the P₂ form, on the same
+    // 40,000-cell world in release builds; measured with the zenith law
+    // 0.2998, and 0.2990 with the A and D before its fit); on the 10,000
+    // cells of debug builds (another world) within 0.01 (measured 0.2963).
+    let run = earth_reference();
+    let grid = &run.world.grid;
+    let insolation = monthly_insolation(&PlanetParams::earth(), grid);
+    let (mut q, mut absorbed) = (0.0, 0.0);
+    for (k, (month, temperature)) in insolation
+        .iter()
+        .zip(&run.temperature.sea_level_k)
+        .enumerate()
+    {
+        let albedos = run.model.albedos(k, temperature);
+        for (i, (&q_i, &albedo)) in month.iter().zip(&albedos).enumerate() {
+            let a = grid.area_sr(i as u32);
+            q += a * q_i;
+            absorbed += a * q_i * (1.0 - albedo);
+        }
+    }
+    let albedo = 1.0 - absorbed / q;
+    println!("{} cells: planetary albedo {albedo:.4}", grid.len());
+    let tolerance = if cfg!(debug_assertions) { 0.01 } else { 0.005 };
+    assert_near(albedo, 0.3006, tolerance, "the planetary albedo");
+}
+
+// ---------------------------------------------------------------------------
 // Closed forms.
 
 #[test]
 fn uniform_forcing_gives_the_radiative_balance() {
     // All ocean, the same 340 W/m² everywhere in every month, no ice, no
-    // latitude term: every cell sits at T₀ + (Q (1 − α) − A) / B, whatever
-    // D, in every month, and the state is periodic after two years.
+    // zenith-angle term: every cell sits at T₀ + (Q (1 − α) − A) / B,
+    // whatever D, in every month, and the state is periodic after two
+    // years.
     let grid = SphereGrid::fibonacci(1_000, 2).expect("grid");
     let n = grid.len();
     let params = linear_params();
-    let model = EnergyBalance::new(&params, &grid, &vec![-1000.0; n], 0.0, 3.155_76e7);
+    let model = EnergyBalance::new(
+        &params,
+        &grid,
+        &vec![-1000.0; n],
+        0.0,
+        3.155_76e7,
+        &reference_zenith(n),
+    );
     let expected =
         273.15 + (340.0 * (1.0 - 0.263) - EnergyBalanceParams::EARTH_OLR_AT_FREEZING_W_M2) / 2.09;
     let t = model.periodic_state(&every_month(vec![340.0; n]));
@@ -366,7 +677,7 @@ fn uniform_forcing_gives_the_radiative_balance() {
 
 #[test]
 fn the_p2_mode_matches_the_two_mode_solution() {
-    // All ocean, no ice, no latitude term, Q = Q̄ (1 + s₂ P₂(sin φ)) in
+    // All ocean, no ice, no zenith-angle term, Q = Q̄ (1 + s₂ P₂(sin φ)) in
     // every month with Q̄ = 340.25 W/m² and s₂ = −0.477 (NCC81 Table 1, the
     // P₂ coefficient of the annual insolation): P₂ is an eigenfunction of
     // the Laplacian on the unit sphere with eigenvalue −6, so the steady
@@ -383,7 +694,14 @@ fn the_p2_mode_matches_the_two_mode_solution() {
         .iter()
         .map(|p| q * (1.0 + s2 * p2(p.z)))
         .collect();
-    let model = EnergyBalance::new(&params, &grid, &vec![-1000.0; n], 0.0, 3.155_76e7);
+    let model = EnergyBalance::new(
+        &params,
+        &grid,
+        &vec![-1000.0; n],
+        0.0,
+        3.155_76e7,
+        &reference_zenith(n),
+    );
     let t = model.periodic_state(&every_month(insolation));
     assert!(t.converged);
     let d = params.diffusion_w_m2_k;
@@ -467,7 +785,14 @@ fn the_seasonal_cycle_lags_and_damps() {
         ("land", 10.0, params.land_heat_capacity_j_m2_k, 0.363),
         ("ocean", -10.0, params.ocean_heat_capacity_j_m2_k, 0.263),
     ] {
-        let model = EnergyBalance::new(&params, &grid, &vec![height; n], 0.0, year_s);
+        let model = EnergyBalance::new(
+            &params,
+            &grid,
+            &vec![height; n],
+            0.0,
+            year_s,
+            &reference_zenith(n),
+        );
         let t = model.periodic_state_with(&insolation, true, 1e-9, 400);
         assert!(t.converged, "{name}: {} years, {}", t.years, t.change_k);
         let model_means: [f64; MONTHS] = core::array::from_fn(|k| t.sea_level_k[k][0]);
@@ -514,9 +839,9 @@ fn energy_is_conserved_in_every_substep() {
     let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
     let mut t = run.model.warm_start(&insolation);
     let mut worst = 0.0_f64;
-    for month in &insolation {
+    for (k, month) in insolation.iter().enumerate() {
         for _ in 0..SUBSTEPS_PER_MONTH {
-            let budget = run.model.substep(&mut t, month);
+            let budget = run.model.substep(k, &mut t, month);
             assert!(budget.solve.converged(), "{budget:?}");
             let imbalance = budget.storage_w_m2 - (budget.absorbed_w_m2 - budget.emitted_w_m2);
             worst = worst.max(imbalance.abs());
@@ -609,6 +934,7 @@ fn the_balance_step_keeps_the_fixed_point() {
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &world.grid),
     );
     let insolation = monthly_insolation(&params, &world.grid);
     let with = model.periodic_state_with(&insolation, true, 1e-7, 1_000);
@@ -862,6 +1188,7 @@ fn assert_stable_periodic_state(name: &str, params: &PlanetParams, seed: u64, ce
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(params, &world.grid),
     );
     let insolation = monthly_insolation(params, &world.grid);
     let (t, start) = periodic_run(
@@ -933,7 +1260,9 @@ fn slow_planets_reach_a_stable_periodic_state_near_a_bifurcation() {
     // Ticket M4-15, criterion 1: Earth at 1,282 W/m² (seed 1; a snowball
     // after 70 years with the correction of ticket M4-02), and 24 h at
     // 0.5 atm with obliquity 90° at 1,370 and 1,375 W/m² (seed 2; 64 and 59
-    // years): 10, 11 and 13 years with the balance step in the prototype.
+    // years): 10, 11 and 13 years with the balance step in the prototype;
+    // 9, 10 and 25 since the zenith angle law of the albedo (ticket M4-10;
+    // with the A and D before its fit, Earth at 1,282 W/m² took 27).
     let earth = PlanetParams {
         stellar_flux_w_m2: 1_282.0,
         ..PlanetParams::earth()
@@ -977,7 +1306,10 @@ fn a_planet_near_the_snowball_edge_freezes_over() {
     // warm state and collapse into a snowball, periodic only after 113
     // years with the annual correction of ticket M4-02 and about 540
     // without any step (ticket M4-15, prototype). With the balance step it
-    // is periodic within MAX_YEARS (prototype: 13 years) at that snowball:
+    // is periodic within MAX_YEARS (prototype: 13 years; since the zenith
+    // angle law of ticket M4-10, 20 years at 236.3 K, and 721 without the
+    // step; with the A and D before its fit it stayed warm, at 275.3 K) at
+    // that snowball:
     // in release builds within 10⁻² K of the years without the step, run
     // here to the same tolerance (the convergence errors of the two, each
     // at most 10⁻³ K a year; prototype 2.7 × 10⁻³ K); in debug builds, too
@@ -999,6 +1331,7 @@ fn a_planet_near_the_snowball_edge_freezes_over() {
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &world.grid),
     );
     let insolation = monthly_insolation(&params, &world.grid);
     let t = model.periodic_state(&insolation);
@@ -1033,13 +1366,14 @@ fn a_planet_near_the_snowball_edge_freezes_over() {
 
 #[test]
 fn a_planet_leaves_an_unstable_periodic_state() {
-    // Closed form (ticket M4-15): an all-ocean planet without the latitude
-    // term of the albedo under Q = 340 W/m² in every month and every cell,
+    // Closed form (ticket M4-15): an all-ocean planet without the
+    // zenith-angle term of the albedo under Q = 340 W/m² in every month and
+    // every cell, with Earth's A of ticket M4-10 (202.8 W/m²),
     // so that each cell obeys C dT/dt = Q (1 − α(T)) − A − B (T − T₀) and
     // the diffusion does not act. It has three balances: warm,
-    // T₀ + (Q (1 − α_ocean) − A) / B = 296.059 K; cold,
-    // T₀ + (Q (1 − α_ice) − A) / B = 241.236 K; and in the ramp of the
-    // albedo [A − B T₀ − Q (1 − α_ocean) + g T_m] / (g − B) = 268.039 K,
+    // T₀ + (Q (1 − α_ocean) − A) / B = 296.011 K; cold,
+    // T₀ + (Q (1 − α_ice) − A) / B = 241.188 K; and in the ramp of the
+    // albedo [A − B T₀ − Q (1 − α_ocean) + g T_m] / (g − B) = 268.050 K,
     // with g = Q (α_ice − α_ocean) / (T_m − T_f) = 11.458 W m⁻² K⁻¹ > B:
     // unstable, the feedback stronger than the emission. Started 0.01 K
     // above and below it, the periodic state (to 10⁻⁹ K) is the warm and
@@ -1051,10 +1385,17 @@ fn a_planet_leaves_an_unstable_periodic_state() {
     let grid = SphereGrid::fibonacci(1_000, 2).expect("grid");
     let n = grid.len();
     let params = EnergyBalanceParams {
-        albedo_p2: 0.0,
+        albedo_zenith_slope: 0.0,
         ..EnergyBalanceParams::earth()
     };
-    let model = EnergyBalance::new(&params, &grid, &vec![-1000.0; n], 0.0, 3.155_76e7);
+    let model = EnergyBalance::new(
+        &params,
+        &grid,
+        &vec![-1000.0; n],
+        0.0,
+        3.155_76e7,
+        &reference_zenith(n),
+    );
     let insolation = every_month(vec![340.0; n]);
     let (q, a, b) = (340.0, params.olr_at_freezing_w_m2, params.olr_slope_w_m2_k);
     let (melting, frozen) = (params.melting_temperature_k, params.frozen_temperature_k);
@@ -1063,9 +1404,9 @@ fn a_planet_leaves_an_unstable_periodic_state() {
     let g = q * (params.ice_albedo - params.ocean_albedo) / (melting - frozen);
     let unstable =
         (a - b * ZERO_CELSIUS_K - q * (1.0 - params.ocean_albedo) + g * melting) / (g - b);
-    assert_near(warm, 296.059, 1e-3, "the warm balance");
-    assert_near(cold, 241.236, 1e-3, "the cold balance");
-    assert_near(unstable, 268.039, 1e-3, "the unstable balance");
+    assert_near(warm, 296.011, 1e-3, "the warm balance");
+    assert_near(cold, 241.188, 1e-3, "the cold balance");
+    assert_near(unstable, 268.050, 1e-3, "the unstable balance");
     assert!(g > b && unstable > frozen && unstable < melting);
     for (offset, expected) in [(0.01, warm), (-0.01, cold)] {
         let (t, _) = periodic_run(
@@ -1135,7 +1476,14 @@ fn the_step_weighs_the_drift_by_the_memory_of_the_year() {
             params.land_albedo,
         ),
     ] {
-        let model = EnergyBalance::new(&params, &grid, &vec![height; n], 0.0, year_s);
+        let model = EnergyBalance::new(
+            &params,
+            &grid,
+            &vec![height; n],
+            0.0,
+            year_s,
+            &reference_zenith(n),
+        );
         let (a, b) = (params.olr_at_freezing_w_m2, params.olr_slope_w_m2_k);
         let balance = ZERO_CELSIUS_K + (400.0 * (1.0 - albedo) - a) / b;
         let z = b * year_s / capacity;
@@ -1179,6 +1527,7 @@ fn an_unfinished_run_reports_its_last_year() {
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &world.grid),
     );
     let insolation = monthly_insolation(&params, &world.grid);
     let cut = model.periodic_state_with(&insolation, true, PERIODIC_TOLERANCE_K, 3);
@@ -1198,7 +1547,7 @@ fn an_unfinished_run_reports_its_last_year() {
     for year in 0..3 {
         let start = t.clone();
         let means: [Vec<f64>; MONTHS] =
-            core::array::from_fn(|k| model.month(&mut t, &insolation[k]));
+            core::array::from_fn(|k| model.month(k, &mut t, &insolation[k]));
         if year < 2 {
             let end = t.clone();
             model.balance(&annual, &start, &mut t, &means, &insolation);
@@ -1351,6 +1700,7 @@ fn new_needs_one_height_per_cell() {
         &[0.0; 5],
         0.0,
         3e7,
+        &reference_zenith(6),
     );
 }
 
@@ -1363,6 +1713,7 @@ fn new_needs_finite_heights() {
         &[0.0, 0.0, f64::NAN, 0.0, 0.0, 0.0],
         0.0,
         3e7,
+        &reference_zenith(6),
     );
 }
 
@@ -1375,6 +1726,7 @@ fn new_needs_a_positive_year() {
         &[0.0; 6],
         0.0,
         0.0,
+        &reference_zenith(6),
     );
 }
 
@@ -1387,6 +1739,7 @@ fn insolation_needs_one_value_per_cell() {
         &[0.0; 6],
         0.0,
         3e7,
+        &reference_zenith(6),
     );
     let mut months = every_month(vec![300.0; 6]);
     months[2].pop();
@@ -1410,11 +1763,11 @@ fn a_substep_matches_the_jacobi_solver() {
     let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
     let start = run.temperature.sea_level_k[0].clone();
     let mut multigrid = start.clone();
-    let budget = model.substep(&mut multigrid, &insolation[0]);
+    let budget = model.substep(0, &mut multigrid, &insolation[0]);
     let p = model.params();
     let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
     let dt = model.substep_s();
-    let albedos = model.albedos(&start);
+    let albedos = model.albedos(0, &start);
     let n = model.len();
     let mut mass = Vec::with_capacity(n);
     let mut rhs = Vec::with_capacity(n);
@@ -1445,10 +1798,13 @@ fn a_substep_matches_the_jacobi_solver() {
     let mut warm_mass = Vec::with_capacity(n);
     let mut warm_rhs = Vec::with_capacity(n);
     let mut start = Vec::with_capacity(n);
-    for i in 0..n {
-        let area = model.areas_sr()[i];
-        let mean = insolation.iter().map(|m| m[i]).sum::<f64>() / MONTHS as f64;
-        let absorbed = mean * (1.0 - p.free_albedo(model.ocean()[i], model.sin_lat()[i]));
+    for (i, &area) in model.areas_sr().iter().enumerate() {
+        let absorbed = insolation
+            .iter()
+            .enumerate()
+            .map(|(k, month)| month[i] * (1.0 - model.free_albedos(k)[i]))
+            .sum::<f64>()
+            / MONTHS as f64;
         warm_mass.push(area * b);
         warm_rhs.push(area * (absorbed - a + b * ZERO_CELSIUS_K));
         start.push(ZERO_CELSIUS_K + (absorbed - a) / b);
@@ -1511,4 +1867,7 @@ fn golden_fingerprint_of_earth_temperature() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_temperature`.
-const GOLDEN_FINGERPRINT: u64 = 0xDD60_23AB_D811_DEC1;
+/// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
+/// world-breaking) after the other tests passed and the images of out/M4-10
+/// were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0xFC6C_0021_4D38_7341;

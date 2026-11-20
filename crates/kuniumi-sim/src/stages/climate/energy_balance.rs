@@ -47,13 +47,15 @@
 //!   height is at most the sea level, as for drainage
 //!   ([`crate::drainage`]).
 //! - **Albedo** at the top of the atmosphere, clouds included
-//!   ([`EnergyBalanceParams::albedo`]). Ice-free,
-//!   `α_free = α_type + α₂ P₂(sin φ)` with `α_ocean` = 0.263,
-//!   `α_land` = 0.363, `α₂` = 0.08 and `P₂(x) = (3x² − 1)/2`, the rise of
-//!   the albedo towards the poles with the zenith angle and the clouds;
-//!   under snow and ice `α_ice` = 0.6. These are the values of the
-//!   land–sea seasonal model of C. M. Bitz's course notes, "adapted from
-//!   North and Coakley (1979)"
+//!   ([`EnergyBalanceParams::albedo`]). Ice-free, in month `k`,
+//!   `α_free = α_type + b (μ_r − μ̄_k)` (ticket M4-10), with `μ̄_k` the
+//!   insolation-weighted mean cosine of the star's zenith angle of the
+//!   month at the cell's latitude ([`super::insolation`], "The zenith
+//!   angle"), `α_ocean` = 0.263, `α_land` = 0.363, `b` = 0.338 and
+//!   `μ_r` = 0.644 ("The zenith angle law", below); under snow and ice
+//!   `α_ice` = 0.6. `α_type` and `α_ice` are the values of the land–sea
+//!   seasonal model of C. M. Bitz's course notes, "adapted from North and
+//!   Coakley (1979)"
 //!   (<https://atmos.uw.edu/~bitz/model/model_instructions/node1.html>);
 //!   NCC81 (p. 93) give the co-albedo of an ice-covered planet as 0.38
 //!   (`α` = 0.62) and of an ice-free one with half its sky clouded as
@@ -66,6 +68,53 @@
 //!   step, so that a cell's year depends continuously on its start (with a
 //!   step, a cell at the threshold could jump between ice-free and
 //!   ice-covered from one year to the next).
+//!
+//!   **The zenith angle law.** North & Coakley's form,
+//!   `α_type + α₂ P₂(sin φ)` with `α₂` = 0.08 (`P₂(x) = (3x² − 1)/2`;
+//!   ticket M4-02), stood for the larger zenith angles and cloud cover of
+//!   Earth's high latitudes, and made the poles of a planet of high
+//!   obliquity, which see a high sun in summer, too bright. The albedo is
+//!   linear in the cosine of the zenith angle because the two-stream
+//!   (Eddington) reflectance of a non-absorbing cloud layer of optical
+//!   depth `τ` and asymmetry `g`,
+//!   `R(μ₀) = [(1 − g) τ + (2/3 − μ₀)(1 − e^{−τ/μ₀})] / [4/3 + (1 − g) τ]`
+//!   (E. P. Shettle & J. A. Weinman 1970, "The transfer of solar irradiance
+//!   through inhomogeneous turbid atmospheres evaluated by Eddington's
+//!   approximation", J. Atmos. Sci. 27, 1048–1055; the conservative case of
+//!   W. E. Meador & W. R. Weaver 1980, "Two-stream approximations to
+//!   radiative transfer in planetary atmospheres", J. Atmos. Sci. 37,
+//!   630–643), is linear in `μ₀` for a thick layer and rises as the sun
+//!   sinks, as R. D. Cess (1976, "Climate change: an appraisal of
+//!   atmospheric feedback mechanisms employing zonal climatology", J.
+//!   Atmos. Sci. 33, 1831–1843) found Earth's zonal cloud albedo to do.
+//!   With an albedo linear in `μ`, the insolation-weighted `μ̄_k` makes the
+//!   month's absorbed sunlight `Q̄_k (1 − α(μ̄_k))` exactly the month's mean
+//!   of `Q (1 − α(μ))`. `b` and `μ_r` give the annual ice-free absorbed
+//!   sunlight of Earth's obliquity the global mean and the `P₂` moment of
+//!   North & Coakley's form, the two moments to which the model's mean and
+//!   `P₂` temperatures answer, so that Earth keeps its calibration:
+//!   `b` = 0.33802, `μ_r` = 0.64410 (`tools/zenith_albedo_reference.py`;
+//!   the annual integrals depend on the obliquity only), rounded to 0.338
+//!   and 0.644, which keep both moments within 5 × 10⁻⁵. Then each 10°
+//!   band's insolation-weighted annual ice-free albedo is within 0.0045 of
+//!   the `P₂` form's equatorward of 60°, and the caps are brighter by up to
+//!   0.028 at 80–90° (their sun never stands high; they are under snow and
+//!   ice most of the year). At obliquity 90° the pole's annual `μ̄` is `π/4`
+//!   and the equator's `π²/16`, an ice-free ocean's co-albedo 0.785 and
+//!   0.728, where the `P₂` form gave 0.657 and 0.777: the pole absorbs 1.69
+//!   times the equator's sunlight, its insolation being π/2 = 1.57 times
+//!   (1.33 with the `P₂` form). In the coupled climate of the
+//!   Earth-parameter world of seed 1 on 40,000 cells (the Climate stage's,
+//!   with the `A` and `D` of each law): at obliquity 90° the cap 80–90° S
+//!   absorbs 338 W/m² instead of 284 and its annual surface temperature
+//!   rises from 300.7 to 311.4 K, while 5° S–5° N absorbs 188 W/m² instead
+//!   of 202 and cools from 281.9 to 279.8 K; at 60° the cap absorbs 280
+//!   W/m² instead of 247 (292.5 to 299.8 K), the equator 232 instead of
+//!   246 (289.0 to 287.2 K); at 23.44° the zonal annual surface
+//!   temperatures move by −0.45 to +0.15 K (ticket M4-10). The law spans
+//!   `α_type − 0.12` under an overhead sun to `α_type + 0.218` at a
+//!   grazing one (ocean 0.143 to 0.481), below `α_ice`. Each month's
+//!   ice-free albedo is computed once ([`EnergyBalance::free_albedos`]).
 //! - **Diffusion.** `D` stands for the heat carried by the atmosphere's
 //!   eddies and by the ocean; the model with the ocean's currents
 //!   ([`super::sea_surface`], ticket M4-05) carries the ocean's share itself
@@ -86,15 +135,16 @@
 //!
 //! Each month has [`SUBSTEPS_PER_MONTH`] sub-steps of `Δt = P / 48` (7.6
 //! days for Earth), backward Euler for the storage, the emission and the
-//! diffusion, with the albedo of the temperature at the start of the
-//! sub-step, so that each sub-step solves the linear system
+//! diffusion, with the month's albedo at the temperature at the start of
+//! the sub-step, so that each sub-step solves the linear system
 //!
 //! ```text
 //! a_i (C_i/Δt + B) T'_i + D Σ_j w_ij (T'_i − T'_j) = a_i (C_i T_i/Δt + Q_i (1 − α_i) − A + B T₀)
 //! ```
 //!
-//! by the conjugate gradient method preconditioned by the multigrid of
-//! [`crate::multigrid`] (ticket M4-09) to a relative residual of
+//! (`α_i` the albedo of the month), by the conjugate gradient method
+//! preconditioned by the multigrid of [`crate::multigrid`] (ticket M4-09)
+//! to a relative residual of
 //! [`SOLVER_TOLERANCE`] ([`EnergyBalance::substep`]); the global energy
 //! budget of a sub-step then closes to about 10⁻⁶ W/m². The matrix is the
 //! same in every sub-step (the albedo enters only the right-hand side), so
@@ -130,7 +180,7 @@
 //! S_i(T) = (1/12) Σ_k Q_ik (1 − α_i(T_ik)),   φ(z) = z / (e^z − 1),   z_i = B P / C_i
 //! ```
 //!
-//! with `P` the year and `α` the albedo at each month's surface
+//! with `P` the year and `α` each month's albedo at the month's surface
 //! temperature. Over a year the storage `a C (y − x) / P` is the year's mean
 //! net heating; shifting the year by `δ` adds `B a δ` to the emission,
 //! `D L δ` to the diffusion and `a [S(T + δ) − S(T)]` to the absorbed
@@ -240,14 +290,20 @@
 //! `P₂` coefficient of the annual-mean sea-level temperature −28.0 K, as
 //! NCC81 set their `D`; `A` makes the global annual mean of the surface
 //! temperature 288.0 K. Solved by Newton steps with differences, then
-//! rounded to 0.1 W/m² and 0.001 W m⁻² K⁻¹: `A` = 202.7 W/m² and
-//! `D⊕` = 0.583 W m⁻² K⁻¹ give a `P₂` coefficient of −28.03 K and a mean
-//! surface temperature of 287.96 K (sea level 289.99 K), and every 10° band
-//! lies within 3.8 K of the fit (ticket M4-02;
+//! rounded to 0.1 W/m² and 0.001 W m⁻² K⁻¹: with the `P₂` form of the
+//! albedo, `A` = 202.7 W/m² and `D⊕` = 0.583 W m⁻² K⁻¹ gave −28.03 K and
+//! 287.96 K (ticket M4-02). With the zenith angle law (ticket M4-10) the
+//! same `A` and `D⊕` give 288.22 K and −27.68 K: under snow and ice the
+//! brighter caps of the law do not count, while the mid-latitudes are
+//! 0.003–0.004 darker. Fitted again in the same way, `A` = 202.8 W/m² and
+//! `D⊕` = 0.579 W m⁻² K⁻¹ give a `P₂` coefficient of −27.97 K and a mean
+//! surface temperature of 288.04 K (sea level 290.08 K), every 10° band
+//! within 3.9 K of the fit, and a planetary albedo of 0.2998 (0.3006 with
+//! the `P₂` form, 0.2990 with the law before the fit;
 //! [`EnergyBalanceParams::EARTH_OLR_AT_FREEZING_W_M2`],
 //! [`EnergyBalanceParams::EARTH_DIFFUSION_W_M2_K`]). A change of 1 W/m² in
-//! `A` moves the mean by 1.0 K, of 0.01 in `D` the `P₂` coefficient by
-//! 0.6 K.
+//! `A` moves the mean by 0.95 K, of 0.01 in `D` the `P₂` coefficient by
+//! 0.56 K.
 //!
 //! # Limitations
 //!
@@ -264,9 +320,12 @@
 //!   no ocean, and down to about 95 K on cold corners (review of ticket
 //!   M4-02); finite and positive, but the later stages must not assume a
 //!   bound.
-//! - `α₂ P₂(sin φ)` stands for the larger zenith angles and cloud cover of
-//!   Earth's high latitudes. At high obliquity the poles see a high sun in
-//!   summer, so the term makes their absorbed sunlight too small.
+//! - The zenith angle law carries all of the rise of Earth's albedo
+//!   towards the poles, the cloud cover of the storm tracks included,
+//!   which follows the circulation rather than the height of the sun:
+//!   there are no clouds of their own, so a planet of another obliquity or
+//!   rotation keeps Earth's clouds as a function of the sun. The albedo of
+//!   snow and ice does not depend on the zenith angle.
 //! - Sea ice keeps the mixed layer's heat capacity, so a frozen ocean has
 //!   too small a seasonal range.
 //! - `D` does not depend on latitude, so the tropics are not as flat as
@@ -294,7 +353,7 @@ use kuniumi_math::units::ZERO_CELSIUS_K;
 use kuniumi_sphere::SphereGrid;
 use kuniumi_world::PlanetParams;
 
-use super::insolation::{MONTHS, monthly_insolation};
+use super::insolation::{MONTHS, monthly_insolation, monthly_zenith_cosine};
 use crate::multigrid::{self, Multigrid};
 use crate::operators::{Laplacian, SOLVER_MAX_ITERATIONS, Solve};
 
@@ -360,14 +419,18 @@ pub struct EnergyBalanceParams {
     /// The heat capacity of the ocean, the column of air and a mixed layer
     /// of 75 m (J m⁻² K⁻¹); Earth 3.171 × 10⁸.
     pub ocean_heat_capacity_j_m2_k: f64,
-    /// `α_ocean`, the ice-free albedo of the ocean where `P₂(sin φ)` = 0;
-    /// 0.263.
+    /// `α_ocean`, the ice-free albedo of the ocean where the mean cosine of
+    /// the zenith angle is `μ_r`; 0.263.
     pub ocean_albedo: f64,
-    /// `α_land`, the snow-free albedo of land where `P₂(sin φ)` = 0;
-    /// 0.363.
+    /// `α_land`, the snow-free albedo of land where the mean cosine of the
+    /// zenith angle is `μ_r`; 0.363.
     pub land_albedo: f64,
-    /// `α₂`, the coefficient of `P₂(sin φ)` in the ice-free albedo; 0.08.
-    pub albedo_p2: f64,
+    /// `b`, the rise of the ice-free albedo as the mean cosine of the zenith
+    /// angle falls (per unit of the cosine); 0.338.
+    pub albedo_zenith_slope: f64,
+    /// `μ_r`, the mean cosine of the zenith angle at which the ice-free
+    /// albedo is `α_ocean` or `α_land`; 0.644.
+    pub reference_zenith_cosine: f64,
     /// `α_ice`, the albedo under snow and ice; 0.6.
     pub ice_albedo: f64,
     /// `T_m`, the surface temperature (K) above which there is no snow or
@@ -382,14 +445,15 @@ pub struct EnergyBalanceParams {
 }
 
 impl EnergyBalanceParams {
-    /// Earth's `A` (W/m²): 202.7, calibrated (module documentation, "Earth
-    /// calibration"). North & Coakley (1979) fitted 203.3 W/m².
-    pub const EARTH_OLR_AT_FREEZING_W_M2: f64 = 202.7;
+    /// Earth's `A` (W/m²): 202.8, calibrated with the zenith angle law
+    /// (module documentation, "Earth calibration"; 202.7 with the `P₂`
+    /// form). North & Coakley (1979) fitted 203.3 W/m².
+    pub const EARTH_OLR_AT_FREEZING_W_M2: f64 = 202.8;
 
-    /// Earth's `D` (W m⁻² K⁻¹): 0.583, calibrated (module documentation,
-    /// "Earth calibration"). Williams & Kasting (1997) used 0.58, NCC81
-    /// 0.649.
-    pub const EARTH_DIFFUSION_W_M2_K: f64 = 0.583;
+    /// Earth's `D` (W m⁻² K⁻¹): 0.579, calibrated with the zenith angle law
+    /// (module documentation, "Earth calibration"; 0.583 with the `P₂`
+    /// form). Williams & Kasting (1997) used 0.58, NCC81 0.649.
+    pub const EARTH_DIFFUSION_W_M2_K: f64 = 0.579;
 
     /// `B` (W m⁻² K⁻¹): North & Coakley (1979), NCC81 p. 93.
     pub const OLR_SLOPE_W_M2_K: f64 = 2.09;
@@ -413,8 +477,13 @@ impl EnergyBalanceParams {
     /// `α_land` (module documentation, "Albedo").
     pub const LAND_ALBEDO: f64 = 0.363;
 
-    /// `α₂` (module documentation, "Albedo").
-    pub const ALBEDO_P2: f64 = 0.08;
+    /// `b`: 0.338, fitted to North & Coakley's albedo on Earth's
+    /// obliquity (module documentation, "The zenith angle law").
+    pub const ALBEDO_ZENITH_SLOPE: f64 = 0.338;
+
+    /// `μ_r`: 0.644 (a zenith angle of 49.9°), fitted with `b` (module
+    /// documentation, "The zenith angle law").
+    pub const REFERENCE_ZENITH_COSINE: f64 = 0.644;
 
     /// `α_ice` (module documentation, "Albedo").
     pub const ICE_ALBEDO: f64 = 0.6;
@@ -473,7 +542,8 @@ impl EnergyBalanceParams {
             ocean_heat_capacity_j_m2_k: air_j_m2_k + mixed_layer_j_m2_k,
             ocean_albedo: Self::OCEAN_ALBEDO,
             land_albedo: Self::LAND_ALBEDO,
-            albedo_p2: Self::ALBEDO_P2,
+            albedo_zenith_slope: Self::ALBEDO_ZENITH_SLOPE,
+            reference_zenith_cosine: Self::REFERENCE_ZENITH_COSINE,
             ice_albedo: Self::ICE_ALBEDO,
             melting_temperature_k: Self::MELTING_TEMPERATURE_K,
             frozen_temperature_k: Self::FROZEN_TEMPERATURE_K,
@@ -495,25 +565,26 @@ impl EnergyBalanceParams {
         }
     }
 
-    /// The ice-free albedo of an ocean or land cell at the latitude of
-    /// sine `sin_lat`: `α_type + α₂ P₂(sin φ)`.
-    pub fn free_albedo(&self, ocean: bool, sin_lat: f64) -> f64 {
+    /// The ice-free albedo of an ocean or land cell whose sunlight falls at
+    /// the insolation-weighted mean cosine of the zenith angle `μ̄`
+    /// (`zenith_cosine`, in `[0, 1]`): `α_type + b (μ_r − μ̄)`.
+    pub fn free_albedo(&self, ocean: bool, zenith_cosine: f64) -> f64 {
         let base = if ocean {
             self.ocean_albedo
         } else {
             self.land_albedo
         };
-        base + self.albedo_p2 * (0.5 * (3.0 * sin_lat * sin_lat - 1.0))
+        base + self.albedo_zenith_slope * (self.reference_zenith_cosine - zenith_cosine)
     }
 
-    /// The albedo of an ocean or land cell at the latitude of sine
-    /// `sin_lat` and the surface temperature `T_s` (K):
+    /// The albedo of an ocean or land cell at the mean cosine of the zenith
+    /// angle `zenith_cosine` and the surface temperature `T_s` (K):
     /// `(1 − f) α_free + f α_ice` with `f` the
     /// [`ice_fraction`](Self::ice_fraction), exactly `α_free` without ice
     /// and `α_ice` under full cover.
-    pub fn albedo(&self, ocean: bool, sin_lat: f64, surface_temperature_k: f64) -> f64 {
+    pub fn albedo(&self, ocean: bool, zenith_cosine: f64, surface_temperature_k: f64) -> f64 {
         let f = self.ice_fraction(surface_temperature_k);
-        (1.0 - f) * self.free_albedo(ocean, sin_lat) + f * self.ice_albedo
+        (1.0 - f) * self.free_albedo(ocean, zenith_cosine) + f * self.ice_albedo
     }
 }
 
@@ -566,7 +637,9 @@ pub struct EnergyBalance {
     /// `C_i` (J m⁻² K⁻¹).
     heat_capacity_j_m2_k: Vec<f64>,
     ocean: Vec<bool>,
-    sin_lat: Vec<f64>,
+    /// The ice-free albedo of each cell in each month, `α_free` at the
+    /// month's mean cosine of the zenith angle.
+    free_albedo: [Vec<f64>; MONTHS],
     /// The height of land above sea level (m), 0 for the ocean.
     elevation_m: Vec<f64>,
     /// The multigrid of the sub-step's matrix `a (C/Δt + B) + D L`, which
@@ -582,20 +655,24 @@ pub struct EnergyBalance {
 impl EnergyBalance {
     /// The energy balance of the surface `heights_m` (m, one per cell of
     /// `grid`, on the datum of `sea_level_m`) of a planet whose year lasts
-    /// `orbital_period_s`, with the parameters `params`. A cell is ocean
-    /// where its height is at most the sea level, land elsewhere.
+    /// `orbital_period_s` and whose sunlight falls in each month at the
+    /// insolation-weighted mean cosine of the zenith angle `zenith_cosine`
+    /// (one `Vec` per month, cells in index order, in `[0, 1]`:
+    /// [`monthly_zenith_cosine`]), with the parameters `params`. A cell is
+    /// ocean where its height is at most the sea level, land elsewhere.
     ///
     /// # Panics
     ///
-    /// If `heights_m` does not hold one height per cell, if a height or
-    /// the sea level is not finite, or if the year is not finite and
-    /// positive.
+    /// If `heights_m` or a month of `zenith_cosine` does not hold one value
+    /// per cell, if a height or the sea level is not finite, if the year is
+    /// not finite and positive, or if a cosine lies outside `[0, 1]`.
     pub fn new(
         params: &EnergyBalanceParams,
         grid: &SphereGrid,
         heights_m: &[f64],
         sea_level_m: f64,
         orbital_period_s: f64,
+        zenith_cosine: &[Vec<f64>; MONTHS],
     ) -> Self {
         let n = grid.len();
         assert_eq!(
@@ -613,7 +690,25 @@ impl EnergyBalance {
             orbital_period_s > 0.0 && orbital_period_s.is_finite(),
             "EnergyBalance needs a finite positive year, got {orbital_period_s}"
         );
+        for (k, month) in zenith_cosine.iter().enumerate() {
+            assert_eq!(
+                month.len(),
+                n,
+                "month {} of the zenith cosines needs one value per cell",
+                k + 1
+            );
+            // Written so that NaN fails.
+            assert!(
+                month.iter().all(|&mu| (0.0..=1.0).contains(&mu)),
+                "EnergyBalance needs cosines of the zenith angle in [0, 1]"
+            );
+        }
         let ocean: Vec<bool> = heights_m.iter().map(|&h| h <= sea_level_m).collect();
+        let free_albedo = core::array::from_fn(|k| {
+            (0..n)
+                .map(|i| params.free_albedo(ocean[i], zenith_cosine[k][i]))
+                .collect()
+        });
         let heat_capacity_j_m2_k: Vec<f64> = ocean
             .iter()
             .map(|&o| {
@@ -654,7 +749,7 @@ impl EnergyBalance {
             areas_sr,
             heat_capacity_j_m2_k,
             ocean,
-            sin_lat: grid.positions().iter().map(|p| p.z).collect(),
+            free_albedo,
             elevation_m,
             step,
             drift_weight,
@@ -715,9 +810,10 @@ impl EnergyBalance {
         &self.areas_sr
     }
 
-    /// The sine of each cell's latitude.
-    pub(crate) fn sin_lat(&self) -> &[f64] {
-        &self.sin_lat
+    /// The ice-free albedo of each cell in month `month` (0 to 11), at the
+    /// month's mean cosine of the zenith angle.
+    pub fn free_albedos(&self, month: usize) -> &[f64] {
+        &self.free_albedo[month]
     }
 
     /// The Laplacian of the grid.
@@ -758,26 +854,60 @@ impl EnergyBalance {
             .collect()
     }
 
-    /// The albedo of each cell at the sea-level temperatures `sea_level_k`.
-    pub fn albedos(&self, sea_level_k: &[f64]) -> Vec<f64> {
+    /// The albedo of each cell in month `month` (0 to 11) at the sea-level
+    /// temperatures `sea_level_k`: `(1 − f) α_free + f α_ice` with the
+    /// month's ice-free albedo and the ice fraction of the surface
+    /// temperature ([`EnergyBalanceParams::albedo`]).
+    pub fn albedos(&self, month: usize, sea_level_k: &[f64]) -> Vec<f64> {
         let surface = self.surface_temperature_k(sea_level_k);
-        (0..self.len())
-            .map(|i| {
-                self.params
-                    .albedo(self.ocean[i], self.sin_lat[i], surface[i])
+        let p = &self.params;
+        self.free_albedo[month]
+            .iter()
+            .zip(&surface)
+            .map(|(&free, &t)| {
+                let f = p.ice_fraction(t);
+                (1.0 - f) * free + f * p.ice_albedo
             })
             .collect()
     }
 
+    /// The annual sunlight of each cell under the monthly insolation
+    /// `insolation_w_m2` (W/m²): the mean over the months of `Q_k (1 −
+    /// α_free,k)`, what an ice-free cell absorbs, and of `Q_k (α_ice −
+    /// α_free,k)`, what full snow and ice take from it, so that a cell
+    /// under the ice fraction `f` absorbs the first less `f` times the
+    /// second (the warm starts' annual balance, module documentation, "The
+    /// periodic state").
+    pub(crate) fn annual_sunlight_w_m2(
+        &self,
+        insolation_w_m2: &[Vec<f64>; MONTHS],
+    ) -> (Vec<f64>, Vec<f64>) {
+        let n = self.len();
+        let ice = self.params.ice_albedo;
+        let (mut free, mut lost) = (vec![0.0; n], vec![0.0; n]);
+        for (q, albedo) in insolation_w_m2.iter().zip(&self.free_albedo) {
+            for i in 0..n {
+                free[i] += q[i] * (1.0 - albedo[i]);
+                lost[i] += q[i] * (ice - albedo[i]);
+            }
+        }
+        let months = MONTHS as f64;
+        (
+            free.iter().map(|s| s / months).collect(),
+            lost.iter().map(|s| s / months).collect(),
+        )
+    }
+
     /// The warmest annual-mean steady state (K, sea level): the largest
-    /// solution of `(B a + D L) T = a (Q̄ (1 − α(T)) − A + B T₀)`, with `Q̄`
-    /// the mean of the twelve months of `insolation_w_m2` (W/m², one `Vec`
-    /// per month, cells in index order) and `α(T)` the albedo of each cell
-    /// at its surface temperature.
+    /// solution of `(B a + D L) T = a (S(T) − A + B T₀)`, with `S(T)` the
+    /// mean over the twelve months of `insolation_w_m2` (W/m², one `Vec`
+    /// per month, cells in index order) of `Q_k (1 − α_k)`, `α_k` the
+    /// albedo of the month's ice-free albedo and of the ice fraction at
+    /// the cell's annual surface temperature.
     ///
     /// First the ice-free state, with `α_free` everywhere, started from
-    /// each cell's own balance `T₀ + (Q̄ (1 − α_free) − A) / B`; then the
-    /// iteration `T ← (B a + D L)⁻¹ a (Q̄ (1 − α(T)) − A + B T₀)`, each
+    /// each cell's own balance `T₀ + (S_free − A) / B`; then the
+    /// iteration `T ← (B a + D L)⁻¹ a (S(T) − A + B T₀)`, each
     /// solve started from the last state, until no cell changes by more
     /// than [`PERIODIC_TOLERANCE_K`] or after [`WARM_START_ITERATIONS`]
     /// solves. The map is monotone (the albedo falls as the temperature
@@ -800,18 +930,11 @@ impl EnergyBalance {
         let p = &self.params;
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
         let n = self.len();
-        let mut mean_w_m2 = Vec::with_capacity(n);
+        let (free_w_m2, lost_w_m2) = self.annual_sunlight_w_m2(insolation_w_m2);
         let mut rhs = Vec::with_capacity(n);
         let mut temperature_k = Vec::with_capacity(n);
-        for i in 0..n {
-            let mut sum = 0.0;
-            for month in insolation_w_m2 {
-                sum += month[i];
-            }
-            let mean = sum / MONTHS as f64;
-            let absorbed = mean * (1.0 - p.free_albedo(self.ocean[i], self.sin_lat[i]));
-            mean_w_m2.push(mean);
-            rhs.push(self.areas_sr[i] * (absorbed - a + b * ZERO_CELSIUS_K));
+        for (&absorbed, &area) in free_w_m2.iter().zip(&self.areas_sr) {
+            rhs.push(area * (absorbed - a + b * ZERO_CELSIUS_K));
             temperature_k.push(ZERO_CELSIUS_K + (absorbed - a) / b);
         }
         let solve = |rhs: &[f64], values: &mut [f64]| {
@@ -826,9 +949,9 @@ impl EnergyBalance {
         };
         solve(&rhs, &mut temperature_k);
         for _ in 0..WARM_START_ITERATIONS {
-            let albedos = self.albedos(&temperature_k);
+            let surface = self.surface_temperature_k(&temperature_k);
             for i in 0..n {
-                let absorbed = mean_w_m2[i] * (1.0 - albedos[i]);
+                let absorbed = free_w_m2[i] - p.ice_fraction(surface[i]) * lost_w_m2[i];
                 rhs[i] = self.areas_sr[i] * (absorbed - a + b * ZERO_CELSIUS_K);
             }
             let before = temperature_k.clone();
@@ -842,19 +965,26 @@ impl EnergyBalance {
         temperature_k
     }
 
-    /// One sub-step from the sea-level temperatures `temperature_k` (K),
-    /// in place, under the insolation `insolation_w_m2` (W/m², one per
-    /// cell): the backward-Euler step of the module documentation ("Time
-    /// stepping"), with the albedo of the temperatures at its start. Returns
-    /// the global energy budget of the step.
-    pub fn substep(&self, temperature_k: &mut [f64], insolation_w_m2: &[f64]) -> Budget {
+    /// One sub-step of month `month` (0 to 11) from the sea-level
+    /// temperatures `temperature_k` (K), in place, under the insolation
+    /// `insolation_w_m2` (W/m², one per cell): the backward-Euler step of
+    /// the module documentation ("Time stepping"), with the month's albedo
+    /// at the temperatures at its start. Returns the global energy budget
+    /// of the step.
+    pub fn substep(
+        &self,
+        month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+    ) -> Budget {
         let n = self.len();
+        assert!(month < MONTHS, "a month is 0 to 11, got {month}");
         assert_eq!(temperature_k.len(), n, "one temperature per cell");
         assert_eq!(insolation_w_m2.len(), n, "one insolation per cell");
         let p = &self.params;
         let (a, b) = (p.olr_at_freezing_w_m2, p.olr_slope_w_m2_k);
         let dt = self.substep_s;
-        let albedos = self.albedos(temperature_k);
+        let albedos = self.albedos(month, temperature_k);
         let mut rhs = Vec::with_capacity(n);
         let mut absorbed = Vec::with_capacity(n);
         for i in 0..n {
@@ -892,15 +1022,20 @@ impl EnergyBalance {
         }
     }
 
-    /// One month of [`SUBSTEPS_PER_MONTH`] sub-steps from the sea-level
-    /// temperatures `temperature_k` (K), in place, under the monthly-mean
-    /// insolation `insolation_w_m2` (W/m², one per cell). Returns the
-    /// month's mean sea-level temperature (K): the trapezoidal mean of the
-    /// values at the ends of the sub-steps, the start included.
-    pub fn month(&self, temperature_k: &mut [f64], insolation_w_m2: &[f64]) -> Vec<f64> {
+    /// Month `month` (0 to 11) of [`SUBSTEPS_PER_MONTH`] sub-steps from the
+    /// sea-level temperatures `temperature_k` (K), in place, under the
+    /// monthly-mean insolation `insolation_w_m2` (W/m², one per cell).
+    /// Returns the month's mean sea-level temperature (K): the trapezoidal
+    /// mean of the values at the ends of the sub-steps, the start included.
+    pub fn month(
+        &self,
+        month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+    ) -> Vec<f64> {
         let mut sum: Vec<f64> = temperature_k.iter().map(|t| 0.5 * t).collect();
         for step in 0..SUBSTEPS_PER_MONTH {
-            self.substep(temperature_k, insolation_w_m2);
+            self.substep(month, temperature_k, insolation_w_m2);
             let weight = if step + 1 == SUBSTEPS_PER_MONTH {
                 0.5
             } else {
@@ -987,11 +1122,11 @@ impl EnergyBalance {
         let n = self.len();
         let mut sum = vec![0.0; n];
         let mut shifted = vec![0.0; n];
-        for (month, insolation) in means.iter().zip(insolation_w_m2) {
+        for (k, (month, insolation)) in means.iter().zip(insolation_w_m2).enumerate() {
             for i in 0..n {
                 shifted[i] = month[i] + shift_k[i];
             }
-            let albedos = self.albedos(&shifted);
+            let albedos = self.albedos(k, &shifted);
             for i in 0..n {
                 sum[i] += insolation[i] * (1.0 - albedos[i]);
             }
@@ -1103,11 +1238,11 @@ impl Seasons for EnergyBalance {
 
     fn step_month(
         &self,
-        _month: usize,
+        month: usize,
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
     ) -> Vec<f64> {
-        self.month(temperature_k, insolation_w_m2)
+        self.month(month, temperature_k, insolation_w_m2)
     }
 
     fn balance_year(
@@ -1274,6 +1409,7 @@ pub fn monthly_temperature(
         heights_m,
         sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(params, grid),
     );
     model.periodic_state(&monthly_insolation(params, grid))
 }

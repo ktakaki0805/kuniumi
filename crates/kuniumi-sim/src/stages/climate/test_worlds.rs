@@ -18,7 +18,7 @@ use kuniumi_world::{PlanetParams, Settings, World};
 use super::circulation::monthly_circulation;
 use super::coupling::{Coupled, coupled_sea_surface};
 use super::energy_balance::{EnergyBalance, EnergyBalanceParams, Temperature};
-use super::insolation::{MONTHS, monthly_insolation};
+use super::insolation::{MONTHS, monthly_insolation, monthly_zenith_cosine};
 use super::ocean::{OceanParams, monthly_wind_stress, ocean_currents};
 use super::sea_surface::{SeaSurfaceModel, SeaSurfaceParams, coastal_upwelling_m3_s};
 use crate::stages::crust::SURFACE_HEIGHT;
@@ -50,6 +50,7 @@ pub(crate) fn earth_run(cells: u32) -> Run {
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &world.grid),
     );
     let temperature = model.periodic_state(&monthly_insolation(&params, &world.grid));
     Run {
@@ -104,6 +105,7 @@ pub(crate) fn sea_model(
         heights,
         sea_level,
         params.orbital_period_s,
+        &monthly_zenith_cosine(params, grid),
     );
     let ocean_params = OceanParams::for_planet(params);
     let sea = SeaSurfaceParams::earth();

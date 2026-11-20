@@ -7,7 +7,8 @@
 //! ([`Orbit`], built from [`PlanetParams`]). It depends on the latitude
 //! only; [`monthly_insolation`] evaluates it for every cell of a grid. The
 //! energy balance of the Climate stage (ticket M4-02) takes it as its
-//! source; albedo and absorption are its business.
+//! source; albedo and absorption are its business, with the mean height of
+//! the star of each month from here ("The zenith angle", ticket M4-10).
 //!
 //! # Geometry
 //!
@@ -86,6 +87,32 @@
 //! 0.055 W/m² (ticket M4-01). The global annual mean is
 //! `S / (4 √(1 − e²))`, the annual mean of the flux at the planet's distance
 //! spread over its surface.
+//!
+//! # The zenith angle
+//!
+//! The albedo of the energy balance depends on how high the star stands
+//! (ticket M4-10), through the insolation-weighted mean cosine of its
+//! zenith angle: over a day,
+//!
+//! `μ̄ = ∫ cos² z dh / ∫ cos z dh = G / F`,
+//! `G = A² h₀ + 2AB sin h₀ + (B²/2)(h₀ + sin h₀ cos h₀)`,
+//!
+//! with `A = sin φ sin δ`, `B = cos φ cos δ` and `F` of "The daily mean"
+//! (`π A² + π B²/2` in polar day, 0 in polar night;
+//! [`daily_zenith_cosine`]): `π/4` at the equator on an equinox, `sin δ` at
+//! a pole in polar day. T. W. Cronin (2014, "On the choice of average
+//! solar zenith angle", J. Atmos. Sci. 71, 2994–3003) shows that this
+//! weighting, rather than the mean over the hours of daylight, gives a
+//! diurnally averaged model the sunlight that a diurnal cycle would
+//! absorb; for an albedo linear in `cos z` it gives it exactly. Over a
+//! month the days are weighted by their insolation, with the sub-steps of
+//! "Monthly means": `μ̄_k = Σ G / Σ F` over the month's sub-steps (Kepler's
+//! second law cancels `(a/r)²` from both), `+0.0` for a month of polar
+//! night throughout ([`MonthlyInsolation::zenith_cosines`],
+//! [`monthly_zenith_cosine`]). The midpoint rule's error is largest in a
+//! month whose light starts or ends within it: against time integrals,
+//! within 1.4 × 10⁻⁵ for Earth and 7.5 × 10⁻⁵ on an orbit of e = 0.5 and
+//! ε = 60° (ticket M4-10).
 //!
 //! Every function is deterministic (transcendental functions from
 //! [`kuniumi_math::det`], sums in a fixed order) and has no state.
@@ -243,6 +270,50 @@ fn day_integral(a: f64, b: f64) -> f64 {
     if f > 0.0 { f } else { 0.0 }
 }
 
+/// The day integrals of `cos z` and of `cos² z` over the hour angle, from
+/// noon to sunset, `(F, G)` with `A = sin φ sin δ` and `B = cos φ cos δ`
+/// as in [`day_integral`]: `F` by the same operations, and
+/// `G = A² h₀ + 2AB sin h₀ + (B²/2)(h₀ + sin h₀ cos h₀)`, the integral of
+/// `(A + B cos h)²` from 0 to `h₀` (module documentation, "The zenith
+/// angle"): `π A² + π B² / 2` in polar day, `+0.0` in polar night, and kept
+/// from falling below 0 as `F` is.
+fn day_integrals(a: f64, b: f64) -> (f64, f64) {
+    if -a >= b {
+        return (0.0, 0.0);
+    }
+    if a >= b {
+        return (PI * a, PI * a * a + 0.5 * PI * b * b);
+    }
+    let c = -a / b;
+    let h0 = det::acos(c);
+    let s = det::sqrt((1.0 - c) * (1.0 + c));
+    let f = h0 * a + b * s;
+    let g = a * a * h0 + 2.0 * a * b * s + 0.5 * b * b * (h0 + s * c);
+    debug_assert!(!f.is_nan() && !g.is_nan(), "A = {a}, B = {b}");
+    (if f > 0.0 { f } else { 0.0 }, if g > 0.0 { g } else { 0.0 })
+}
+
+/// The insolation-weighted mean cosine of the star's zenith angle over a
+/// day at latitude `φ` (rad) when the star stands at declination `δ`
+/// (rad): `G / F` of the module documentation ("The zenith angle"), in
+/// `[0, 1]`; exactly `+0.0` in polar night, where no light falls.
+pub fn daily_zenith_cosine(latitude_rad: f64, declination_rad: f64) -> f64 {
+    let (sin_lat, cos_lat) = det::sin_cos(latitude_rad);
+    let (sin_dec, cos_dec) = det::sin_cos(declination_rad);
+    let (f, g) = day_integrals(sin_lat * sin_dec, cos_lat * cos_dec);
+    zenith_cosine(f, g)
+}
+
+/// `G / F` clamped to `[0, 1]`, `+0.0` where `F` is 0 (no light).
+fn zenith_cosine(f: f64, g: f64) -> f64 {
+    if f > 0.0 {
+        let mu = g / f;
+        if mu > 1.0 { 1.0 } else { mu }
+    } else {
+        0.0
+    }
+}
+
 /// The sub-steps of each month of an [`Orbit`], computed once and applied
 /// at any latitude (module documentation, "Monthly means").
 #[derive(Clone, Debug)]
@@ -320,6 +391,40 @@ impl MonthlyInsolation {
         let (sin_lat, cos_lat) = det::sin_cos(latitude_rad);
         self.at(sin_lat, cos_lat)
     }
+
+    /// The insolation-weighted mean cosine of the star's zenith angle in
+    /// each month, months 1 to 12, at the latitude whose sine and cosine
+    /// (not negative) are given: `Σ G / Σ F` over the month's sub-steps
+    /// (module documentation, "The zenith angle"), in `[0, 1]`; exactly
+    /// `+0.0` for a month of polar night throughout.
+    pub fn zenith_cosines(&self, sin_lat: f64, cos_lat: f64) -> [f64; MONTHS] {
+        core::array::from_fn(|k| {
+            let (mut sum_f, mut sum_g) = (0.0, 0.0);
+            for &(sin_dec, cos_dec) in &self.declinations[self.offsets[k]..self.offsets[k + 1]] {
+                let (f, g) = day_integrals(sin_lat * sin_dec, cos_lat * cos_dec);
+                sum_f += f;
+                sum_g += g;
+            }
+            zenith_cosine(sum_f, sum_g)
+        })
+    }
+}
+
+/// The insolation-weighted mean cosine of the star's zenith angle in each
+/// month (module documentation, "The zenith angle") at every cell of
+/// `grid` on the planet `params` (valid): one `Vec` per month, months 1 to
+/// 12, cells in index order, with the latitudes of [`monthly_insolation`].
+pub fn monthly_zenith_cosine(params: &PlanetParams, grid: &SphereGrid) -> [Vec<f64>; MONTHS] {
+    let table = MonthlyInsolation::new(&Orbit::of(params));
+    let mut months: [Vec<f64>; MONTHS] = core::array::from_fn(|_| Vec::with_capacity(grid.len()));
+    for p in grid.positions() {
+        let values = table.zenith_cosines(p.z, det::sqrt(p.x * p.x + p.y * p.y));
+        for (month, value) in months.iter_mut().zip(values) {
+            debug_assert!((0.0..=1.0).contains(&value), "{value}");
+            month.push(value);
+        }
+    }
+    months
 }
 
 /// The monthly-mean insolation (W/m²) of every cell of `grid` on the

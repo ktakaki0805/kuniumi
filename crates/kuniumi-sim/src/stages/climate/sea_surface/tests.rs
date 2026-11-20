@@ -39,6 +39,7 @@ use kuniumi_world::{PlanetParams, Settings};
 use super::*;
 use crate::stages::climate::circulation::monthly_circulation;
 use crate::stages::climate::energy_balance::monthly_temperature;
+use crate::stages::climate::insolation::monthly_zenith_cosine;
 use crate::stages::climate::ocean::{OceanModel, ocean_currents};
 use crate::stages::climate::test_worlds::{
     earth_10k, earth_reference, earth_sea_10k, earth_sea_reference, sea_model,
@@ -179,7 +180,7 @@ fn the_parameters() {
     // The energy balance alone keeps its own values.
     assert_same(
         EnergyBalanceParams::for_planet(&slow).diffusion_w_m2_k,
-        4.0 * 0.583,
+        4.0 * 0.579,
     );
 }
 
@@ -403,7 +404,14 @@ fn closed_basin() -> (Vec<bool>, SeaSurfaceModel, OceanCurrents) {
         diffusion_w_m2_k: 0.0,
         ..EnergyBalanceParams::earth()
     };
-    let balance = EnergyBalance::new(&silent, g, &heights_of(&ocean), 0.0, earth.orbital_period_s);
+    let balance = EnergyBalance::new(
+        &silent,
+        g,
+        &heights_of(&ocean),
+        0.0,
+        earth.orbital_period_s,
+        &monthly_zenith_cosine(&earth, g),
+    );
     let model = SeaSurfaceModel::new(
         balance,
         &SeaSurfaceParams::earth(),
@@ -575,6 +583,7 @@ fn upwelling_cools_its_cell_and_returns_the_heat_by_area() {
         &heights_of(&ocean),
         0.0,
         earth.orbital_period_s,
+        &monthly_zenith_cosine(&earth, &grid),
     );
     let c = grid.neighbors(0)[0] as usize;
     let mut upwelling = no_upwelling(n);
@@ -653,6 +662,7 @@ fn without_currents_it_is_the_energy_balance() {
         heights,
         world.sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(&params, &world.grid),
     );
     let insolation = monthly_insolation(&params, &world.grid);
     let alone = balance.periodic_state(&insolation);
@@ -784,8 +794,10 @@ fn earth_stays_calibrated() {
     // currents (`coupling::tests::earth_is_calibrated_with_its_coupled_climate`);
     // here, with the winds and currents of the energy balance alone (now
     // with its thermal anomaly smoothed), the sea surface stays within 1 K
-    // of the two targets and every band within 5 K (ticket M4-17: 287.72 K,
-    // −28.74 K, 3.51 K; 287.99 K and −27.97 K before the smoothing). On
+    // of the two targets and every band within 5 K (ticket M4-10, with the
+    // zenith angle law and the A and D fitted again: 287.72 K, −28.75 K,
+    // 3.45 K; ticket M4-17: 287.72 K, −28.74 K, 3.51 K; 287.99 K and
+    // −27.97 K before the smoothing). On
     // the 10,000-cell world of debug builds (another world) within 2 K and
     // 0.5 K of the energy balance alone on the same world (prototype of
     // ticket M4-05: 1.3 K and 0.25 K).
@@ -1178,7 +1190,7 @@ fn a_substep_matches_the_jacobi_solver() {
     let capacities = model.balance().heat_capacity_j_m2_k();
     let u = &model.upwelling_coupling[6];
     let t_fz = model.params().freezing_temperature_k;
-    let albedos = model.balance().albedos(&start);
+    let albedos = model.balance().albedos(6, &start);
     let matrix = model.matrix(&model.step_mass, u);
     let mut z = vec![0.0; n];
     crate::sparse::bicgstab(&matrix, &model.share, 1e-12, SOLVER_MAX_ITERATIONS, &mut z);
@@ -1282,4 +1294,7 @@ fn golden_fingerprint_of_earth_sea_surface() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
-const GOLDEN_FINGERPRINT: u64 = 0xAB61_A6F9_838F_1609;
+/// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
+/// world-breaking) after the other tests passed and the images of out/M4-10
+/// were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0x4DD4_C2E1_3E10_F277;

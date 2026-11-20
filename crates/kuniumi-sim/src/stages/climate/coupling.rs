@@ -141,7 +141,12 @@
 //! (1.4 × 10⁻³ K) and Earth at e = 0.99; at seed 2 those two. On 10,000
 //! cells (seed 3) 133 settle (122 before, 11 of the 13 left planets whose
 //! thermal equator jumped), all but the same two, in 1,310 years summed
-//! (2,524 before). Those that do not settle keep their last year, which
+//! (2,524 before). Since the zenith angle law of the albedo (ticket M4-10)
+//! the thin, fast planet at obliquity 90° and e = 0.99 under 2,500 W/m²
+//! does not settle on 1,000 cells at seed 3 either: its monthly means reach 14,000 K and
+//! its winds 12,000 m/s, and relaxed from year 4 it still changes by 65 to
+//! 101 K a year after 100 to 400 years (follow-up ticket M4-26). Those
+//! that do not settle keep their last year, which
 //! [`super::Climate::warnings`] reports; every value stays finite.
 //!
 //! # Cost
@@ -181,7 +186,7 @@ use super::energy_balance::{
     EnergyBalance, MAX_YEARS, PERIODIC_TOLERANCE_K, Seasons, StepDamping, Temperature,
     largest_change_k,
 };
-use super::insolation::{MONTHS, monthly_insolation};
+use super::insolation::{MONTHS, monthly_insolation, monthly_zenith_cosine};
 use super::ocean::{
     OceanCurrents, OceanModel, OceanParams, annual_wind_stress, monthly_wind_stress,
 };
@@ -317,6 +322,7 @@ pub(crate) fn coupled_run(
         heights_m,
         sea_level_m,
         params.orbital_period_s,
+        &monthly_zenith_cosine(params, grid),
     );
     let ocean = balance.ocean().to_vec();
     let ocean_params = OceanParams::for_planet(params);

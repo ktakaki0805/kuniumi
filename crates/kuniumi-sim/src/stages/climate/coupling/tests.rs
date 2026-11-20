@@ -247,12 +247,16 @@ fn earth_is_calibrated_with_its_coupled_climate() {
     // water), with their parameters unchanged (measured: 288.011 K,
     // −27.954 K, the worst band 4.66 K, 1.090 m/yr, 24.9 kg/m²; with the
     // thermal equator of ticket M4-03, before ticket M4-21: 288.016 K,
-    // −27.939 K, 4.68 K, 1.090 m/yr). Debug builds, the 10,000-cell world
-    // (another world, as M4-05's and M4-06's tests): within 2 K and 0.5 K of
-    // the energy balance alone, 0.8–1.1 m/yr and 20–28 kg/m² (measured:
-    // 289.03 K and −24.51 K against 288.70 K and −25.80 K, 0.963 m/yr,
-    // 24.0 kg/m²; before ticket M4-21 289.02 K, −24.54 K, 0.958 m/yr,
-    // 23.9 kg/m²).
+    // −27.939 K, 4.68 K, 1.090 m/yr). Since the zenith angle law of the
+    // albedo (ticket M4-10), with A and D fitted again on this state:
+    // 287.991 K, −27.973 K, 4.44 K, 1.096 m/yr, 24.9 kg/m² (with the A and
+    // D before, 288.284 K, −27.562 K and 5.10 K). Debug builds, the
+    // 10,000-cell world (another world, as M4-05's and M4-06's tests):
+    // within 2 K and 0.5 K of the energy balance alone, 0.8–1.1 m/yr and
+    // 20–28 kg/m² (measured: 288.92 K and −24.66 K against 288.70 K and
+    // −25.83 K, 0.956 m/yr, 23.9 kg/m²; before ticket M4-10 289.03 K
+    // and −24.51 K against 288.70 K and −25.80 K, 0.963 m/yr, 24.0 kg/m²;
+    // before ticket M4-21 289.02 K, −24.54 K, 0.958 m/yr, 23.9 kg/m²).
     let run = earth_reference();
     let coupled = earth_coupled_reference();
     let params = PlanetParams::earth();
@@ -454,7 +458,10 @@ fn golden_fingerprint_of_a_relaxed_loop() {
 }
 
 /// The fingerprint of `golden_fingerprint_of_a_relaxed_loop`.
-const RELAXED_GOLDEN_FINGERPRINT: u64 = 0xB1B8_3871_864B_8328;
+/// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
+/// world-breaking) after the other tests passed and the images of out/M4-10
+/// were viewed.
+const RELAXED_GOLDEN_FINGERPRINT: u64 = 0x5D11_FE79_8A27_CC94;
 
 #[test]
 fn an_oscillating_loop_settles_relaxed() {
@@ -491,8 +498,8 @@ fn an_oscillating_loop_settles_relaxed() {
     // year before (the change of year 35 from year 34, 1.2 × 10⁻⁴ K, from a
     // scratch run of the loop stopped after 34 years) and its residual from
     // the drive: the residual, exactly (review of ticket M4-20; recorded
-    // again in ticket M4-21).
-    assert_eq!(t.change_k.to_bits(), 8.088448848582175e-4_f64.to_bits());
+    // again in tickets M4-21 and M4-10).
+    assert_eq!(t.change_k.to_bits(), 8.144889403922662e-4_f64.to_bits());
     for month in t.sea_level_k.iter().chain(&t.surface_k) {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
     }

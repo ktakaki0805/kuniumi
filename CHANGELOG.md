@@ -617,6 +617,13 @@ section: every change after which an existing seed produces a different world
 - `moisture::BALANCE_MASS` (10⁻⁹), the mass of the year's operator of the
   moisture's balance step, and `tools/moisture_step_reference.py`, the
   mpmath reference values of the step on a cell alone (M4-22).
+- `insolation::daily_zenith_cosine`, `MonthlyInsolation::zenith_cosines` and
+  `insolation::monthly_zenith_cosine`: the insolation-weighted mean cosine
+  of the sun's zenith angle by day, `∫ cos² z dh / ∫ cos z dh`, and by
+  month, the days weighted by their insolation (Cronin 2014), 0 in polar
+  night; `EnergyBalance::free_albedos`, the ice-free albedo of each cell
+  in a month; and `tools/zenith_albedo_reference.py`, the mpmath reference
+  values of the cosines and the constants of the zenith angle law (M4-10).
 
 ### Changed
 
@@ -1028,6 +1035,40 @@ section: every change after which an existing seed produces a different world
   steps: 26 to 38 % more (on 650,000 cells from 103.5 to 141.9 s). The CLI's
   test of the warnings takes Earth at e = 0.99, whose coupled sea surface
   does not settle, as no dry planet measured on 1,000 cells warns any more.
+- The ice-free albedo of the energy balance rises with the sun's zenith
+  angle of each latitude and month instead of with `P₂(sin φ)`
+  (`energy_balance`, "The zenith angle law"; M4-10):
+  `α_free = α_type + 0.338 (0.644 − μ̄)`, `μ̄` the month's
+  insolation-weighted cosine, linear in the cosine as the two-stream
+  reflectance of a thick cloud (Shettle & Weinman 1970; Meador & Weaver
+  1980; Cess 1976 for Earth's clouds), so that the month's absorbed
+  sunlight is exactly the mean of the instantaneous one. `b` and `μ_r`
+  keep the global and `P₂` moments of Earth's annual ice-free absorbed
+  sunlight of the `P₂` form (within 5 × 10⁻⁵); every 10° band is within
+  0.0045 of it equatorward of 60°, the caps up to 0.028 brighter. At
+  obliquity 90° the poles' ice-free ocean co-albedo is 0.785 instead of
+  0.657 and the equator's 0.728 instead of 0.777: the poles absorb 1.69
+  times the equator's sunlight, their insolation being 1.57 times (1.33
+  with the `P₂` form). `EnergyBalance::new` takes the monthly cosines;
+  `EnergyBalance::substep`, `month` and `albedos` take the month;
+  `EnergyBalanceParams::albedo_p2` and `ALBEDO_P2` become
+  `albedo_zenith_slope`, `reference_zenith_cosine`, `ALBEDO_ZENITH_SLOPE`
+  and `REFERENCE_ZENITH_COSINE`; `free_albedo` and `albedo` take the
+  cosine instead of the sine of the latitude.
+- Earth's `A` and `D⊕` fitted again with the zenith angle law, on the same
+  40,000-cell world and to the same targets (M4-10): the energy balance
+  alone 202.8 W/m² and 0.579 W m⁻² K⁻¹ (202.7 and 0.583 before; 288.04 K,
+  `P₂` −27.97 K, every band within 3.9 K), the sea surface with currents
+  202.8 and 0.502 (202.6 and 0.508; its coupled state 287.99 K, −27.97 K,
+  within 4.5 K, 1.096 m/yr of precipitation). With the old values the
+  coupled state's worst band was 5.10 K, beyond the 5 K of M4-02.
+- The bounds tests (`lib.rs`): corner 16 now warns of the energy balance
+  without currents (its balance step cycles on mountains that enter the
+  snow ramp in summer; follow-up M4-24), corner 105 of its currents (the
+  unpreconditioned BiCGSTAB of its all-ocean basin stagnates at
+  2.1 × 10⁻³; follow-up M4-25) and the orbit planet 0, at 14,000 K, of
+  its coupled sea surface (follow-up M4-26); the check of the warnings
+  knows the currents' warning (M4-10).
 
 ### Removed
 
@@ -1129,6 +1170,18 @@ section: every change after which an existing seed produces a different world
   any more (M4-15).
 
 ### World-breaking
+
+- M4-10: every world's climate changes, its ice-free albedo following the
+  zenith angle of the sun, with `A` and `D⊕` fitted again: on Earth
+  (seed 1, 40,000 cells) the coupled state's zonal annual surface
+  temperature by −0.45 to +0.15 K, its global mean from 288.01 to
+  287.99 K and its planetary albedo from 0.3006 to 0.3001; at obliquity
+  90° the poles warm by about 11 K and the equator cools by about 2 K, at
+  60° by about 7 and 2 K. The golden values of the energy balance, the
+  circulation (with and without the smoothing), the currents, the sea
+  surface, the moisture, the relaxed loop, the Climate stage and the CLI's
+  world's 30 climate fields are recorded again; the insolation's, the
+  other fields, the sea level and the erosion's are unchanged.
 
 - M4-23: the moisture and precipitation of the planets on which the
   Newton–Krylov step iterates change: those that did not settle before

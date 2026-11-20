@@ -25,6 +25,7 @@ tools/.venv/bin/pip install -r tools/requirements.txt
 | `insolation_reference.py` | Daily, monthly and annual means of the insolation for Earth and an eccentric orbit, and the dates of Earth's perihelion, equinoxes and solstices, by integration in time with Kepler's equation and over the hour angle (mpmath), quoted in the tests of `kuniumi_sim::stages::climate::insolation` | M4-01 |
 | `thermal_equator_reference.py` | The warm centre of the thermal equator (the centre of the latitudes within 2 K of the warmest, ±60°) of zonally symmetric temperatures: single peaks and two competing peaks, with the largest step of the centre (mpmath), quoted in the tests of `kuniumi_sim::stages::climate::circulation` | M4-21 |
 | `moisture_step_reference.py` | The periodic state of a still ocean planet whose cells never rain (each alone and linear) by the recurrence of the moisture's sub-steps and its balance step, with the years, the last change and the monthly vapour, and the factor by which a year and its step leave an error of a cell alone (mpmath), quoted in the tests and the documentation of `kuniumi_sim::stages::climate::moisture` | M4-22 |
+| `zenith_albedo_reference.py` | The insolation-weighted cosine of the zenith angle by day (quadrature over the hour angle) and by month (time integrals with Kepler's equation, the orbit of `insolation_reference.py`), the constants `b` and `μ_r` of the zenith angle law of the albedo from the moments of North & Coakley's `P₂` form on Earth's obliquity, the bands of both and the values at obliquity 90° (mpmath), quoted in the tests and the documentation of `kuniumi_sim::stages::climate::insolation` and `energy_balance` | M4-10 |
 | `font8x8_table.py` | The glyph tables of the viewer's bitmap font (`crates/kuniumi-viewer/src/font.rs`) from font8x8 (downloaded at a pinned commit, SHA-256 checked), and the hash of the whole table that its test quotes; standard library only | MV-06 |
 
 Regenerate and compare with the committed file:
@@ -71,6 +72,13 @@ Print the reference values of the thermal equator's tests (about 5 s):
 
 ```sh
 tools/.venv/bin/python tools/thermal_equator_reference.py
+```
+
+Print the reference values and the constants of the zenith angle law of the
+albedo (one to three minutes):
+
+```sh
+tools/.venv/bin/python tools/zenith_albedo_reference.py
 ```
 
 Print the reference metrics of the golden world and compare them with its

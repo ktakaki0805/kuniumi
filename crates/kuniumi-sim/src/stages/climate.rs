@@ -16,10 +16,12 @@
 //! model (twelve equal months, the northern spring equinox at 79.5/365 of
 //! the year; ticket M4-01); and the monthly sea-level and surface
 //! temperature from the seasonal energy balance run to a periodic state,
-//! [`energy_balance::monthly_temperature`] (ticket M4-02); and the monthly
-//! sea-level pressure and surface winds of the pressure belts, whose cells
-//! follow the rotation rate, and of the thermal lows and highs of the
-//! land–sea contrast, [`circulation::monthly_circulation`] (ticket M4-03);
+//! [`energy_balance::monthly_temperature`] (ticket M4-02), its ice-free
+//! albedo rising with the insolation-weighted zenith angle of the sun of
+//! each month ([`insolation::monthly_zenith_cosine`], ticket M4-10); and
+//! the monthly sea-level pressure and surface winds of the pressure belts,
+//! whose cells follow the rotation rate, and of the thermal lows and highs
+//! of the land–sea contrast, [`circulation::monthly_circulation`] (ticket M4-03);
 //! and the wind-driven ocean currents of the annual-mean wind stress, a
 //! Stommel model per ocean basin with the island constants of its land
 //! masses, [`ocean::ocean_currents`] (ticket M4-04); and the monthly

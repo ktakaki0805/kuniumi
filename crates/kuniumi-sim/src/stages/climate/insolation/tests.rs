@@ -14,6 +14,15 @@
 //! - criterion 3: `monthly_means_match_the_time_integral`,
 //!   `earth_calendar`;
 //! - criterion 5: `golden_fingerprint_of_earth_insolation`.
+//!
+//! Ticket M4-10 (the insolation-weighted cosine of the zenith angle, with
+//! reference values from `tools/zenith_albedo_reference.py`, which
+//! integrates `cos² z` and `cos z` over the hour angle numerically and in
+//! time with Kepler's equation): criterion 3,
+//! `the_daily_zenith_cosine_is_the_insolation_weighted_mean`,
+//! `monthly_zenith_cosines_match_the_time_integral`,
+//! `zenith_cosines_lie_in_the_unit_interval`, and the unchanged
+//! `golden_fingerprint_of_earth_insolation`.
 
 use core::f64::consts::PI;
 
@@ -764,6 +773,220 @@ fn the_grid_takes_each_cell_latitude() {
                 );
                 assert!(v.is_finite() && v.is_sign_positive(), "cell {i}: {v:e}");
                 assert_near(v, by_latitude[k], 1e-12 * v.max(1.0), "by latitude");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The zenith angle (ticket M4-10).
+
+#[test]
+fn the_daily_zenith_cosine_is_the_insolation_weighted_mean() {
+    // The script's values (tools/zenith_albedo_reference.py): the integral
+    // of cos² z over the integral of cos z, both over the hour angles of
+    // daylight by numerical quadrature (latitude, declination).
+    for (lat, dec, expected) in [
+        (0.0, 0.0, PI / 4.0),
+        (45.0, 10.0, 0.640_420_804_134_406_4),
+        (70.0, 20.0, 0.482_090_707_264_904_5),
+        (-30.0, 20.0, 0.507_255_849_813_253_7),
+        (89.0, 1.5, 0.031_987_698_496_381_09),
+        (60.0, -29.5, 0.006_979_220_432_304_002),
+        (-80.0, -15.0, 0.310_075_723_451_189),
+        (90.0, 23.44, 0.397_788_507_397_949_7),
+        (23.44, 23.44, 0.781_555_083_462_649_2),
+    ] {
+        let mu = daily_zenith_cosine(deg_to_rad(lat), deg_to_rad(dec));
+        assert_near(mu, expected, 1e-12, &format!("{lat}°, δ = {dec}°"));
+    }
+    // Hand values: π/4 at the equator on an equinox (∫cos² / ∫cos over
+    // [−π/2, π/2]); sin δ at a pole in polar day, where the star circles at
+    // a constant height; exactly +0 in polar night.
+    assert_near(daily_zenith_cosine(0.0, 0.0), PI / 4.0, 1e-15, "π/4");
+    for dec in [0.1, 0.4, 1.0, 1.5] {
+        let sin = kuniumi_math::det::sin(dec);
+        assert_near(daily_zenith_cosine(0.5 * PI, dec), sin, 1e-15, "sin δ");
+        assert_near(daily_zenith_cosine(-0.5 * PI, -dec), sin, 1e-15, "south");
+    }
+    for (lat, dec) in [(90.0, -0.1), (80.0, -15.0), (-70.0, 25.0), (60.0, -30.0)] {
+        let mu = daily_zenith_cosine(deg_to_rad(lat), deg_to_rad(dec));
+        assert_eq!(mu.to_bits(), 0.0_f64.to_bits(), "{lat}°, δ = {dec}°");
+    }
+}
+
+#[test]
+fn monthly_zenith_cosines_match_the_time_integral() {
+    // The script's monthly values: the ratio of the time integrals over the
+    // month of (a/r)² ∫cos² z dh and (a/r)² ∫cos z dh, with Kepler's
+    // equation solved at each instant (latitude, month, cosine). With the
+    // sub-steps of 0.5° of the star's longitude the cosine is within
+    // 10⁻⁴, and its error times the month's insolation, by which the
+    // absorbed sunlight moves `b` times, within 0.01 W/m² (as the
+    // insolation's own tolerance is 0.02 W/m²): the largest errors are in
+    // months whose light ends or starts within the month, where the
+    // midpoint rule meets the kink of polar night (measured: Earth
+    // 1.4 × 10⁻⁵; the eccentric orbit 7.5 × 10⁻⁵ at 90° N in month 6,
+    // under 5.6 W/m²).
+    let earth_values = [
+        (90.0, 4, 0.191_724_780_338_913_34),
+        (90.0, 6, 0.392_303_078_802_051_84),
+        (90.0, 7, 0.360_131_082_861_331_3),
+        (60.0, 1, 0.132_220_741_017_593_69),
+        (60.0, 4, 0.504_380_397_601_734),
+        (60.0, 6, 0.612_078_284_339_436_3),
+        (60.0, 7, 0.597_369_712_488_162_4),
+        (60.0, 10, 0.293_758_676_911_498_3),
+        (60.0, 12, 0.097_592_111_531_577_39),
+        (0.0, 1, 0.733_747_648_763_331_8),
+        (0.0, 4, 0.772_092_444_269_475_6),
+        (0.0, 6, 0.722_456_066_739_061_4),
+        (0.0, 7, 0.732_980_103_461_757_8),
+        (0.0, 10, 0.774_950_960_328_689_4),
+        (0.0, 12, 0.722_881_210_762_307_7),
+        (-45.0, 1, 0.708_882_530_478_664_3),
+        (-45.0, 4, 0.454_053_449_711_773_7),
+        (-45.0, 6, 0.295_814_792_082_228_2),
+        (-45.0, 7, 0.323_329_456_869_769_28),
+        (-45.0, 10, 0.632_106_257_180_197_5),
+        (-45.0, 12, 0.719_358_344_805_752_7),
+        (-80.0, 1, 0.389_891_271_986_586),
+        (-80.0, 4, 0.053_264_603_376_108_49),
+        (-80.0, 10, 0.252_386_497_670_139_7),
+        (-80.0, 12, 0.418_297_878_592_962_7),
+    ];
+    let eccentric_values = [
+        (90.0, 4, 0.768_637_402_507_665_9),
+        (90.0, 6, 0.037_769_552_746_872_987),
+        (60.0, 4, 0.747_061_448_328_246_5),
+        (60.0, 6, 0.326_777_974_513_658_9),
+        (60.0, 7, 0.106_408_061_925_406_13),
+        (0.0, 1, 0.472_398_712_017_132_5),
+        (0.0, 4, 0.520_815_154_561_008_1),
+        (0.0, 6, 0.772_985_246_024_659_5),
+        (0.0, 7, 0.702_513_329_087_101_5),
+        (0.0, 10, 0.452_784_234_284_887_8),
+        (0.0, 12, 0.401_844_966_673_745),
+        (-45.0, 1, 0.725_317_500_662_840_2),
+        (-45.0, 4, 0.193_641_730_611_715_6),
+        (-45.0, 6, 0.628_179_096_890_417_8),
+        (-45.0, 7, 0.732_171_820_893_528),
+        (-45.0, 10, 0.721_670_990_637_710_9),
+        (-45.0, 12, 0.715_277_119_024_432_4),
+        (-80.0, 1, 0.795_170_744_239_193),
+        (-80.0, 6, 0.273_683_338_843_331_86),
+        (-80.0, 7, 0.473_683_655_771_878_3),
+        (-80.0, 10, 0.811_390_991_485_516_7),
+        (-80.0, 12, 0.850_899_869_383_081_3),
+    ];
+    // And the script's zeros: polar night all month.
+    let earth_zeros = [(90.0, 1), (90.0, 10), (90.0, 12), (-80.0, 6), (-80.0, 7)];
+    let eccentric_zeros = [
+        (90.0, 1),
+        (90.0, 7),
+        (90.0, 10),
+        (90.0, 12),
+        (60.0, 1),
+        (60.0, 10),
+        (60.0, 12),
+        (-80.0, 4),
+    ];
+    for (orbit, values, zeros) in [
+        (earth(), &earth_values[..], &earth_zeros[..]),
+        (eccentric(), &eccentric_values[..], &eccentric_zeros[..]),
+    ] {
+        let table = MonthlyInsolation::new(&orbit);
+        let (mut largest, mut weighted): (f64, f64) = (0.0, 0.0);
+        for &(lat, month, expected) in values {
+            let (sin, cos) = kuniumi_math::det::sin_cos(deg_to_rad(lat));
+            let mu = table.zenith_cosines(sin, cos)[month - 1];
+            let q = table.at(sin, cos)[month - 1];
+            largest = largest.max((mu - expected).abs());
+            weighted = weighted.max(q * (mu - expected).abs());
+            let what = format!("e = {}, {lat}°, month {month}", orbit.eccentricity);
+            assert_near(mu, expected, 1e-4, &what);
+            assert!(q * (mu - expected).abs() <= 0.01, "{what}: under {q} W/m²");
+        }
+        println!(
+            "e = {}: largest difference {largest:e}, times the insolation {weighted:e} W/m²",
+            orbit.eccentricity
+        );
+        for &(lat, month) in zeros {
+            let (sin, cos) = kuniumi_math::det::sin_cos(deg_to_rad(lat));
+            let mu = table.zenith_cosines(sin, cos)[month - 1];
+            assert_eq!(mu.to_bits(), 0.0_f64.to_bits(), "{lat}°, month {month}");
+            assert_eq!(table.at(sin, cos)[month - 1].to_bits(), 0.0_f64.to_bits());
+        }
+    }
+}
+
+#[test]
+fn zenith_cosines_lie_in_the_unit_interval() {
+    // At every latitude of a fine set (the poles included) and in every
+    // month of the orbits at the corners of the v1 range, the cosine is in
+    // [0, 1], and exactly +0 where the month's insolation is +0 (polar
+    // night throughout); on the grid, each cell takes its latitude's
+    // value, bit for bit.
+    let earth_params = PlanetParams::earth();
+    let planets = [
+        earth_params.clone(),
+        PlanetParams {
+            obliquity_rad: 0.0,
+            ..earth_params.clone()
+        },
+        PlanetParams {
+            obliquity_rad: deg_to_rad(90.0),
+            ..earth_params.clone()
+        },
+        PlanetParams {
+            obliquity_rad: PI,
+            orbital_eccentricity: 0.99,
+            perihelion_longitude_rad: 0.0,
+            ..earth_params.clone()
+        },
+        PlanetParams {
+            obliquity_rad: deg_to_rad(90.0),
+            orbital_eccentricity: 0.99,
+            perihelion_longitude_rad: 2.0 * PI,
+            ..earth_params.clone()
+        },
+        PlanetParams {
+            obliquity_rad: deg_to_rad(60.0),
+            orbital_eccentricity: 0.99,
+            perihelion_longitude_rad: 1.5 * PI,
+            ..earth_params
+        },
+    ];
+    for params in &planets {
+        assert_eq!(params.validate(), Ok(()));
+        let table = MonthlyInsolation::new(&Orbit::of(params));
+        for j in 0..=720 {
+            let lat = -0.5 * PI + PI * f64::from(j) / 720.0;
+            let (sin, cos) = kuniumi_math::det::sin_cos(lat);
+            let cos = cos.max(0.0);
+            let q = table.at(sin, cos);
+            let mu = table.zenith_cosines(sin, cos);
+            for k in 0..MONTHS {
+                assert!(
+                    (0.0..=1.0).contains(&mu[k]),
+                    "{params:?}: {lat} rad, month {}: {}",
+                    k + 1,
+                    mu[k]
+                );
+                if q[k].to_bits() == 0.0_f64.to_bits() {
+                    assert_eq!(mu[k].to_bits(), 0.0_f64.to_bits());
+                }
+            }
+        }
+    }
+    let grid = SphereGrid::fibonacci(2_000, 1).expect("grid");
+    for params in &planets {
+        let table = MonthlyInsolation::new(&Orbit::of(params));
+        let months = monthly_zenith_cosine(params, &grid);
+        for (i, &p) in grid.positions().iter().enumerate() {
+            let expected = table.zenith_cosines(p.z, (p.x * p.x + p.y * p.y).sqrt());
+            for k in 0..MONTHS {
+                assert_eq!(months[k][i].to_bits(), expected[k].to_bits(), "cell {i}");
             }
         }
     }

@@ -142,6 +142,9 @@ parallel with later milestones.
 | [M4-22](M4-22-dry-planet-moisture.md) | The periodic state of the moisture of the dry planets | M4-21 |
 | [M4-23](M4-23-dry-planet-moisture-fine-grids.md) | The moisture of the dry planets on fine grids | M4-22 |
 | [M4-10](M4-10-zenith-albedo.md) | Albedo by the solar zenith angle | M4-02 |
+| [M4-24](M4-24-cycling-balance-step.md) | A balance step that does not cycle on bistable cells | M4-10 |
+| [M4-25](M4-25-ocean-solver.md) | A robust solve of the currents of an ocean over the whole sphere | M4-10 |
+| [M4-26](M4-26-hottest-orbit-coupling.md) | The coupled climate of the hottest orbit of the bounds tests | M4-10 |
 | [M4-11](M4-11-sea-ice.md) | Sea ice in the energy balance | M4-05 |
 | [M4-12](M4-12-mixed-layer.md) | Sea-surface fronts: a mixed layer under the atmosphere | M4-05 |
 | [M4-13](M4-13-latent-heat.md) | Latent heat: evaporation paid by the energy balance | M4-06 |

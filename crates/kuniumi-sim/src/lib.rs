@@ -563,16 +563,45 @@ mod tests {
 
     /// The corners of [`bound_planets`] whose energy balance without
     /// currents is not periodic after its 100 years on 1,000 cells (seed 3):
-    /// none since the balance step of ticket M4-15 (corners 56–59 before,
-    /// which alternated between two years under the annual correction of
-    /// ticket M4-02). This and the next three lists were measured by a
-    /// scratch tool, in ticket M4-16 and again in tickets M4-15, M4-17 and
-    /// M4-20, which ran `stages::climate::climate` on the worlds of the
-    /// Crust stage and read each model's own flags: independent of the
-    /// code of the warnings (and again in tickets M4-21 and M4-22). Every
-    /// other model of every planet of the bounds tests settles, and every
-    /// solve converges.
-    const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
+    /// corner 16 since the zenith angle law of the albedo (ticket M4-10),
+    /// none from the balance step of ticket M4-15 until then (corners 56–59
+    /// before, which alternated between two years under the annual
+    /// correction of ticket M4-02). This and the next four lists were
+    /// measured by a scratch tool, in ticket M4-16 and again in tickets
+    /// M4-15, M4-17 and M4-20, which ran `stages::climate::climate` on the
+    /// worlds of the Crust stage and read each model's own flags:
+    /// independent of the code of the warnings (and again in tickets M4-21,
+    /// M4-22 and M4-10). Every other model of every planet of the bounds
+    /// tests settles, and every other solve converges.
+    ///
+    /// Corner 16 (1,500 km, 8-hour days, a 90-day year, 2,500 W/m², no
+    /// ocean, 0.1 bar; `D` = `D⊕/91`): mountains of 7,500–8,600 m at
+    /// 36–45° N enter the ramp of the snow's albedo in summer, where the
+    /// zenith angle law makes the snow-free land darker than the `P₂` form
+    /// did (`α_free` 0.33 against 0.37 under the summer sun at 40°) and the
+    /// feedback of the ramp, the summer's insolation of about 850 W/m²
+    /// times `α_ice − α_free` ≈ 0.27 over the ramp's 10 K, is about
+    /// 23 W m⁻² K⁻¹, eleven times `B`. The model's own years settle (in
+    /// 207 years, after `MAX_YEARS`), but its balance step cycles: a
+    /// monthly mean changes by 0.37 to 1.43 K a year, the same values coming
+    /// back for 400 years, at a mean surface temperature of 328.35 K, and
+    /// the damping of the step (ticket M4-15) does not catch the cycle (the
+    /// same with 12 halvings). With the `P₂` form it settles in 10 years.
+    /// Follow-up ticket M4-24.
+    const UNSETTLED_ENERGY_BALANCE: [u32; 1] = [16];
+
+    /// The corners whose currents of the coupled state miss the solver's
+    /// tolerance in a basin (the warning of the currents): corner 105 since
+    /// the zenith angle law of the albedo (ticket M4-10), none before.
+    /// Corner 105 (13,000 km, 8-hour days, a 3,650-day year, 400 W/m²,
+    /// all ocean, 10 bar) is one basin over the whole sphere, whose
+    /// unpreconditioned BiCGSTAB needed 2,872 iterations with the `P₂`
+    /// form; with the winds of the new climate it stagnates at a relative
+    /// residual of 2.1 × 10⁻³ after its 20,000 iterations, while with
+    /// 400,000 every solve of the loop converges (the last in 2,784):
+    /// BiCGSTAB's erratic convergence on that system, not an ill-posed
+    /// one. Follow-up ticket M4-25.
+    const UNCONVERGED_CURRENTS: [u32; 1] = [105];
 
     /// The corners whose sea surface coupled with its winds and currents is
     /// not periodic after its 100 years: none since the thermal equator is
@@ -609,21 +638,28 @@ mod tests {
 
     /// The planets of `the_orbits_at_their_bounds_generate_finite_worlds`
     /// (by their index there) whose coupled sea surface is not periodic
-    /// after its 100 years (tickets M4-17, M4-20, M4-21): Earth at
+    /// after its 100 years (tickets M4-17, M4-20, M4-21, M4-10): Earth at
     /// e = 0.99, whose monthly winds reach about 700 m/s (last change 201 K;
-    /// beyond the circulation's range of validity); the others settle, the
-    /// thin, fast one at obliquity 90° since the relaxation of ticket M4-20
-    /// and the thick, slow one at obliquity 90° and e = 0.99, whose thermal
-    /// equator jumped from one cap to the other, since the continuous
-    /// thermal equator of ticket M4-21 (in 8 years, not relaxed).
-    const UNSETTLED_ORBITS: [usize; 1] = [3];
+    /// beyond the circulation's range of validity); and since the zenith
+    /// angle law of the albedo (ticket M4-10) the thin, fast one at
+    /// obliquity 90° and e = 0.99 under 2,500 W/m², whose monthly means
+    /// reach 14,000 K and whose winds 12,000 m/s, far beyond the range of
+    /// validity of `A + BT` and of the circulation: relaxed from year 4, it
+    /// still changes by 65–101 K a year after 100 to 400 years (with the
+    /// `P₂` form it settled relaxed in 80 years, at up to 11,800 K and
+    /// 13,600 m/s; since the relaxation of ticket M4-20; follow-up ticket
+    /// M4-26). The others
+    /// settle, the thick, slow one at obliquity 90° and e = 0.99, whose
+    /// thermal equator jumped from one cap to the other, since the
+    /// continuous thermal equator of ticket M4-21.
+    const UNSETTLED_ORBITS: [usize; 2] = [0, 3];
 
     /// Checks that the warnings of `world`, the planet `corner` of
     /// [`bound_planets`] (Earth, or another planet of the bounds tests, for
     /// `None`), are those of the Climate stage for the models that did not
     /// settle (ticket M4-16): in the stage's name, the energy balance's if
-    /// the corner is in [`UNSETTLED_ENERGY_BALANCE`], then the sea
-    /// surface's and the moisture's likewise, and no other.
+    /// the corner is in [`UNSETTLED_ENERGY_BALANCE`], then the currents',
+    /// the sea surface's and the moisture's likewise, and no other.
     fn assert_warnings(corner: Option<u32>, world: &World) {
         let unsettled = |corners: &[u32]| corner.is_some_and(|c| corners.contains(&c));
         assert_warned(
@@ -631,6 +667,7 @@ mod tests {
             world,
             [
                 unsettled(&UNSETTLED_ENERGY_BALANCE),
+                unsettled(&UNCONVERGED_CURRENTS),
                 unsettled(&UNSETTLED_SEA_SURFACE),
                 unsettled(&UNSETTLED_MOISTURE),
             ],
@@ -639,32 +676,42 @@ mod tests {
 
     /// Checks that the warnings of `world` (the planet `what`) are those of
     /// the Climate stage for the models that did not settle, in the stage's
-    /// name: the energy balance's, the sea surface's and the moisture's
-    /// where `unsettled` says so, in that order, and no other.
-    fn assert_warned(what: &str, world: &World, unsettled: [bool; 3]) {
+    /// name: the energy balance's, the currents' (a basin's solve), the sea
+    /// surface's and the moisture's where `unsettled` says so, in that
+    /// order, and no other.
+    fn assert_warned(what: &str, world: &World, unsettled: [bool; 4]) {
         let expected: Vec<(&str, &str)> = [
             (unsettled[0], "the energy balance without currents"),
+            (unsettled[1], "the currents"),
             (
-                unsettled[1],
+                unsettled[2],
                 "the sea surface coupled with its winds and currents",
             ),
-            (unsettled[2], "the moisture"),
+            (unsettled[3], "the moisture"),
         ]
         .into_iter()
         .filter(|&(warned, _)| warned)
         .map(|(_, model)| ("climate", model))
         .collect();
-        // The model a message names: its words before the verb; the whole
-        // message for any other warning, which then fails the comparison.
+        // The model a message names: its words before the verb ("the
+        // currents" for the currents' "the currents of 1 of the 1 ocean
+        // basins did not reach the solver's tolerance"); the whole message
+        // for any other warning, which then fails the comparison.
         let warned: Vec<(&str, &str)> = world
             .warnings
             .iter()
             .map(|w| {
-                let model = w
-                    .message
-                    .split(" did not reach its periodic state in ")
-                    .next();
-                (w.stage.as_str(), model.unwrap_or(&w.message))
+                let model = if w.message.starts_with("the currents of ")
+                    && w.message.contains(" did not reach the solver's tolerance ")
+                {
+                    "the currents"
+                } else {
+                    w.message
+                        .split(" did not reach its periodic state in ")
+                        .next()
+                        .unwrap_or(&w.message)
+                };
+                (w.stage.as_str(), model)
             })
             .collect();
         assert_eq!(warned, expected, "{what}: {:#?}", world.warnings);
@@ -702,7 +749,8 @@ mod tests {
     /// of the coupled sea surface since ticket M4-20, which settled 17, 48,
     /// 64, 96 and 112, relaxed; since ticket M4-21 0, 16, 17, 48, 64, 65, 80
     /// and 81 relax, and 96 and 112 settle without; 17 and 81 warned of the
-    /// moisture until ticket M4-22) and Earth.
+    /// moisture until ticket M4-22; 16 warns of the energy balance since
+    /// ticket M4-10) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);
@@ -767,13 +815,13 @@ mod tests {
         let settings = bounds_settings();
         for (k, p) in planets.iter().enumerate() {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
-            // Each settles but the coupled sea surface of one (the scratch
-            // tools of tickets M4-16, M4-17, M4-20 and M4-21).
+            // Each settles but the coupled sea surface of two (the scratch
+            // tools of tickets M4-16, M4-17, M4-20, M4-21 and M4-10).
             let world = assert_finite_world(p, &settings);
             assert_warned(
                 &format!("orbit {k}"),
                 &world,
-                [false, UNSETTLED_ORBITS.contains(&k), false],
+                [false, false, UNSETTLED_ORBITS.contains(&k), false],
             );
         }
     }
