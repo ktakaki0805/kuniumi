@@ -129,7 +129,9 @@
 //! years until no monthly mean changes by more than
 //! [`super::energy_balance::PERIODIC_TOLERANCE_K`], at most
 //! [`super::energy_balance::MAX_YEARS`]; and after each year the balance
-//! step of [`super::energy_balance`] (ticket M4-15), here with the advection
+//! step of [`super::energy_balance`] (ticket M4-15; its sunlight at the
+//! mean temperatures of the year's sub-steps since ticket M4-24, whose
+//! starts the months record), here with the advection
 //! and the annual-mean upwelling in its operator, `B a + D L + q + ū`, the
 //! warm start's (without the return, which only speeds up the approach and
 //! does not change the fixed point), solved by BiCGSTAB with the warm
@@ -914,11 +916,30 @@ impl SeaSurfaceModel {
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
     ) -> Vec<f64> {
+        self.month_recording(month, temperature_k, insolation_w_m2, &mut [])
+    }
+
+    /// [`month`](Self::month), which also copies the temperatures at the
+    /// start of its sub-steps into `starts` (K, sea level; none if it is
+    /// empty), as [`EnergyBalance::month_recording`] does, for the balance
+    /// step. The same months, bit for bit.
+    pub(crate) fn month_recording(
+        &self,
+        month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+        starts: &mut [Vec<f64>],
+    ) -> Vec<f64> {
         assert!(month < MONTHS, "a month is 0 to 11, got {month}");
+        energy_balance::check_starts(starts);
         let matrix = self.matrix(&self.step_mass, &self.upwelling_coupling[month]);
         let steps = energy_balance::SUBSTEPS_PER_MONTH;
         let mut sum: Vec<f64> = temperature_k.iter().map(|t| 0.5 * t).collect();
         for step in 0..steps {
+            if let Some(start) = starts.get_mut(step) {
+                start.clear();
+                start.extend_from_slice(temperature_k);
+            }
             self.step(&matrix, month, temperature_k, insolation_w_m2);
             let weight = if step + 1 == steps { 0.5 } else { 1.0 };
             for (s, &t) in sum.iter_mut().zip(temperature_k.iter()) {
@@ -1000,14 +1021,14 @@ impl SeaSurfaceModel {
         annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) -> u32 {
         balance_step(
             &self.balance,
             start,
             temperature_k,
-            means,
+            substeps,
             insolation_w_m2,
             |rhs: &[f64], values: &mut [f64]| {
                 multigrid::bicgstab(
@@ -1063,8 +1084,9 @@ impl Seasons for SeaSurfaceModel {
         month: usize,
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
+        starts: &mut [Vec<f64>],
     ) -> Vec<f64> {
-        self.month(month, temperature_k, insolation_w_m2)
+        self.month_recording(month, temperature_k, insolation_w_m2, starts)
     }
 
     fn balance_year(
@@ -1072,10 +1094,10 @@ impl Seasons for SeaSurfaceModel {
         annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) {
-        self.balance_step(annual, start, temperature_k, means, insolation_w_m2);
+        self.balance_step(annual, start, temperature_k, substeps, insolation_w_m2);
     }
 
     fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64> {

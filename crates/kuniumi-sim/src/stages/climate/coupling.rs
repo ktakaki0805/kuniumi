@@ -184,7 +184,7 @@ use kuniumi_world::PlanetParams;
 use super::circulation::{Circulation, CirculationModel, CirculationParams};
 use super::energy_balance::{
     EnergyBalance, MAX_YEARS, PERIODIC_TOLERANCE_K, Seasons, StepDamping, Temperature,
-    largest_change_k,
+    largest_change_k, month_substeps, year_substeps,
 };
 use super::insolation::{MONTHS, monthly_insolation, monthly_zenith_cosine};
 use super::ocean::{
@@ -342,6 +342,8 @@ pub(crate) fn coupled_run(
         "the relaxation needs a factor in (0, 1], got {relaxation}"
     );
     let mut damping = StepDamping::new(n);
+    // The temperatures at the start of the year's sub-steps, for the step.
+    let mut substeps = year_substeps(true);
     // The state at the end of the year before, and its monthly means.
     let mut state_k: Option<Vec<f64>> = None;
     let mut previous: Option<[Vec<f64>; MONTHS]> = None;
@@ -379,8 +381,14 @@ pub(crate) fn coupled_run(
             None => model.start(&annual, &insolation),
         };
         let year_start = temperature_k.clone();
-        let means: [Vec<f64>; MONTHS] =
-            core::array::from_fn(|k| model.step_month(k, &mut temperature_k, &insolation[k]));
+        let means: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
+            model.step_month(
+                k,
+                &mut temperature_k,
+                &insolation[k],
+                month_substeps(&mut substeps, k),
+            )
+        });
         let change_k = match &previous {
             None => f64::INFINITY,
             Some(last) => largest_change_k(last, &means),
@@ -421,7 +429,7 @@ pub(crate) fn coupled_run(
             &annual,
             &year_start,
             &mut temperature_k,
-            &means,
+            &substeps,
             &insolation,
         );
         damping.apply(&year_start, &end, &mut temperature_k);

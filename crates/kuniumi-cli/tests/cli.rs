@@ -554,6 +554,10 @@ fn generate_writes_a_world_that_reads_back() {
 /// again by ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the tests of `stages::climate` passed and the
 /// images of `out/M4-10` were looked at; the 16 others are unchanged by it.
+/// And again by ticket M4-24 (the balance step's sunlight at the sub-steps'
+/// mean temperatures, world-breaking) after the tests of `stages::climate`
+/// passed and the images of `out/M4-24` were looked at; the 16 others are
+/// unchanged by it.
 const GOLDEN_FIELDS: [(&str, u64); 46] = [
     ("cell_area", 0x3293_5063_C4BF_C82D),
     ("neighbor_count", 0xBCFA_B43E_DA1C_53F6),
@@ -568,36 +572,36 @@ const GOLDEN_FIELDS: [(&str, u64); 46] = [
     ("uplift_rate", 0x05E7_9013_D625_1ECB),
     ("trench", 0xA2D4_773C_1D13_3C93),
     ("surface_height", 0xDB1E_0D68_718E_F38C),
-    ("temperature_annual", 0xEB94_3CDD_FBB6_0C44),
-    ("temperature_m01", 0xAC5F_8307_540F_0EBF),
-    ("temperature_m02", 0x9E51_9046_9E65_A523),
-    ("temperature_m03", 0xC236_7635_C244_ECEB),
-    ("temperature_m04", 0x57D3_2D9B_A1E8_7758),
-    ("temperature_m05", 0xEEF7_E011_E0C2_20CD),
-    ("temperature_m06", 0x303D_E5E8_B10E_D5AC),
-    ("temperature_m07", 0xE59F_2451_4B6D_5C56),
-    ("temperature_m08", 0xA600_B7DB_27AF_AB10),
-    ("temperature_m09", 0x1EFA_96FA_B3E8_0C80),
-    ("temperature_m10", 0xB873_3C08_E2B7_CEE4),
-    ("temperature_m11", 0xB203_BC29_9BF1_52FF),
-    ("temperature_m12", 0x050C_60F3_C12F_21AF),
-    ("precipitation_annual", 0x48E4_811E_B7AE_8A0E),
-    ("precipitation_m01", 0xFF07_1473_CFC1_3F71),
-    ("precipitation_m02", 0x15DE_2064_FE18_66FC),
-    ("precipitation_m03", 0xD661_B431_78FE_C2AD),
-    ("precipitation_m04", 0x2557_3D23_E673_3027),
-    ("precipitation_m05", 0xAC1E_7285_655F_6CFB),
-    ("precipitation_m06", 0x7D18_078C_1F48_281C),
-    ("precipitation_m07", 0x9BCF_0BB0_B60B_0B4E),
-    ("precipitation_m08", 0x9049_28B8_36D2_621D),
-    ("precipitation_m09", 0x8263_EC6E_B3CD_9F9D),
-    ("precipitation_m10", 0x20C7_468E_5F3F_E9BC),
-    ("precipitation_m11", 0x71D9_1D60_6507_57F2),
-    ("precipitation_m12", 0x64C9_DF3B_BFD5_F788),
-    ("wind_east", 0xDBC6_C1FA_2B21_1BBF),
-    ("wind_north", 0x1861_CF67_A999_BD14),
-    ("current_east", 0xF61B_E90A_AB07_984C),
-    ("current_north", 0x23CA_C9D2_F2B8_B060),
+    ("temperature_annual", 0xFD1E_72AF_2F68_1F30),
+    ("temperature_m01", 0x2505_6C7F_310F_3E28),
+    ("temperature_m02", 0xB41B_9F88_30CA_EB0F),
+    ("temperature_m03", 0x7EBA_40F4_5936_254E),
+    ("temperature_m04", 0x67D3_DDD1_D661_7176),
+    ("temperature_m05", 0x019A_946B_901E_9A4E),
+    ("temperature_m06", 0x0107_2F18_F273_73C6),
+    ("temperature_m07", 0xD91A_37CF_5910_3E72),
+    ("temperature_m08", 0x5D22_2AB4_26BB_C468),
+    ("temperature_m09", 0x504D_6849_3402_7ADF),
+    ("temperature_m10", 0x0A4A_5A6A_5E29_7EDD),
+    ("temperature_m11", 0xA22B_18DC_DD1D_6989),
+    ("temperature_m12", 0x9CAB_5CA4_04D8_B920),
+    ("precipitation_annual", 0x84EF_D8A8_30F7_55B5),
+    ("precipitation_m01", 0xBD60_2E27_7E1E_8CAD),
+    ("precipitation_m02", 0x9E8F_DB79_F9AB_499A),
+    ("precipitation_m03", 0xAFA2_C810_570E_8639),
+    ("precipitation_m04", 0x7BDE_BAA5_DFEE_AD89),
+    ("precipitation_m05", 0xD455_CA3E_39F3_BB1A),
+    ("precipitation_m06", 0xA68F_51F8_B159_89D9),
+    ("precipitation_m07", 0x8F1C_6B97_07F7_96E4),
+    ("precipitation_m08", 0x4895_7953_C694_A7DC),
+    ("precipitation_m09", 0xB70C_3D4E_07F3_311B),
+    ("precipitation_m10", 0xDD46_F502_C01F_18A9),
+    ("precipitation_m11", 0xAC0E_F511_BCB4_2CBF),
+    ("precipitation_m12", 0x5460_FFB7_93F7_4732),
+    ("wind_east", 0x8097_2B44_5208_71DF),
+    ("wind_north", 0x37DB_D78D_EF5E_1E45),
+    ("current_east", 0xE321_AB78_E59E_0C36),
+    ("current_north", 0x6928_7B03_6669_830A),
     ("drainage_area", 0x74B7_97DE_863F_9C2A),
     ("discharge", 0x714B_06C0_204A_48F6),
     ("depression_depth", 0x2128_8731_7CB9_00EB),
@@ -992,10 +996,10 @@ fn generate_prints_the_warnings_of_the_stages() {
     // planet measured on 1,000 cells, among them the one this test took
     // before (13,000 km, 11 m/s², 240 h, 90 days, e = 0.5, obliquity 90°,
     // 2,500 W/m², no water, 0.1 bar; tickets M4-22 and M4-23), until the
-    // zenith angle law of the albedo (ticket M4-10), since which corners 16
-    // and 105 and the thin, fast planet at obliquity 90° and e = 0.99 warn
-    // too (`lib.rs`). One erosion step: the climate does not depend on
-    // erosion.
+    // zenith angle law of the albedo (ticket M4-10), since which corner 105
+    // and the thin, fast planet at obliquity 90° and e = 0.99 warn too
+    // (`lib.rs`; corner 16 warned of its energy balance until ticket
+    // M4-24). One erosion step: the climate does not depend on erosion.
     let planet = settings_file(
         "generate_warnings_planet",
         "[planet]\norbital_eccentricity = 0.99\nobliquity_rad = 0.0\n\

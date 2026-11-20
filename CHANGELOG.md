@@ -1069,6 +1069,17 @@ section: every change after which an existing seed produces a different world
   2.1 × 10⁻³; follow-up M4-25) and the orbit planet 0, at 14,000 K, of
   its coupled sea surface (follow-up M4-26); the check of the warnings
   knows the currents' warning (M4-10).
+- The balance step of the energy balance, of the sea surface and of the
+  coupled loop takes the year's absorbed sunlight `S(T + δ)` at the mean
+  temperature of each of its 48 sub-steps (the trapezoid of its start and
+  end, whose mean over a month is the monthly mean) instead of at the
+  twelve monthly means (`energy_balance`, "The sub-steps' temperatures";
+  M4-24). The months record the starts of their sub-steps
+  (`EnergyBalance::month_recording`, `SeaSurfaceModel::month_recording`;
+  `month` keeps its signature and its bits), held through the year: 384
+  bytes a cell (250 MB on 650,000 cells). The bound of the slow-planet
+  test of the 24-hour planets near a bifurcation is 30 years instead of
+  25 (1,375 W/m²: 26 years, 25 before).
 
 ### Removed
 
@@ -1168,8 +1179,28 @@ section: every change after which an existing seed produces a different world
   stable periodic state, which the balance step reaches in 10 years. No
   energy balance or sea surface of the 128 corners is reported unconverged
   any more (M4-15).
+- The energy balance of corner 16 of the bounds tests (1,500 km, 8 h, a
+  90-day year, 2,500 W/m², no ocean, 0.1 bar) reaches its periodic state
+  in 10 years and no longer warns: with the step's sunlight at the monthly
+  means, a month of 7.5 days went into or out of the snow's ramp at once
+  on its mountains, and the step cycled (a monthly mean changing by 0.37
+  to 1.43 K a year for 400 years) while the model's own years settle in
+  207; the step now lands on the years' own state (M4-24).
 
 ### World-breaking
+
+- M4-24: every world's climate changes within the tolerance of its
+  periodic state, the balance step taking its sunlight at the sub-steps'
+  mean temperatures: on Earth (seed 1) the energy balance by at most
+  7.5 × 10⁻⁶ K (10,000 cells) and 8.8 × 10⁻⁶ K (40,000), the coupled sea
+  surface by 1.7 × 10⁻⁵ and 2.8 × 10⁻⁵ K, in the same years; corner 16 of
+  the bounds tests reaches its periodic state, and thin, fast planets whose
+  ice edge has several stable states may stop at another one (on 10,000
+  cells, 8 h, 0.1 bar, 60°, seeds 2 and 3, again with less ice than the
+  years' own). The golden values of the energy balance, the circulation
+  (with and without the smoothing), the currents, the sea surface, the
+  moisture, the relaxed loop (and its last change), the Climate stage and
+  the CLI's world's 30 climate fields are recorded again.
 
 - M4-10: every world's climate changes, its ice-free albedo following the
   zenith angle of the sun, with `A` and `D⊕` fitted again: on Earth

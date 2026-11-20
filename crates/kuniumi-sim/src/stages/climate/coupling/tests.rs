@@ -460,8 +460,10 @@ fn golden_fingerprint_of_a_relaxed_loop() {
 /// The fingerprint of `golden_fingerprint_of_a_relaxed_loop`.
 /// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the other tests passed and the images of out/M4-10
-/// were viewed.
-const RELAXED_GOLDEN_FINGERPRINT: u64 = 0x5D11_FE79_8A27_CC94;
+/// were viewed, and in ticket M4-24 (the balance step's sunlight at the
+/// sub-steps' mean temperatures, world-breaking; was 0x5D11_FE79_8A27_CC94)
+/// after the other tests passed and the images of out/M4-24 were viewed.
+const RELAXED_GOLDEN_FINGERPRINT: u64 = 0x262C_EAC2_9E36_16D2;
 
 #[test]
 fn an_oscillating_loop_settles_relaxed() {
@@ -498,8 +500,10 @@ fn an_oscillating_loop_settles_relaxed() {
     // year before (the change of year 35 from year 34, 1.2 × 10⁻⁴ K, from a
     // scratch run of the loop stopped after 34 years) and its residual from
     // the drive: the residual, exactly (review of ticket M4-20; recorded
-    // again in tickets M4-21 and M4-10).
-    assert_eq!(t.change_k.to_bits(), 8.144889403922662e-4_f64.to_bits());
+    // again in tickets M4-21 and M4-10, and in ticket M4-24, whose balance
+    // step takes its sunlight at the sub-steps' mean temperatures:
+    // 8.144889403922662e-4 K before).
+    assert_eq!(t.change_k.to_bits(), 8.14488922316059e-4_f64.to_bits());
     for month in t.sea_level_k.iter().chain(&t.surface_k) {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
     }

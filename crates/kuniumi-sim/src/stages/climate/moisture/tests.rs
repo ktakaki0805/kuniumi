@@ -2066,5 +2066,7 @@ fn golden_fingerprint_of_earth_moisture() {
 /// The fingerprint of `golden_fingerprint_of_earth_moisture`.
 /// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the other tests passed and the images of out/M4-10
-/// were viewed.
-const GOLDEN_FINGERPRINT: u64 = 0xDA05_CEE5_D1F1_A586;
+/// were viewed, and in ticket M4-24 (the balance step's sunlight at the
+/// sub-steps' mean temperatures, world-breaking; was 0xDA05_CEE5_D1F1_A586)
+/// after the other tests passed and the images of out/M4-24 were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0x57A4_1BC7_5EBF_5C8A;

@@ -88,10 +88,14 @@
 //! changing, and the stage reports it as a warning of the world (below,
 //! "Warnings"). Of the 128 corners of the v1 range on 1,000 cells (seed 3),
 //! every energy balance is periodic within 10 years since the balance step
-//! of ticket M4-15, every coupled sea surface within its 100 years since
-//! the thermal equator is continuous (tickets M4-17, M4-20, M4-21,
-//! [`coupling`]; of the 6 planets at the bounds of the orbit, Earth at
-//! e = 0.99 is not), and every moisture within 7 years (8 on 10,000 cells)
+//! of ticket M4-15 (and those of the 6 planets at the bounds of the orbit;
+//! corner 16 was not from ticket M4-10 until the step took its sunlight at
+//! the sub-steps' mean temperatures, ticket M4-24), every coupled sea
+//! surface within its 100 years since the thermal equator is continuous
+//! (tickets M4-17, M4-20, M4-21, [`coupling`]; of the 6 planets at the
+//! bounds of the orbit, Earth at e = 0.99 is not, nor since ticket M4-10
+//! the thin, fast one at obliquity 90° and e = 0.99 under 2,500 W/m²), and
+//! every moisture within 7 years (8 on 10,000 cells)
 //! since its Newton–Krylov step (ticket M4-23; 16 planets without water
 //! were not after their 10 years until ticket M4-22). The temperatures
 //! have no fixed bound at the corners (monthly means from about 95 K to

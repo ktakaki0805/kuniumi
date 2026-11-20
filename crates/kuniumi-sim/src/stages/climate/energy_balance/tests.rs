@@ -42,6 +42,13 @@
 //! `new_needs_cosines_in_the_unit_interval`,
 //! `new_needs_one_cosine_per_cell`.
 //!
+//! Ticket M4-24 (the step's sunlight at the sub-steps' mean temperatures):
+//! criterion 1, `a_mountain_in_the_snow_ramp_settles`,
+//! `a_planet_heated_within_a_sub_step_settles` (and the bounds tests of
+//! `lib.rs`); criterion 2,
+//! `the_step_takes_its_sunlight_at_the_sub_steps_mean_temperatures`;
+//! `an_unfinished_run_reports_its_last_year` with the sub-steps recorded.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1:
 //! on 40,000 cells, the world of the calibration, in release builds (about
 //! 12 s), and on 10,000 cells in debug builds, where the world differs
@@ -1262,7 +1269,12 @@ fn slow_planets_reach_a_stable_periodic_state_near_a_bifurcation() {
     // 0.5 atm with obliquity 90° at 1,370 and 1,375 W/m² (seed 2; 64 and 59
     // years): 10, 11 and 13 years with the balance step in the prototype;
     // 9, 10 and 25 since the zenith angle law of the albedo (ticket M4-10;
-    // with the A and D before its fit, Earth at 1,282 W/m² took 27).
+    // with the A and D before its fit, Earth at 1,282 W/m² took 27); 9, 10
+    // and 26 since the step takes its sunlight at the sub-steps' mean
+    // temperatures (ticket M4-24, which raised the bound of the 24-hour
+    // planets from 25 to 30 years with the owner: near the bifurcation the
+    // ice edge advances by jumps of the step whose years shift by a few
+    // with any change of the step; 28 with the sub-steps' starts).
     let earth = PlanetParams {
         stellar_flux_w_m2: 1_282.0,
         ..PlanetParams::earth()
@@ -1273,8 +1285,185 @@ fn slow_planets_reach_a_stable_periodic_state_near_a_bifurcation() {
         let params = slow_planet(24.0, 0.5 * 101_325.0, 90.0, flux);
         let name = format!("24 h, 0.5 atm, 90°, {flux} W/m²");
         let years = assert_stable_periodic_state(&name, &params, 2, slow_cells());
-        assert!(years <= 25, "{name}: {years} years");
+        assert!(years <= 30, "{name}: {years} years");
     }
+}
+
+/// Corner 16 of the bounds tests (`lib.rs`, `bound_planets`): Earth with
+/// the lower bounds of the radius (1,500 km), the rotation period (8 h),
+/// the orbital period (90 days), the ocean volume (none) and the surface
+/// pressure (0.1 bar), the upper bound of the stellar flux (2,500 W/m²),
+/// and the lower bound of the gravity, 1 m/s², moved just inside the bulk
+/// density of 3,000 kg/m³ (about 1.26 m/s²) as the bounds tests move it.
+fn corner_16() -> PlanetParams {
+    let mut params = PlanetParams {
+        radius_m: PlanetParams::MIN_RADIUS_M,
+        surface_gravity_m_s2: PlanetParams::MIN_SURFACE_GRAVITY_M_S2,
+        rotation_period_s: PlanetParams::MIN_ROTATION_PERIOD_S,
+        orbital_period_s: PlanetParams::MIN_ORBITAL_PERIOD_S,
+        stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
+        ocean_volume_m3: 0.0,
+        surface_pressure_pa: PlanetParams::MIN_SURFACE_PRESSURE_PA,
+        ..PlanetParams::earth()
+    };
+    let density = params.bulk_density_kg_m3();
+    assert!(density < PlanetParams::MIN_BULK_DENSITY_KG_M3);
+    params.surface_gravity_m_s2 *= PlanetParams::MIN_BULK_DENSITY_KG_M3 / density * (1.0 + 1e-12);
+    assert_eq!(params.validate(), Ok(()));
+    params
+}
+
+#[test]
+fn the_step_takes_its_sunlight_at_the_sub_steps_mean_temperatures() {
+    // Ticket M4-24: the balance step's annual sunlight S(T + δ) is the mean
+    // over the year's 48 sub-steps of Q (1 − α) at each sub-step's mean
+    // temperature, the trapezoid of its start and end, shifted by δ. The
+    // months record the starts of their sub-steps without changing their
+    // own bits; per cell S is bit for bit the albedos of those means summed
+    // by hand; and the mean of each month's four sub-step means is its
+    // monthly mean, the trapezoidal mean of the ends of its sub-steps
+    // (within 10⁻¹² relative: the same sums in another order). On Earth's
+    // world of 2,000 cells (seed 1) and on corner 16's of 1,000 (seed 3),
+    // each from its warm start.
+    let earth = PlanetParams::earth();
+    for (name, params, cells, seed) in [
+        ("Earth", earth, 2_000, 1),
+        ("corner 16", corner_16(), 1_000, 3),
+    ] {
+        let settings = Settings {
+            cells,
+            allow_partial: true,
+            ..Settings::default()
+        };
+        let world =
+            crate::generate_through_crust(&params, &settings, seed).expect("a partial world");
+        let heights = &world.field(SURFACE_HEIGHT).expect("heights").values;
+        let model = EnergyBalance::new(
+            &EnergyBalanceParams::for_planet(&params),
+            &world.grid,
+            heights,
+            world.sea_level_m,
+            params.orbital_period_s,
+            &monthly_zenith_cosine(&params, &world.grid),
+        );
+        let n = model.len();
+        let insolation = monthly_insolation(&params, &world.grid);
+        let warm = model.warm_start(&insolation);
+        // The year by hand, sub-step by sub-step.
+        let mut t = warm.clone();
+        let mut starts = Vec::new();
+        for (k, q) in insolation.iter().enumerate() {
+            for _ in 0..SUBSTEPS_PER_MONTH {
+                starts.push(t.clone());
+                model.substep(k, &mut t, q);
+            }
+        }
+        // The same year recorded by the months, and its monthly means.
+        let mut recorded = vec![Vec::new(); YEAR_SUBSTEPS];
+        let (mut u, mut plain) = (warm.clone(), warm.clone());
+        let mut means = Vec::new();
+        for (k, q) in insolation.iter().enumerate() {
+            let starts_k = &mut recorded[k * SUBSTEPS_PER_MONTH..(k + 1) * SUBSTEPS_PER_MONTH];
+            let mean = model.month_recording(k, &mut u, q, starts_k);
+            let expected = model.month(k, &mut plain, q);
+            for (a, b) in mean.iter().zip(&expected) {
+                assert_same(*a, *b, "the month recorded");
+            }
+            means.push(mean);
+        }
+        for (a, b) in recorded.iter().flatten().zip(starts.iter().flatten()) {
+            assert_same(*a, *b, "the sub-step's start");
+        }
+        for (a, b) in u.iter().zip(&t) {
+            assert_same(*a, *b, "the year's end");
+        }
+        // The sub-steps' mean temperatures by hand.
+        let sub_means: Vec<Vec<f64>> = (0..YEAR_SUBSTEPS)
+            .map(|s| {
+                let end = starts.get(s + 1).unwrap_or(&t);
+                (0..n).map(|i| 0.5 * (starts[s][i] + end[i])).collect()
+            })
+            .collect();
+        let mut worst = 0.0_f64;
+        for (k, month) in means.iter().enumerate() {
+            for i in 0..n {
+                let quarter = &sub_means[k * SUBSTEPS_PER_MONTH..(k + 1) * SUBSTEPS_PER_MONTH];
+                let mean = quarter.iter().map(|m| m[i]).sum::<f64>() / SUBSTEPS_PER_MONTH as f64;
+                assert_near(
+                    mean,
+                    month[i],
+                    1e-12 * month[i],
+                    "a month of sub-step means",
+                );
+                worst = worst.max((mean - month[i]).abs());
+            }
+        }
+        for shift in [0.0, 0.37] {
+            let absorbed = model.annual_absorbed_w_m2(&recorded, &t, &vec![shift; n], &insolation);
+            let mut by_hand = vec![0.0; n];
+            for (s, mean) in sub_means.iter().enumerate() {
+                let k = s / SUBSTEPS_PER_MONTH;
+                let shifted: Vec<f64> = mean.iter().map(|x| x + shift).collect();
+                let albedos = model.albedos(k, &shifted);
+                for i in 0..n {
+                    by_hand[i] += insolation[k][i] * (1.0 - albedos[i]);
+                }
+            }
+            for (a, b) in absorbed.iter().zip(&by_hand) {
+                assert_same(*a, b / YEAR_SUBSTEPS as f64, "the step's sunlight");
+            }
+            println!(
+                "{name}, shift {shift} K: the step's sunlight {:.6} W/m² over the sphere; the \
+                 months' sub-step means within {worst:.1e} K of the monthly means",
+                global_mean(&world.grid, &absorbed)
+            );
+        }
+    }
+}
+
+/// Orbit planet 0 of the bounds tests (`lib.rs`,
+/// `the_orbits_at_their_bounds_generate_finite_worlds`): Earth with
+/// obliquity 90°, e = 0.99, 2,500 W/m², 8-hour days and 0.1 bar.
+fn orbit_planet_0() -> PlanetParams {
+    PlanetParams {
+        obliquity_rad: core::f64::consts::FRAC_PI_2,
+        orbital_eccentricity: 0.99,
+        stellar_flux_w_m2: PlanetParams::MAX_STELLAR_FLUX_W_M2,
+        rotation_period_s: PlanetParams::MIN_ROTATION_PERIOD_S,
+        surface_pressure_pa: PlanetParams::MIN_SURFACE_PRESSURE_PA,
+        ..PlanetParams::earth()
+    }
+}
+
+#[test]
+fn a_planet_heated_within_a_sub_step_settles() {
+    // Ticket M4-24: orbit planet 0 of the bounds tests on their world
+    // (1,000 cells, seed 3). A land cell at 44.9° S receives 58,173 W/m²
+    // in month 3 alone and forgets a shift within days (C/B = 5.6 days):
+    // month 3's first sub-step starts at 273 K, at the edge of the snow's
+    // ramp, and ends near 9,700 K. With the step's sunlight at the
+    // sub-steps' starts, that sub-step's albedo was a feedback of
+    // 33 W m⁻² K⁻¹ on the step's uniform shift and the step cycled for 100
+    // years (a monthly mean changing by 41, 30 and 11 K in turn); at the
+    // sub-steps' mean temperatures (about 5,000 K there), as at the monthly
+    // means before, periodic in 8 years.
+    let years = assert_stable_periodic_state("orbit planet 0", &orbit_planet_0(), 3, 1_000);
+    assert!(years <= 20, "{years} years");
+}
+
+#[test]
+fn a_mountain_in_the_snow_ramp_settles() {
+    // Ticket M4-24: corner 16 of the bounds tests on their world (1,000
+    // cells, seed 3), whose mountains of 7,500–8,600 m at 36–45° N pass
+    // through the ramp of the snow's albedo within a month of 7.5 days.
+    // With the step's sunlight at the monthly means it cycled for 400
+    // years (a monthly mean changing by 0.37 to 1.43 K a year), its own
+    // years settling in 207; with the sunlight at the sub-steps' mean
+    // temperatures, periodic in 10 years at the state of the years (within
+    // 1.1 × 10⁻² K of their 207-year run, no cell's annual mean 1 K apart;
+    // a scratch tool of the ticket).
+    let years = assert_stable_periodic_state("corner 16", &corner_16(), 3, 1_000);
+    assert!(years <= 20, "{years} years");
 }
 
 #[test]
@@ -1539,18 +1728,34 @@ fn an_unfinished_run_reports_its_last_year() {
         assert!(month.iter().all(|v| v.is_finite() && *v > 0.0));
     }
     // The third year by hand: the same steps from the warm start, each
-    // balance step with its damping.
+    // balance step on the temperatures at the start of the year's 48
+    // sub-steps (ticket M4-24), with its damping.
     let annual = model.annual_multigrid();
     let mut t = model.warm_start(&insolation);
     let mut damping = StepDamping::new(t.len());
     let mut third = Vec::new();
     for year in 0..3 {
         let start = t.clone();
-        let means: [Vec<f64>; MONTHS] =
-            core::array::from_fn(|k| model.month(k, &mut t, &insolation[k]));
+        let mut substeps = Vec::new();
+        let means: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
+            let mut sum: Vec<f64> = t.iter().map(|x| 0.5 * x).collect();
+            for step in 0..SUBSTEPS_PER_MONTH {
+                substeps.push(t.clone());
+                model.substep(k, &mut t, &insolation[k]);
+                let weight = if step + 1 == SUBSTEPS_PER_MONTH {
+                    0.5
+                } else {
+                    1.0
+                };
+                for (s, &x) in sum.iter_mut().zip(t.iter()) {
+                    *s += weight * x;
+                }
+            }
+            sum.iter().map(|s| s / SUBSTEPS_PER_MONTH as f64).collect()
+        });
         if year < 2 {
             let end = t.clone();
-            model.balance(&annual, &start, &mut t, &means, &insolation);
+            model.balance(&annual, &start, &mut t, &substeps, &insolation);
             damping.apply(&start, &end, &mut t);
         } else {
             third = means.to_vec();
@@ -1869,5 +2074,7 @@ fn golden_fingerprint_of_earth_temperature() {
 /// The fingerprint of `golden_fingerprint_of_earth_temperature`.
 /// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the other tests passed and the images of out/M4-10
-/// were viewed.
-const GOLDEN_FINGERPRINT: u64 = 0xFC6C_0021_4D38_7341;
+/// were viewed, and in ticket M4-24 (the balance step's sunlight at the
+/// sub-steps' mean temperatures, world-breaking; was 0xFC6C_0021_4D38_7341)
+/// after the other tests passed and the images of out/M4-24 were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0x8FFD_9BB9_6E2B_E86F;

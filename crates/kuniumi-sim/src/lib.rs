@@ -563,32 +563,34 @@ mod tests {
 
     /// The corners of [`bound_planets`] whose energy balance without
     /// currents is not periodic after its 100 years on 1,000 cells (seed 3):
-    /// corner 16 since the zenith angle law of the albedo (ticket M4-10),
-    /// none from the balance step of ticket M4-15 until then (corners 56–59
-    /// before, which alternated between two years under the annual
-    /// correction of ticket M4-02). This and the next four lists were
-    /// measured by a scratch tool, in ticket M4-16 and again in tickets
-    /// M4-15, M4-17 and M4-20, which ran `stages::climate::climate` on the
-    /// worlds of the Crust stage and read each model's own flags:
-    /// independent of the code of the warnings (and again in tickets M4-21,
-    /// M4-22 and M4-10). Every other model of every planet of the bounds
-    /// tests settles, and every other solve converges.
+    /// none since the balance step takes its sunlight at the sub-steps'
+    /// mean temperatures (ticket M4-24); corner 16 from the zenith angle
+    /// law of the albedo (ticket M4-10) until then, none from the balance
+    /// step of ticket M4-15 until that (corners 56–59 before, which
+    /// alternated between two years under the annual correction of ticket
+    /// M4-02). This and the next four lists were measured by a scratch
+    /// tool, in ticket M4-16 and again in tickets M4-15, M4-17 and M4-20,
+    /// which ran `stages::climate::climate` on the worlds of the Crust
+    /// stage and read each model's own flags: independent of the code of
+    /// the warnings (and again in tickets M4-21, M4-22, M4-10 and M4-24).
+    /// Every other model of every planet of the bounds tests settles, and
+    /// every other solve converges.
     ///
     /// Corner 16 (1,500 km, 8-hour days, a 90-day year, 2,500 W/m², no
     /// ocean, 0.1 bar; `D` = `D⊕/91`): mountains of 7,500–8,600 m at
     /// 36–45° N enter the ramp of the snow's albedo in summer, where the
-    /// zenith angle law makes the snow-free land darker than the `P₂` form
-    /// did (`α_free` 0.33 against 0.37 under the summer sun at 40°) and the
     /// feedback of the ramp, the summer's insolation of about 850 W/m²
     /// times `α_ice − α_free` ≈ 0.27 over the ramp's 10 K, is about
-    /// 23 W m⁻² K⁻¹, eleven times `B`. The model's own years settle (in
-    /// 207 years, after `MAX_YEARS`), but its balance step cycles: a
-    /// monthly mean changes by 0.37 to 1.43 K a year, the same values coming
-    /// back for 400 years, at a mean surface temperature of 328.35 K, and
-    /// the damping of the step (ticket M4-15) does not catch the cycle (the
-    /// same with 12 halvings). With the `P₂` form it settles in 10 years.
-    /// Follow-up ticket M4-24.
-    const UNSETTLED_ENERGY_BALANCE: [u32; 1] = [16];
+    /// 23 W m⁻² K⁻¹, eleven times `B`. The model's own years settle in 207
+    /// years. With the step's sunlight at the monthly means, which put a
+    /// whole month of 7.5 days into or out of the ramp at once, the step
+    /// cycled (a monthly mean changing by 0.37 to 1.43 K a year for 400
+    /// years), and its damping (ticket M4-15) did not catch the cycle; at
+    /// the sub-steps' mean temperatures it is periodic in 10 years, at the
+    /// years' own state (ticket M4-24; `energy_balance`, "The sub-steps'
+    /// temperatures"). With the `P₂` form of the albedo it settled in 10
+    /// years.
+    const UNSETTLED_ENERGY_BALANCE: [u32; 0] = [];
 
     /// The corners whose currents of the coupled state miss the solver's
     /// tolerance in a basin (the warning of the currents): corner 105 since
@@ -749,8 +751,8 @@ mod tests {
     /// of the coupled sea surface since ticket M4-20, which settled 17, 48,
     /// 64, 96 and 112, relaxed; since ticket M4-21 0, 16, 17, 48, 64, 65, 80
     /// and 81 relax, and 96 and 112 settle without; 17 and 81 warned of the
-    /// moisture until ticket M4-22; 16 warns of the energy balance since
-    /// ticket M4-10) and Earth.
+    /// moisture until ticket M4-22; 16 warned of the energy balance from
+    /// ticket M4-10 to ticket M4-24) and Earth.
     fn assert_finite_worlds(keep: impl Fn(Option<u32>) -> bool) {
         let settings = bounds_settings();
         let debug = cfg!(debug_assertions);
@@ -816,7 +818,9 @@ mod tests {
         for (k, p) in planets.iter().enumerate() {
             assert_eq!(p.validate(), Ok(()), "{p:?}");
             // Each settles but the coupled sea surface of two (the scratch
-            // tools of tickets M4-16, M4-17, M4-20, M4-21 and M4-10).
+            // tools of tickets M4-16, M4-17, M4-20, M4-21, M4-10 and M4-24;
+            // the energy balance of the first cycled with the step's
+            // sunlight at the sub-steps' starts, ticket M4-24).
             let world = assert_finite_world(p, &settings);
             assert_warned(
                 &format!("orbit {k}"),

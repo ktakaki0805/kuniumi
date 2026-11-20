@@ -1381,10 +1381,13 @@ fn circulation_fingerprint(c: &Circulation) -> u64 {
 /// `golden_fingerprint_of_earth_circulation` before ticket M4-17
 /// (0xA63E_8ED9_C397_F5B8) until the thermal equator became the warm centre;
 /// recorded again by ticket M4-21 after the other tests passed and the maps
-/// of out/M4-21 were viewed, and by ticket M4-10 (the zenith angle law of
+/// of out/M4-21 were viewed, by ticket M4-10 (the zenith angle law of
 /// the albedo, world-breaking) after the other tests passed and the images
-/// of out/M4-10 were viewed.
-const UNSMOOTHED_GOLDEN_FINGERPRINT: u64 = 0x0812_F5E2_4A6D_4F1C;
+/// of out/M4-10 were viewed, and by ticket M4-24 (the balance step's
+/// sunlight at the sub-steps' mean temperatures, world-breaking; was
+/// 0x0812_F5E2_4A6D_4F1C) after the other tests passed and the images of
+/// out/M4-24 were viewed.
+const UNSMOOTHED_GOLDEN_FINGERPRINT: u64 = 0x5BCE_AC57_B859_C399;
 
 // ---------------------------------------------------------------------------
 // Golden fingerprint.
@@ -1417,5 +1420,7 @@ fn golden_fingerprint_of_earth_circulation() {
 /// The fingerprint of `golden_fingerprint_of_earth_circulation`.
 /// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the other tests passed and the images of out/M4-10
-/// were viewed.
-const GOLDEN_FINGERPRINT: u64 = 0xD7D2_9D99_F54A_59B3;
+/// were viewed, and in ticket M4-24 (the balance step's sunlight at the
+/// sub-steps' mean temperatures, world-breaking; was 0xD7D2_9D99_F54A_59B3)
+/// after the other tests passed and the images of out/M4-24 were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0xC953_0269_3247_BAEA;

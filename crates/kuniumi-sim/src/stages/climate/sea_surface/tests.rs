@@ -21,6 +21,9 @@
 //! `slow_sea_surfaces_reach_a_stable_periodic_state`; criterion 3,
 //! `earth_stays_within_the_tolerance_of_its_periodic_state`.
 //!
+//! Ticket M4-24 (the step's sunlight at the sub-steps' mean temperatures):
+//! `the_months_record_the_starts_of_their_sub_steps`.
+//!
 //! The Earth tests share one run of the Earth-parameter world of seed 1
 //! with its M4-02 temperatures, M4-03 winds and M4-04 currents: 40,000
 //! cells in release builds, the world of the calibration (about half a
@@ -834,6 +837,75 @@ fn earth_converges_to_a_periodic_state() {
 }
 
 #[test]
+fn the_months_record_the_starts_of_their_sub_steps() {
+    // Ticket M4-24 (review): on Earth's sea surface of 10,000 cells, from
+    // its warm start, each month run by hand with `substep` (the starts
+    // copied before each sub-step, the mean summed as `month` sums it)
+    // and again with `month_recording` and `month`: the same starts, means
+    // and ends, bit for bit. Then two years of the driver against the same
+    // two years by hand, the first followed by the balance step on the
+    // hand's starts and its damping: the second year's months bit for bit.
+    let run = earth_10k();
+    let model = &earth_sea_10k().model;
+    let insolation = monthly_insolation(&PlanetParams::earth(), &run.world.grid);
+    let steps = energy_balance::SUBSTEPS_PER_MONTH;
+    // One year by hand: its sub-steps' starts and its monthly means.
+    let by_hand = |start: &[f64]| -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>) {
+        let mut t = start.to_vec();
+        let (mut starts, mut means) = (Vec::new(), Vec::new());
+        for (k, q) in insolation.iter().enumerate() {
+            let mut sum: Vec<f64> = t.iter().map(|x| 0.5 * x).collect();
+            for step in 0..steps {
+                starts.push(t.clone());
+                model.substep(k, &mut t, q);
+                let weight = if step + 1 == steps { 0.5 } else { 1.0 };
+                for (s, &x) in sum.iter_mut().zip(t.iter()) {
+                    *s += weight * x;
+                }
+            }
+            means.push(sum.iter().map(|s| s / steps as f64).collect());
+        }
+        (starts, means, t)
+    };
+    let warm = model.warm_start(&insolation);
+    let (starts, means, end) = by_hand(&warm);
+    let mut recorded = vec![Vec::new(); MONTHS * steps];
+    let (mut u, mut plain) = (warm.clone(), warm.clone());
+    for (k, q) in insolation.iter().enumerate() {
+        let mean = model.month_recording(k, &mut u, q, &mut recorded[k * steps..(k + 1) * steps]);
+        let expected = model.month(k, &mut plain, q);
+        for ((a, b), c) in mean.iter().zip(&expected).zip(&means[k]) {
+            assert_same(*a, *b);
+            assert_same(*a, *c);
+        }
+    }
+    for (a, b) in recorded.iter().flatten().zip(starts.iter().flatten()) {
+        assert_same(*a, *b);
+    }
+    for ((a, b), c) in u.iter().zip(&plain).zip(&end) {
+        assert_same(*a, *b);
+        assert_same(*a, *c);
+    }
+    // The driver's second year against the hand's.
+    let annual = model.annual_multigrid();
+    let mut stepped = end.clone();
+    model.balance_step(&annual, &warm, &mut stepped, &starts, &insolation);
+    let mut damping = energy_balance::StepDamping::new(model.len());
+    damping.apply(&warm, &end, &mut stepped);
+    let (_, second, _) = by_hand(&stepped);
+    let driver = model.periodic_state_with(&insolation, 0.0, 2);
+    assert_eq!(driver.years, 2);
+    for (a, b) in driver
+        .sea_level_k
+        .iter()
+        .flatten()
+        .zip(second.iter().flatten())
+    {
+        assert_same(*a, *b);
+    }
+}
+
+#[test]
 fn earth_stays_within_the_tolerance_of_its_periodic_state() {
     // Ticket M4-15, criterion 3 (as reworded with the owner): Earth's sea
     // surface (the shared run: 40,000 cells in release builds, 10,000 in
@@ -1296,5 +1368,7 @@ fn golden_fingerprint_of_earth_sea_surface() {
 /// The fingerprint of `golden_fingerprint_of_earth_sea_surface`.
 /// Recorded again in ticket M4-10 (the zenith angle law of the albedo,
 /// world-breaking) after the other tests passed and the images of out/M4-10
-/// were viewed.
-const GOLDEN_FINGERPRINT: u64 = 0x4DD4_C2E1_3E10_F277;
+/// were viewed, and in ticket M4-24 (the balance step's sunlight at the
+/// sub-steps' mean temperatures, world-breaking; was 0x4DD4_C2E1_3E10_F277)
+/// after the other tests passed and the images of out/M4-24 were viewed.
+const GOLDEN_FINGERPRINT: u64 = 0xEEC2_7DC7_6648_0527;

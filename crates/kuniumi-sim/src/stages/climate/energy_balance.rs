@@ -170,22 +170,28 @@
 //! converge.
 //!
 //! **The balance step.** After a year from the state `x` to `y` (K, sea
-//! level), with the monthly means `T_k` under the monthly insolation `Q_k`,
-//! the step finds the shift `δ` of the whole year, its seasonal cycle kept,
-//! that closes each cell's annual energy budget, and the next year starts
-//! from `y + δ`:
+//! level), whose sub-steps had the mean temperatures `T̄_ks` (month `k`,
+//! sub-step `s`) under the monthly insolation `Q_k`, the step finds the
+//! shift `δ` of the whole year, its seasonal cycle kept, that closes each
+//! cell's annual energy budget, and the next year starts from `y + δ`:
 //!
 //! ```text
 //! (B a + D L) δ − a [S(T + δ) − S(T)] = a C φ(z) (y − x) / P
-//! S_i(T) = (1/12) Σ_k Q_ik (1 − α_i(T_ik)),   φ(z) = z / (e^z − 1),   z_i = B P / C_i
+//! S_i(T) = (1/48) Σ_k Σ_s Q_ik (1 − α_ik(T̄_iks))
+//! T̄_iks = (T_iks + T_ik,s+1) / 2,   φ(z) = z / (e^z − 1),   z_i = B P / C_i
 //! ```
 //!
-//! with `P` the year and `α` each month's albedo at the month's surface
-//! temperature. Over a year the storage `a C (y − x) / P` is the year's mean
-//! net heating; shifting the year by `δ` adds `B a δ` to the emission,
-//! `D L δ` to the diffusion and `a [S(T + δ) − S(T)]` to the absorbed
-//! sunlight, and `δ` cancels the net heating. `φ` weighs the drift by how
-//! much of its start a cell remembers through the year
+//! with `P` the year, `T̄_iks` the trapezoid of the temperatures `T_iks` at
+//! the start and `T_ik,s+1` at the end of the sub-step (whose mean over a
+//! month's [`SUBSTEPS_PER_MONTH`] sub-steps is the month's mean
+//! temperature, the trapezoidal mean of the ends of its sub-steps) and
+//! `α_ik` month `k`'s albedo at its surface temperature (ticket M4-24;
+//! "The sub-steps' temperatures", below). Over a year the storage
+//! `a C (y − x) / P` is the year's mean net heating; shifting the year by
+//! `δ` adds `B a δ` to the emission, `D L δ` to the diffusion and
+//! `a [S(T + δ) − S(T)]` to the absorbed sunlight, and `δ` cancels the net
+//! heating. `φ` weighs the drift by how much of its start a cell remembers
+//! through the year
 //! ([`EnergyBalance::memory`]): a cell alone, `C dT/dt = −B T + f(t)`,
 //! keeps the factor `e^{−z}` of an error of its start over the year, so
 //! its periodic state is `y + (y − x) / (e^z − 1)`, which is what the step
@@ -220,8 +226,9 @@
 //! [`BALANCE_ITERATIONS`]; the step then uses its last iterate, which
 //! only the next year's drift corrects. A periodic state
 //! (`y = x`) gives `δ = 0` exactly: the periodic states are those of the
-//! model's own years, whatever the step's approximations (the monthly
-//! means for the sub-steps, the seasonal cycle kept across the shift).
+//! model's own years, whatever the step's approximations (the sub-steps'
+//! mean temperatures for their albedo, the seasonal cycle kept across the
+//! shift).
 //!
 //! **Damping.** Where a cell's annual balance is nearly neutral, its
 //! ice–albedo feedback almost cancelling its emission and diffusion, while
@@ -239,6 +246,36 @@
 //! 586–591) adapts its steps to the sign of the gradient. A cell whose
 //! factor is 1 is stepped as without damping, bit for bit, and a periodic
 //! state, whose shift is 0, is left alone.
+//!
+//! **The sub-steps' temperatures.** Until ticket M4-24 the step took `S`
+//! at the twelve monthly means, which put a whole month into or out of
+//! the ramp of the albedo at one temperature. On a planet whose months are
+//! short against its seasons that made the step jump: on corner 16 of the
+//! bounds tests (1,500 km, 8-hour days, a 90-day year, 2,500 W/m², no
+//! ocean, 0.1 bar; 1,000 cells, seed 3) a mountain cell at 42° N and
+//! 8,100 m warms by 5 K within a month of 7.5 days; its month 7 lay
+//! 0.09 K below `T_f`, so that a shift of 0.09 K brought the whole month
+//! into the ramp and added `Q₇ (α_ice − α_free) / (12 × 10 K)` ≈
+//! 1.9 W m⁻² K⁻¹ to its feedback: its net balance `B δ − [S(T + δ) − S(T)]`
+//! fell by 1.70 W/m² from δ = +0.1 to +1.1 K, so that from any positive
+//! drift the monotone iteration crossed the whole interval. Three such
+//! cells cycled with a period of three years (shifts of 1.3–1.6 K on
+//! drifts of 0.0003 to 0.056 K, the next year undoing about 0.6 of them),
+//! for 400 years, the damping halving their factors once and doubling them
+//! back once a cycle; the model's own years settle in 207. At the
+//! sub-steps' mean temperatures the same net balance rises with the shift
+//! from −0.7 to +0.9 K, and the corner is periodic in 10 years at the
+//! years' own state. The sub-steps' starts, at which each sub-step takes
+//! its albedo, are not used: on a planet that forgets a shift within days
+//! (obliquity 90°, e = 0.99, 2,500 W/m², 8 h, 0.1 bar; `C/B` = 5.6 days)
+//! a land cell receives 58,173 W/m² in month 3 alone, and the month's first
+//! sub-step starts at 273 K, at the edge of the ramp, and ends near
+//! 9,700 K: its albedo at the start would weigh as a feedback of
+//! 33 W m⁻² K⁻¹ on the step's uniform shift, which the cell does not keep,
+//! and the step cycled for 100 years; at the sub-step's mean temperature,
+//! about 5,000 K, it is clear of the ramp, and the planet is periodic in 8
+//! years. The step holds the starts of the year's 48 sub-steps through the
+//! year: 384 bytes a cell (250 MB on 650,000 cells).
 //!
 //! Measured (ticket M4-15, release): Earth periodic in 7 years on 10,000,
 //! 40,000, 160,000 and 650,000 cells (10, 12, 8 and 11 with the correction
@@ -272,12 +309,19 @@
 //!   temperature 0.04 to 0.41 K higher, the step having stopped at the
 //!   first balance where the years go on freezing cell after cell; each
 //!   state stable under 100 years without the step. On 40,000 cells the
-//!   same states in the four cases measured.
+//!   same states in the four cases measured. With the sub-steps' mean
+//!   temperatures (ticket M4-24) the same: of the 9 planets, the step's
+//!   states lie within 4.4 × 10⁻³ K of those of the monthly means but at
+//!   60°, seeds 2 and 3, where it stops at another state than theirs,
+//!   again with less ice than the years' own (32.04 against 32.24 % and
+//!   41.64 against 41.89 % of the area).
 //! - Their ice fronts still advance a few cells a year: 93 years at 60° on
-//!   40,000 cells. A finer grid may need more than [`MAX_YEARS`]; such a
-//!   planet is returned unconverged with the temperatures of its last year
-//!   and its change, which may be those of a climate in transition, and the
-//!   Climate stage reports it as a warning (tickets M4-07, M4-16).
+//!   40,000 cells (ticket M4-15; 37 since the zenith angle law of ticket
+//!   M4-10, 34 since ticket M4-24). A finer grid may need more than
+//!   [`MAX_YEARS`]; such a planet is returned unconverged with the
+//!   temperatures of its last year and its change, which may be those of a
+//!   climate in transition, and the Climate stage reports it as a warning
+//!   (tickets M4-07, M4-16).
 //!
 //! # Earth calibration
 //!
@@ -359,6 +403,11 @@ use crate::operators::{Laplacian, SOLVER_MAX_ITERATIONS, Solve};
 
 /// Sub-steps of each month (module documentation, "Time stepping").
 pub const SUBSTEPS_PER_MONTH: usize = 4;
+
+/// The sub-steps of a year, whose starts the months record and whose mean
+/// temperatures the balance step takes (module documentation, "The
+/// periodic state"): 48.
+pub(crate) const YEAR_SUBSTEPS: usize = MONTHS * SUBSTEPS_PER_MONTH;
 
 /// The largest change (K) of a monthly-mean sea-level temperature from
 /// one year to the next at which the state counts as periodic: 10⁻³ K.
@@ -1033,8 +1082,29 @@ impl EnergyBalance {
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
     ) -> Vec<f64> {
+        self.month_recording(month, temperature_k, insolation_w_m2, &mut [])
+    }
+
+    /// [`month`](Self::month), which also copies the temperatures at the
+    /// start of its sub-steps into `starts` (K, sea level; the
+    /// [`SUBSTEPS_PER_MONTH`] sub-steps in order, the temperatures at which
+    /// each takes its albedo), the balance step's year (module
+    /// documentation, "The periodic state"); none if `starts` is empty.
+    /// The same months, bit for bit.
+    pub(crate) fn month_recording(
+        &self,
+        month: usize,
+        temperature_k: &mut [f64],
+        insolation_w_m2: &[f64],
+        starts: &mut [Vec<f64>],
+    ) -> Vec<f64> {
+        check_starts(starts);
         let mut sum: Vec<f64> = temperature_k.iter().map(|t| 0.5 * t).collect();
         for step in 0..SUBSTEPS_PER_MONTH {
+            if let Some(start) = starts.get_mut(step) {
+                start.clear();
+                start.extend_from_slice(temperature_k);
+            }
             self.substep(month, temperature_k, insolation_w_m2);
             let weight = if step + 1 == SUBSTEPS_PER_MONTH {
                 0.5
@@ -1069,8 +1139,9 @@ impl EnergyBalance {
     }
 
     /// The balance step after a year from `start` to `temperature_k`, in
-    /// place, whose monthly means were `means` under `insolation_w_m2`, with
-    /// the multigrid `annual` of `B a + D L`
+    /// place, whose sub-steps started at `substeps` (K, sea level; the
+    /// [`YEAR_SUBSTEPS`] in order, [`month_recording`](Self::month_recording))
+    /// under `insolation_w_m2`, with the multigrid `annual` of `B a + D L`
     /// ([`annual_multigrid`](Self::annual_multigrid)). Returns the solves
     /// made.
     pub(crate) fn balance(
@@ -1078,14 +1149,14 @@ impl EnergyBalance {
         annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) -> u32 {
         balance_step(
             self,
             start,
             temperature_k,
-            means,
+            substeps,
             insolation_w_m2,
             |rhs: &[f64], values: &mut [f64]| {
                 multigrid::conjugate_gradient(
@@ -1109,29 +1180,49 @@ impl EnergyBalance {
             .collect()
     }
 
-    /// `S_i(T + δ)` of the balance step: the mean over the months of
-    /// `Q_k (1 − α(T_k + δ))` (W/m²) of each cell, for the monthly
-    /// sea-level temperatures `means` shifted by `shift_k` and the monthly
-    /// insolation `insolation_w_m2`, in month order.
+    /// `S_i(T + δ)` of the balance step: the mean over the year's
+    /// sub-steps of `Q_ik (1 − α_ik(T̄_iks + δ_i))` (W/m²) of each cell, with
+    /// `T̄_iks` the mean sea-level temperature of sub-step `s` of month `k`,
+    /// the trapezoid of its start and end: `substeps` holds the starts of
+    /// the [`YEAR_SUBSTEPS`] sub-steps in order (month `k` the `k`-th group
+    /// of [`SUBSTEPS_PER_MONTH`]) and `end_k` the end of the last one, the
+    /// end of the year. The mean of a month's four is its monthly mean. Each
+    /// shifted by `shift_k`, under the monthly insolation `insolation_w_m2`,
+    /// in sub-step order, with the albedo of [`albedos`](Self::albedos).
+    ///
+    /// # Panics
+    ///
+    /// If `substeps` does not hold [`YEAR_SUBSTEPS`] temperatures of one
+    /// value per cell.
     pub(crate) fn annual_absorbed_w_m2(
         &self,
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
+        end_k: &[f64],
         shift_k: &[f64],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) -> Vec<f64> {
         let n = self.len();
+        assert_eq!(substeps.len(), YEAR_SUBSTEPS, "the year's sub-steps");
+        let p = &self.params;
+        let lapse = p.lapse_rate_k_m;
         let mut sum = vec![0.0; n];
-        let mut shifted = vec![0.0; n];
-        for (k, (month, insolation)) in means.iter().zip(insolation_w_m2).enumerate() {
+        for (s, start) in substeps.iter().enumerate() {
+            let next = substeps.get(s + 1).map_or(end_k, |v| v.as_slice());
+            assert!(
+                start.len() == n && next.len() == n,
+                "one temperature per cell"
+            );
+            let k = s / SUBSTEPS_PER_MONTH;
+            let (free, insolation) = (&self.free_albedo[k], &insolation_w_m2[k]);
             for i in 0..n {
-                shifted[i] = month[i] + shift_k[i];
-            }
-            let albedos = self.albedos(k, &shifted);
-            for i in 0..n {
-                sum[i] += insolation[i] * (1.0 - albedos[i]);
+                let mean = 0.5 * (start[i] + next[i]);
+                let surface = (mean + shift_k[i]) - lapse * self.elevation_m[i];
+                let f = p.ice_fraction(surface);
+                let albedo = (1.0 - f) * free[i] + f * p.ice_albedo;
+                sum[i] += insolation[i] * (1.0 - albedo);
             }
         }
-        sum.iter().map(|s| s / MONTHS as f64).collect()
+        sum.iter().map(|s| s / YEAR_SUBSTEPS as f64).collect()
     }
 
     /// Checks that each month of `insolation_w_m2` has one value per cell.
@@ -1149,19 +1240,19 @@ impl EnergyBalance {
 
 /// The balance step (module documentation, "The periodic state") of the
 /// energy balance `balance` after a year from `start` to `temperature_k`,
-/// in place, whose monthly sea-level means were `means` under
-/// `insolation_w_m2`: from `δ = 0`, `δ ← K⁻¹ [w (y − x) + a (S(T + δ) −
-/// S(T))]` with `solve(rhs, values)` solving `K values = rhs` from
-/// `values` (`K` the annual operator of the model, `B a + D L` for the
-/// energy balance), until no cell's `δ` changes by more than
-/// [`BALANCE_TOLERANCE_K`] or after [`BALANCE_ITERATIONS`] solves; then
-/// `temperature_k += δ`. Returns the solves made (0 where the year did not
-/// drift).
+/// in place, whose sub-steps started at the sea-level temperatures
+/// `substeps` ([`YEAR_SUBSTEPS`] in order) under `insolation_w_m2`: from
+/// `δ = 0`, `δ ← K⁻¹ [w (y − x) + a (S(T + δ) − S(T))]` with
+/// `solve(rhs, values)` solving `K values = rhs` from `values` (`K` the
+/// annual operator of the model, `B a + D L` for the energy balance), until
+/// no cell's `δ` changes by more than [`BALANCE_TOLERANCE_K`] or after
+/// [`BALANCE_ITERATIONS`] solves; then `temperature_k += δ`. Returns the
+/// solves made (0 where the year did not drift).
 pub(crate) fn balance_step(
     balance: &EnergyBalance,
     start: &[f64],
     temperature_k: &mut [f64],
-    means: &[Vec<f64>; MONTHS],
+    substeps: &[Vec<f64>],
     insolation_w_m2: &[Vec<f64>; MONTHS],
     mut solve: impl FnMut(&[f64], &mut [f64]),
 ) -> u32 {
@@ -1172,12 +1263,13 @@ pub(crate) fn balance_step(
     }
     let areas = balance.areas_sr();
     let mut delta = vec![0.0; n];
-    let base = balance.annual_absorbed_w_m2(means, &delta, insolation_w_m2);
+    let end = temperature_k.to_vec();
+    let base = balance.annual_absorbed_w_m2(substeps, &end, &delta, insolation_w_m2);
     let mut rhs = drift.clone();
     let mut solves = 0;
     while solves < BALANCE_ITERATIONS {
         if solves > 0 {
-            let absorbed = balance.annual_absorbed_w_m2(means, &delta, insolation_w_m2);
+            let absorbed = balance.annual_absorbed_w_m2(substeps, &end, &delta, insolation_w_m2);
             for i in 0..n {
                 rhs[i] = drift[i] + areas[i] * (absorbed[i] - base[i]);
             }
@@ -1206,21 +1298,24 @@ pub(crate) trait Seasons {
     /// The warm start of the first year, with the annual operator `annual`.
     fn start(&self, annual: &Multigrid, insolation_w_m2: &[Vec<f64>; MONTHS]) -> Vec<f64>;
     /// Month `month` (0 to 11) from `temperature_k`, in place; its mean.
+    /// The temperatures at the start of its sub-steps are copied into
+    /// `starts` ([`SUBSTEPS_PER_MONTH`] of them; none if it is empty).
     fn step_month(
         &self,
         month: usize,
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
+        starts: &mut [Vec<f64>],
     ) -> Vec<f64>;
     /// The balance step of the state `temperature_k` at the end of a year
-    /// that started at `start` with the monthly means `means`, with the
-    /// annual operator `annual`.
+    /// that started at `start` and whose sub-steps started at `substeps`
+    /// ([`YEAR_SUBSTEPS`] in order), with the annual operator `annual`.
     fn balance_year(
         &self,
         annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     );
     /// The surface temperature of the sea-level temperatures `sea_level_k`.
@@ -1241,8 +1336,9 @@ impl Seasons for EnergyBalance {
         month: usize,
         temperature_k: &mut [f64],
         insolation_w_m2: &[f64],
+        starts: &mut [Vec<f64>],
     ) -> Vec<f64> {
-        self.month(month, temperature_k, insolation_w_m2)
+        self.month_recording(month, temperature_k, insolation_w_m2, starts)
     }
 
     fn balance_year(
@@ -1250,10 +1346,10 @@ impl Seasons for EnergyBalance {
         annual: &Multigrid,
         start: &[f64],
         temperature_k: &mut [f64],
-        means: &[Vec<f64>; MONTHS],
+        substeps: &[Vec<f64>],
         insolation_w_m2: &[Vec<f64>; MONTHS],
     ) {
-        self.balance(annual, start, temperature_k, means, insolation_w_m2);
+        self.balance(annual, start, temperature_k, substeps, insolation_w_m2);
     }
 
     fn surface_k(&self, sea_level_k: &[f64]) -> Vec<f64> {
@@ -1282,12 +1378,20 @@ pub(crate) fn periodic_run<S: Seasons>(
     };
     let mut previous: Option<[Vec<f64>; MONTHS]> = None;
     let mut damping = StepDamping::new(temperature_k.len());
+    // The temperatures at the start of the year's sub-steps, for the step.
+    let mut substeps = year_substeps(step);
     let mut years = 0;
     loop {
         years += 1;
         let start = temperature_k.clone();
-        let means: [Vec<f64>; MONTHS] =
-            core::array::from_fn(|k| model.step_month(k, &mut temperature_k, &insolation_w_m2[k]));
+        let means: [Vec<f64>; MONTHS] = core::array::from_fn(|k| {
+            model.step_month(
+                k,
+                &mut temperature_k,
+                &insolation_w_m2[k],
+                month_substeps(&mut substeps, k),
+            )
+        });
         let change_k = match &previous {
             None => f64::INFINITY,
             Some(last) => largest_change_k(last, &means),
@@ -1306,11 +1410,49 @@ pub(crate) fn periodic_run<S: Seasons>(
         }
         if step {
             let end = temperature_k.clone();
-            model.balance_year(&annual, &start, &mut temperature_k, &means, insolation_w_m2);
+            model.balance_year(
+                &annual,
+                &start,
+                &mut temperature_k,
+                &substeps,
+                insolation_w_m2,
+            );
             damping.apply(&start, &end, &mut temperature_k);
         }
         previous = Some(means);
     }
+}
+
+/// The buffer of the temperatures at the start of a year's sub-steps
+/// ([`YEAR_SUBSTEPS`] vectors, filled by the months), or none (empty) if
+/// `step` is false, for a run without the balance step.
+pub(crate) fn year_substeps(step: bool) -> Vec<Vec<f64>> {
+    if step {
+        vec![Vec::new(); YEAR_SUBSTEPS]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The part of the buffer `substeps` ([`year_substeps`]) of month `month`
+/// (0 to 11): its [`SUBSTEPS_PER_MONTH`] vectors, or none if the buffer is
+/// empty.
+pub(crate) fn month_substeps(substeps: &mut [Vec<f64>], month: usize) -> &mut [Vec<f64>] {
+    if substeps.is_empty() {
+        substeps
+    } else {
+        &mut substeps[month * SUBSTEPS_PER_MONTH..(month + 1) * SUBSTEPS_PER_MONTH]
+    }
+}
+
+/// Checks that `starts`, the buffer of a month's sub-steps, holds none or
+/// [`SUBSTEPS_PER_MONTH`] vectors.
+pub(crate) fn check_starts(starts: &[Vec<f64>]) {
+    assert!(
+        starts.is_empty() || starts.len() == SUBSTEPS_PER_MONTH,
+        "a month records none or {SUBSTEPS_PER_MONTH} sub-steps, got {}",
+        starts.len()
+    );
 }
 
 /// The damping of the balance step of each cell (module documentation,
